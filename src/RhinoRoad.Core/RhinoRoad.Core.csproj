@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>RhinoRoad.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Data\vehicles.json" />
+    <None Include="Data\vehicles.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

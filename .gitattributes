@@ -1,0 +1,17 @@
+* text=auto
+
+*.cs text diff=csharp
+*.csproj text
+*.sln text
+*.json text
+*.md text
+*.ps1 text
+*.py text
+*.toml text
+
+*.3dm binary
+*.dwg binary
+*.pdf binary
+*.png binary
+*.zip binary
+*.rhp binary

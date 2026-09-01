@@ -1,0 +1,73 @@
+{
+  "vehicles": [
+    {
+      "id": "PV",
+      "name": "PV - Person- og varebil",
+      "version": "VD-GUT-2023.09",
+      "widthMetres": 1.85,
+      "wheelbaseMetres": 2.75,
+      "frontOverhangMetres": 0.95,
+      "rearOverhangMetres": 1.10,
+      "bodyOutline": [[-1.10,-0.925],[3.70,-0.925],[3.70,0.925],[-1.10,0.925]],
+      "drivingModes": {
+        "A": { "name": "Køremåde A", "speedKilometresPerHour": 15.0, "maximumWheelAngleDegrees": 29.7, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 },
+        "B": { "name": "Køremåde B", "speedKilometresPerHour": 5.0, "maximumWheelAngleDegrees": 36.0, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 }
+      },
+      "source": {
+        "title": "Grundlag for udformning af trafikarealer",
+        "publicationDate": "2023-09 (corrected 2025-12-18)",
+        "url": "https://vejregler.dk/api/Portals(6a8179a8-e164-4fc9-a59b-191699ffa1ee)/Documents/Variant(Pdf)/Content/h/7e0fba84-06dd-483b-898a-c7b3e3affaa1/3deb992b9b50496684f2c807e0300a6e",
+        "figure": "Type vehicle diagram, PDF page 38; steering table Figure 6.7",
+        "notes": "Body width excludes mirrors. Mode A uses 33 gon, represented as 29.7 degrees."
+      },
+      "validationStatus": "SourceTranscribed",
+      "validationNotes": "Dimensions are source-transcribed. The 2026-09-01 official-DWG certification run passed 0 of 6 required cases; see reference/certification/reference-certification.json."
+    },
+    {
+      "id": "REN",
+      "name": "REN - Renovationskøretøj",
+      "version": "VD-GUT-2023.09",
+      "widthMetres": 2.55,
+      "wheelbaseMetres": 4.58,
+      "frontOverhangMetres": 1.85,
+      "rearOverhangMetres": 3.19,
+      "bodyOutline": [[-3.19,-1.275],[6.43,-1.275],[6.43,1.275],[-3.19,1.275]],
+      "drivingModes": {
+        "A": { "name": "Køremåde A", "speedKilometresPerHour": 15.0, "maximumWheelAngleDegrees": 29.7, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 },
+        "B": { "name": "Køremåde B", "speedKilometresPerHour": 5.0, "maximumWheelAngleDegrees": 35.0, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 }
+      },
+      "source": {
+        "title": "Grundlag for udformning af trafikarealer",
+        "publicationDate": "2023-09 (corrected 2025-12-18)",
+        "url": "https://vejregler.dk/api/Portals(6a8179a8-e164-4fc9-a59b-191699ffa1ee)/Documents/Variant(Pdf)/Content/h/7e0fba84-06dd-483b-898a-c7b3e3affaa1/3deb992b9b50496684f2c807e0300a6e",
+        "figure": "Type vehicle diagram, PDF page 41; steering table Figure 6.7",
+        "notes": "The first rear axle shown by the official dimension chain is used as the effective rear-axle reference."
+      },
+      "validationStatus": "SourceTranscribed",
+      "validationNotes": "Dimensions are source-transcribed. The 2026-09-01 official-DWG certification run passed 0 of 6 required cases; rear-track extraction also remains ambiguous for some cases."
+    },
+    {
+      "id": "BUS12",
+      "name": "BUS 12 - 12 m bus",
+      "version": "VD-GUT-2023.09",
+      "widthMetres": 2.55,
+      "wheelbaseMetres": 6.00,
+      "frontOverhangMetres": 2.72,
+      "rearOverhangMetres": 3.28,
+      "bodyOutline": [[-3.28,-1.275],[8.72,-1.275],[8.72,1.275],[-3.28,1.275]],
+      "drivingModes": {
+        "A": { "name": "Køremåde A", "speedKilometresPerHour": 15.0, "maximumWheelAngleDegrees": 29.7, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 },
+        "B": { "name": "Køremåde B", "speedKilometresPerHour": 5.0, "maximumWheelAngleDegrees": 45.0, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 }
+      },
+      "source": {
+        "title": "Grundlag for udformning af trafikarealer",
+        "publicationDate": "2023-09 (corrected 2025-12-18)",
+        "url": "https://vejregler.dk/api/Portals(6a8179a8-e164-4fc9-a59b-191699ffa1ee)/Documents/Variant(Pdf)/Content/h/7e0fba84-06dd-483b-898a-c7b3e3affaa1/3deb992b9b50496684f2c807e0300a6e",
+        "figure": "Type vehicle diagram, PDF page 38; steering table Figure 6.7",
+        "notes": "Body width excludes mirrors. Two-axle 12 m type-vehicle geometry."
+      },
+      "validationStatus": "SourceTranscribed",
+      "validationNotes": "Dimensions are source-transcribed. The 2026-09-01 official-DWG certification run passed 0 of 6 required cases; wheel-trace extraction also remains ambiguous for some cases."
+    }
+  ]
+}

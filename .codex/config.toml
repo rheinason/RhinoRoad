@@ -1,0 +1,2 @@
+[mcp_servers.rhino-mcp]
+command = 'C:\Users\hbxma\AppData\Roaming\McNeel\Rhinoceros\packages\8.0\Rhino-MCP-Platform\0.2.1-wip\router\win-x64\rhino-mcp-router.exe'

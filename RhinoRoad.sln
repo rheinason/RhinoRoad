@@ -1,0 +1,30 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhinoRoad.Core", "src\RhinoRoad.Core\RhinoRoad.Core.csproj", "{D73A8243-4445-4EE0-AD91-C0960AA89218}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhinoRoad.Rhino", "src\RhinoRoad.Rhino\RhinoRoad.Rhino.csproj", "{0B89983B-4E53-49A7-87E6-C2186C8C08A4}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhinoRoad.Core.Tests", "tests\RhinoRoad.Core.Tests\RhinoRoad.Core.Tests.csproj", "{F1B1460F-E36A-4613-A9B4-9C936EB5BB51}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D73A8243-4445-4EE0-AD91-C0960AA89218}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D73A8243-4445-4EE0-AD91-C0960AA89218}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D73A8243-4445-4EE0-AD91-C0960AA89218}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D73A8243-4445-4EE0-AD91-C0960AA89218}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0B89983B-4E53-49A7-87E6-C2186C8C08A4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0B89983B-4E53-49A7-87E6-C2186C8C08A4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0B89983B-4E53-49A7-87E6-C2186C8C08A4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0B89983B-4E53-49A7-87E6-C2186C8C08A4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F1B1460F-E36A-4613-A9B4-9C936EB5BB51}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F1B1460F-E36A-4613-A9B4-9C936EB5BB51}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F1B1460F-E36A-4613-A9B4-9C936EB5BB51}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F1B1460F-E36A-4613-A9B4-9C936EB5BB51}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

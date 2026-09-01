@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>RhinoRoad.Rhino</RootNamespace>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <TargetExt>.rhp</TargetExt>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <AssemblyTitle>RhinoRoad</AssemblyTitle>
+    <AssemblyDescription>Architect-friendly rigid vehicle access screening for Rhino 8.</AssemblyDescription>
+    <Company>RhinoRoad</Company>
+    <Product>RhinoRoad</Product>
+    <Version>0.1.0</Version>
+    <FileVersion>0.1.0</FileVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\RhinoRoad.Core\RhinoRoad.Core.csproj" />
+    <Reference Include="RhinoCommon">
+      <HintPath>C:\Program Files\Rhino 8\System\netcore\RhinoCommon.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
