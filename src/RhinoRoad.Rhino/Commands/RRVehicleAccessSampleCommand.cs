@@ -21,10 +21,7 @@ public sealed class RRVehicleAccessSampleCommand : Command
         var routeCurve = new ArcCurve(new Arc(start, middle, end));
         var vehicle = VehicleCatalog.LoadEmbedded().Get("PV");
         var drivingMode = vehicle.DrivingModes["B"];
-        var route = PathFollower.Follow(
-            vehicle,
-            drivingMode,
-            IntentPathFactory.FromCurve(routeCurve, document.ModelUnitSystem)).Samples;
+        var route = RhinoRouteSampler.Sample(routeCurve, document.ModelUnitSystem, TravelDirection.Forward, 0.10);
         var result = new VehicleAccessAnalyzer().Analyze(vehicle, drivingMode, route, maximumAbsoluteGrade: 0.08);
         var geometry = RhinoGeometryBuilder.Build(result, route, document, 0.30, 3.25, 3.25, createFixedEdges: true);
         var sourceId = Guid.NewGuid();
@@ -32,8 +29,7 @@ public sealed class RRVehicleAccessSampleCommand : Command
         var baked = RhinoOutputWriter.Bake(
             document,
             geometry,
-            [new IntentLeg(routeCurve, TravelDirection.Forward)],
-            bakeIntentCurves: true,
+            routeCurve,
             result,
             result.Violations,
             sourceId,

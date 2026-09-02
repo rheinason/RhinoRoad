@@ -1,7 +1,6 @@
 using System.Drawing;
 using Rhino;
 using Rhino.Commands;
-using Rhino.Display;
 using Rhino.Geometry;
 using Rhino.Input;
 using Rhino.Input.Custom;
@@ -9,207 +8,258 @@ using RhinoRoad.Core;
 
 namespace RhinoRoad.Rhino.Services;
 
-/// <summary>
-/// Draws the intended line by clicking through points, with the vehicle previewed along it.
-/// </summary>
-/// <remarks>
-/// <para>
-/// Shaped like Rhino's <c>InterpCrv</c>: click the points the line should pass through, Enter to
-/// finish, with snaps, typed coordinates, and ortho all working because they are ordinary picked
-/// points. What is produced is a curve — the same kind that could have been drawn beforehand and
-/// selected — so there is only one thing downstream and only one thing to edit afterwards.
-/// </para>
-/// <para>
-/// <c>Reverse</c> ends the current leg and starts the next one going the other way. A three-point
-/// turn is three legs, and the cusp between them is where the vehicle stops and changes direction,
-/// so the new leg starts from exactly where the last one ended.
-/// </para>
-/// </remarks>
 internal static class InteractiveRouteBuilder
 {
+    private sealed record HistoryEntry(VehicleState State, int SampleCount);
+
     public static Result TryBuild(
         RhinoDoc document,
         VehicleDefinition vehicle,
         DrivingModeDefinition mode,
-        TravelDirection startingDirection,
-        out IReadOnlyList<IntentLeg> legs)
+        out IReadOnlyList<RouteSample> samples,
+        out Curve? pathCurve)
     {
-        var completed = new List<IntentLeg>();
-        var picked = new List<Point3d>();
-        var direction = startingDirection;
-        legs = completed;
+        samples = [];
+        pathCurve = null;
+        var metresPerModelUnit = RhinoMath.UnitScale(document.ModelUnitSystem, UnitSystem.Meters);
 
+        using var startGetter = new GetPoint();
+        startGetter.SetCommandPrompt("Rear-axle midpoint start");
+        if (startGetter.Get() != GetResult.Point) return Result.Cancel;
+        var startModel = startGetter.Point();
+
+        using var headingGetter = new GetPoint();
+        headingGetter.SetCommandPrompt("Vehicle forward heading");
+        headingGetter.SetBasePoint(startModel, true);
+        headingGetter.DrawLineFromPoint(startModel, true);
+        if (headingGetter.Get() != GetResult.Point) return Result.Cancel;
+        var headingPoint = headingGetter.Point();
+        var headingVector = headingPoint - startModel;
+        if (Math.Sqrt((headingVector.X * headingVector.X) + (headingVector.Y * headingVector.Y)) <= document.ModelAbsoluteTolerance)
+        {
+            RhinoApp.WriteLine("Heading point is too close to the start point.");
+            return Result.Failure;
+        }
+
+        var state = new VehicleState(
+            new Point3(startModel.X * metresPerModelUnit, startModel.Y * metresPerModelUnit, startModel.Z * metresPerModelUnit),
+            Math.Atan2(headingVector.Y, headingVector.X),
+            0.0,
+            TravelDirection.Forward,
+            0.0);
+        var route = new List<RouteSample>
+        {
+            StateSample(state, vehicle)
+        };
+        var history = new Stack<HistoryEntry>();
+        var generator = new RateLimitedTrajectoryGenerator();
+
+        // Everything driven so far. Committed legs are not in the document until the command ends,
+        // so without redrawing them each frame the viewport shows only the leg being aimed and the
+        // manoeuvre appears to vanish behind the cursor.
+        var committedPath = CommittedPolyline(route, document.ModelUnitSystem);
+        var committedFootprints = CommittedFootprints(route, vehicle, document.ModelUnitSystem);
+
+        var straighten = false;
         while (true)
         {
+            GeneratedTrajectory? preview = null;
+            var requestedExceeded = false;
             using var getter = new GetPoint();
-            getter.SetCommandPrompt(Prompt(completed.Count, picked.Count, direction));
-            var canFinish = picked.Count >= 2 || (completed.Count > 0 && picked.Count == 0);
-            getter.AcceptNothing(canFinish);
-            var reverseOption = picked.Count >= 2 ? getter.AddOption("Reverse") : -1;
-            var undoOption = picked.Count > 0 ? getter.AddOption("Undo") : -1;
-            if (picked.Count > 0) getter.DrawLineFromPoint(picked[^1], true);
-
+            var wheelNow = state.SteeringAngleRadians * 180.0 / Math.PI;
+            getter.SetCommandPrompt(straighten
+                ? $"Straightening from {wheelNow:0.#}° of lock: pick how far to run it out; Enter to finish"
+                : $"Pick next target ({state.Direction}, wheel {wheelNow:0.#}°); Enter to finish");
+            getter.AcceptNothing(true);
+            var reverseOption = getter.AddOption("Reverse");
+            var undoOption = getter.AddOption("Undo");
+            var straightenOption = getter.AddOption(straighten ? "Aim" : "Straighten");
             getter.DynamicDraw += (_, args) =>
-                Draw(args.Display, completed, picked, args.CurrentPoint, direction, vehicle, mode, document);
-
-            var result = getter.Get();
-            if (result == GetResult.Cancel) return Result.Cancel;
-            if (result == GetResult.Nothing) break;
-
-            if (result == GetResult.Option)
             {
-                if (getter.OptionIndex() == undoOption && picked.Count > 0)
+                if (committedPath.Count > 1) args.Display.DrawPolyline(committedPath, Color.RoyalBlue, 2);
+                foreach (var footprint in committedFootprints)
                 {
-                    picked.RemoveAt(picked.Count - 1);
-                }
-                else if (getter.OptionIndex() == reverseOption)
-                {
-                    var leg = IntentPathFactory.InterpolateThrough(picked);
-                    if (leg is null) continue;
-                    completed.Add(new IntentLeg(leg, direction));
-                    direction = direction == TravelDirection.Forward
-                        ? TravelDirection.Reverse
-                        : TravelDirection.Forward;
-
-                    // The next leg starts at the cusp, which is where this one ended.
-                    picked = [picked[^1]];
-                    RhinoApp.WriteLine($"Leg {completed.Count} finished. Now driving {direction}.");
+                    args.Display.DrawPolyline(footprint, Color.LightSteelBlue, 1);
                 }
 
+                var cursor = new Point2(args.CurrentPoint.X * metresPerModelUnit, args.CurrentPoint.Y * metresPerModelUnit);
+                double targetSteering;
+                double travelDistance;
+                if (straighten)
+                {
+                    // Unwind the wheel to centre while running on. The vehicle keeps turning as the
+                    // wheel comes back, which is the gradual exit a driver actually makes -- an arc
+                    // aimed at a point cannot produce it, because it holds one curvature throughout.
+                    targetSteering = 0.0;
+                    travelDistance = StraightenDistance(state, cursor);
+                    requestedExceeded = false;
+                }
+                else
+                {
+                    var controls = RateLimitedTrajectoryGenerator.ControlsFromCursor(vehicle, mode, state, cursor);
+                    targetSteering = controls.TargetSteeringRadians;
+                    travelDistance = controls.TravelDistanceMetres;
+                    requestedExceeded = controls.RequestedAngleExceeded;
+                }
+
+                preview = generator.GenerateLeg(vehicle, mode, state, targetSteering, travelDistance, 0.10);
+                var previewPolyline = new Polyline(preview.Samples.Select(sample => ToModelPoint(sample.PositionMetres, document.ModelUnitSystem)));
+                args.Display.DrawPolyline(previewPolyline, requestedExceeded ? Color.OrangeRed : Color.CornflowerBlue, 3);
+                DrawVehicle(args.Display, vehicle, preview.EndState, document.ModelUnitSystem, requestedExceeded ? Color.OrangeRed : Color.DarkBlue);
+                DrawExitDirection(args.Display, preview.EndState, document.ModelUnitSystem);
+            };
+
+            var getResult = getter.Get();
+            if (getResult == GetResult.Cancel) return Result.Cancel;
+            if (getResult == GetResult.Nothing)
+            {
+                if (route.Count < 2)
+                {
+                    RhinoApp.WriteLine("Create at least one trajectory leg.");
+                    continue;
+                }
+                break;
+            }
+            if (getResult == GetResult.Option)
+            {
+                if (getter.OptionIndex() == reverseOption)
+                {
+                    state = state with
+                    {
+                        Direction = state.Direction == TravelDirection.Forward ? TravelDirection.Reverse : TravelDirection.Forward
+                    };
+                    RhinoApp.WriteLine($"Travel direction: {state.Direction}");
+                }
+                else if (getter.OptionIndex() == straightenOption)
+                {
+                    straighten = !straighten;
+                }
+                else if (getter.OptionIndex() == undoOption)
+                {
+                    if (history.Count == 0)
+                    {
+                        RhinoApp.WriteLine("Nothing to undo.");
+                    }
+                    else
+                    {
+                        var entry = history.Pop();
+                        state = entry.State;
+                        route.RemoveRange(entry.SampleCount, route.Count - entry.SampleCount);
+                        committedPath = CommittedPolyline(route, document.ModelUnitSystem);
+                        committedFootprints = CommittedFootprints(route, vehicle, document.ModelUnitSystem);
+                    }
+                }
                 continue;
             }
+            if (getResult != GetResult.Point || preview is null) continue;
 
-            if (result != GetResult.Point) continue;
-            picked.Add(getter.Point());
+            history.Push(new HistoryEntry(state, route.Count));
+            state = preview.EndState;
+            route.AddRange(preview.Samples.Skip(1));
+            committedPath = CommittedPolyline(route, document.ModelUnitSystem);
+            committedFootprints = CommittedFootprints(route, vehicle, document.ModelUnitSystem);
+            if (requestedExceeded)
+            {
+                RhinoApp.WriteLine("Requested turn exceeded wheel lock; the committed leg was clamped to the selected driving mode.");
+            }
         }
 
-        if (picked.Count >= 2)
-        {
-            var last = IntentPathFactory.InterpolateThrough(picked);
-            if (last is not null) completed.Add(new IntentLeg(last, direction));
-        }
-
-        if (completed.Count == 0)
-        {
-            RhinoApp.WriteLine("An intended line needs at least two points.");
-            return Result.Cancel;
-        }
-
+        samples = route;
+        pathCurve = new PolylineCurve(route.Select(sample => ToModelPoint(sample.PositionMetres, document.ModelUnitSystem)));
         return Result.Success;
     }
 
-    private static string Prompt(int completedLegs, int pickedCount, TravelDirection direction)
+    /// <summary>How far to run a straightening leg: the cursor projected onto the travel direction.</summary>
+    private static double StraightenDistance(VehicleState state, Point2 cursorMetres)
     {
-        if (pickedCount == 0)
-        {
-            return completedLegs == 0
-                ? "Start of the intended rear-axle line"
-                : $"First point of leg {completedLegs + 1} ({direction})";
-        }
-
-        return $"Next point ({direction}, {pickedCount} placed); Enter to finish";
+        var movementHeading = state.VehicleHeadingRadians + (state.Direction == TravelDirection.Reverse ? Math.PI : 0.0);
+        var delta = cursorMetres - state.RearAxleCentreMetres.XY;
+        var along = (delta.X * Math.Cos(movementHeading)) + (delta.Y * Math.Sin(movementHeading));
+        return Math.Max(along, 0.05);
     }
 
-    private static void Draw(
-        DisplayPipeline display,
-        IReadOnlyList<IntentLeg> completed,
-        IReadOnlyList<Point3d> picked,
-        Point3d cursor,
-        TravelDirection direction,
-        VehicleDefinition vehicle,
-        DrivingModeDefinition mode,
-        RhinoDoc document)
+    /// <summary>
+    /// A short ray along the heading the leg ends on. Aiming at a point rotates the vehicle by twice
+    /// the bearing picked, so the exit direction is rarely the one the cursor suggests; drawing it
+    /// makes that visible while aiming rather than after committing.
+    /// </summary>
+    private static void DrawExitDirection(
+        global::Rhino.Display.DisplayPipeline display,
+        VehicleState state,
+        UnitSystem modelUnits)
     {
-        var trial = new List<Point3d>(picked) { cursor };
-        var pending = IntentPathFactory.InterpolateThrough(trial);
-
-        foreach (var leg in completed) display.DrawCurve(leg.Curve, Color.MediumPurple, 2);
-        if (pending is not null) display.DrawCurve(pending, Color.RoyalBlue, 2);
-        foreach (var point in picked) display.DrawPoint(point, PointStyle.RoundControlPoint, 4, Color.RoyalBlue);
-
-        var legs = new List<IntentLeg>(completed);
-        if (pending is not null) legs.Add(new IntentLeg(pending, direction));
-        if (legs.Count == 0) return;
-
-        FollowedRoute route;
-        try
-        {
-            route = PathFollower.FollowLegs(vehicle, mode, legs
-                .Select(leg => new RouteLeg(
-                    IntentPathFactory.FromCurve(leg.Curve, document.ModelUnitSystem),
-                    leg.Direction))
-                .ToArray());
-        }
-        catch (Exception)
-        {
-            // A degenerate line under the cursor is not worth a message on every mouse move.
-            return;
-        }
-
-        var scale = RhinoMath.UnitScale(UnitSystem.Meters, document.ModelUnitSystem);
-        var samples = route.Samples;
-
-        // Red once the vehicle is further from the drawn line than its own width: past that the
-        // line has stopped describing where the vehicle goes, which is worth seeing while drawing.
-        var strayed = route.MaximumDeviationMetres > vehicle.WidthMetres;
-        if (samples.Count > 1)
-        {
-            display.DrawPolyline(
-                new Polyline(samples.Select(sample => ToModel(sample.PositionMetres, scale))),
-                strayed ? Color.OrangeRed : Color.SteelBlue,
-                2);
-        }
-
-        foreach (var stamp in Footprints(samples, vehicle, scale))
-        {
-            display.DrawPolyline(stamp, Color.LightSteelBlue, 1);
-        }
-
-        if (samples.Count > 0) DrawVehicle(display, vehicle, samples[^1], scale, Color.DarkBlue);
+        var scale = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
+        var heading = state.VehicleHeadingRadians + (state.Direction == TravelDirection.Reverse ? Math.PI : 0.0);
+        var from = state.RearAxleCentreMetres.XY;
+        var to = from + (new Point2(Math.Cos(heading), Math.Sin(heading)) * 6.0);
+        display.DrawDottedLine(
+            new Point3d(from.X * scale, from.Y * scale, state.RearAxleCentreMetres.Z * scale),
+            new Point3d(to.X * scale, to.Y * scale, state.RearAxleCentreMetres.Z * scale),
+            Color.SlateGray);
     }
 
-    private static IReadOnlyList<Polyline> Footprints(
+    private static Polyline CommittedPolyline(IReadOnlyList<RouteSample> route, UnitSystem modelUnits) =>
+        new(route.Select(sample => ToModelPoint(sample.PositionMetres, modelUnits)));
+
+    /// <summary>Body outlines stamped along the committed route, at the footprint reading interval.</summary>
+    private static IReadOnlyList<Polyline> CommittedFootprints(
         IReadOnlyList<RouteSample> route,
         VehicleDefinition vehicle,
-        double scale)
+        UnitSystem modelUnits)
     {
-        // Redrawn on every mouse move, so the spacing opens up on a long line rather than turning
-        // each frame into hundreds of polylines.
+        // Stamps are a reading aid, and they are redrawn on every mouse move. Two metres is the
+        // readable spacing, but a long manoeuvre must not turn each frame into hundreds of
+        // polylines, so the interval opens up once the count would exceed what anyone can read.
         const int maximumStamps = 120;
         var routeLength = route.Count == 0 ? 0.0 : route[^1].StationMetres;
-        var interval = Math.Max(2.0, routeLength / maximumStamps);
+        var intervalMetres = Math.Max(2.0, routeLength / maximumStamps);
+        var scale = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
         var stamps = new List<Polyline>();
         var nextStation = 0.0;
         foreach (var sample in route)
         {
             if (sample.StationMetres < nextStation) continue;
-            nextStation = sample.StationMetres + interval;
-            stamps.Add(Outline(vehicle, sample, scale));
+            nextStation = sample.StationMetres + intervalMetres;
+            var heading = Geometry2D.NormalizeAngle(
+                sample.PathHeadingRadians + (sample.Direction == TravelDirection.Reverse ? Math.PI : 0.0));
+            var points = vehicle.BodyOutline
+                .Select(point => Geometry2D.Transform(point, sample.PositionMetres.XY, heading))
+                .Select(point => new Point3d(point.X * scale, point.Y * scale, sample.PositionMetres.Z * scale))
+                .ToList();
+            points.Add(points[0]);
+            stamps.Add(new Polyline(points));
         }
 
         return stamps;
     }
 
-    private static Polyline Outline(VehicleDefinition vehicle, RouteSample sample, double scale)
+    private static RouteSample StateSample(VehicleState state, VehicleDefinition vehicle)
     {
-        var heading = Geometry2D.NormalizeAngle(
-            sample.PathHeadingRadians + (sample.Direction == TravelDirection.Reverse ? Math.PI : 0.0));
-        var points = vehicle.BodyOutline
-            .Select(point => Geometry2D.Transform(point, sample.PositionMetres.XY, heading))
-            .Select(point => new Point3d(point.X * scale, point.Y * scale, sample.PositionMetres.Z * scale))
-            .ToList();
-        points.Add(points[0]);
-        return new Polyline(points);
+        var pathHeading = Geometry2D.NormalizeAngle(
+            state.VehicleHeadingRadians + (state.Direction == TravelDirection.Reverse ? Math.PI : 0.0));
+        var curvature = (double)state.Direction * Math.Tan(state.SteeringAngleRadians) / vehicle.WheelbaseMetres;
+        return new RouteSample(state.StationMetres, state.RearAxleCentreMetres, pathHeading, curvature, state.Direction);
     }
 
     private static void DrawVehicle(
-        DisplayPipeline display,
+        global::Rhino.Display.DisplayPipeline display,
         VehicleDefinition vehicle,
-        RouteSample sample,
-        double scale,
-        Color color) =>
-        display.DrawPolyline(Outline(vehicle, sample, scale), color, 2);
+        VehicleState state,
+        UnitSystem modelUnits,
+        Color color)
+    {
+        var scale = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
+        var points = vehicle.BodyOutline
+            .Select(point => Geometry2D.Transform(point, state.RearAxleCentreMetres.XY, state.VehicleHeadingRadians))
+            .Select(point => new Point3d(point.X * scale, point.Y * scale, state.RearAxleCentreMetres.Z * scale))
+            .ToList();
+        points.Add(points[0]);
+        display.DrawPolyline(new Polyline(points), color, 2);
+    }
 
-    private static Point3d ToModel(Point3 pointMetres, double scale) =>
-        new(pointMetres.X * scale, pointMetres.Y * scale, pointMetres.Z * scale);
+    private static Point3d ToModelPoint(Point3 pointMetres, UnitSystem modelUnits)
+    {
+        var scale = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
+        return new Point3d(pointMetres.X * scale, pointMetres.Y * scale, pointMetres.Z * scale);
+    }
 }

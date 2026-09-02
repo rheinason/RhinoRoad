@@ -13,8 +13,7 @@ internal static class RhinoOutputWriter
     public static IReadOnlyList<Guid> Bake(
         RhinoDoc document,
         RhinoAnalysisGeometry geometry,
-        IReadOnlyList<IntentLeg> intentLegs,
-        bool bakeIntentCurves,
+        Curve? interactivePath,
         VehicleAccessResult result,
         IReadOnlyList<AnalysisViolation> allViolations,
         Guid sourceId,
@@ -26,23 +25,12 @@ internal static class RhinoOutputWriter
     {
         if (replaceExisting) DeleteMatching(document, sourceId);
         var ids = new List<Guid>();
-        if (bakeIntentCurves)
+        if (interactivePath is not null)
         {
-            // The lines that were drawn, kept as ordinary editable curves. Select them and run the
-            // command again to re-follow them, so a route is tweaked with Rhino's own curve tools
-            // rather than with anything this plugin has to invent. A line that was selected rather
-            // than drawn is already in the document and is not duplicated.
-            for (var index = 0; index < intentLegs.Count; index++)
-            {
-                var leg = intentLegs[index];
-                var name = intentLegs.Count == 1
-                    ? "Intended rear-axle line"
-                    : $"Intended rear-axle line, leg {index + 1} ({leg.Direction})";
-                var attributes = Attributes(document, "Intent", name, Color.DodgerBlue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres);
-                IntentLegStore.Stamp(attributes, leg.Direction);
-                var id = document.Objects.AddCurve(leg.Curve, attributes);
-                if (id != Guid.Empty) ids.Add(id);
-            }
+            // The driven path, kept as an ordinary curve. Selecting it and running the command
+            // again analyses it as a selected line, and because it carries the id this run's
+            // output was tagged with, that re-run replaces rather than stacks.
+            ids.Add(AddCurve(document, interactivePath, "Paths", "Driven rear-axle path", Color.DodgerBlue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
         }
         ids.Add(AddCurve(document, geometry.RearAxleTrack, "Paths", "Rear axle track", Color.Blue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
         ids.Add(AddCurve(document, geometry.FrontAxleTrack, "WheelTracks", "Front axle track", Color.CornflowerBlue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));

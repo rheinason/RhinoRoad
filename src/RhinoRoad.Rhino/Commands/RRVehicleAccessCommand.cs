@@ -42,46 +42,58 @@ public sealed class RRVehicleAccessCommand : Command
 
         var vehicle = Catalog.Get(settings.VehicleId);
         var drivingMode = vehicle.DrivingModes[settings.ModeId];
-        // One input for both modes: curves. Selected, or drawn by clicking through points — after
-        // this point nothing downstream knows or cares which, which is what makes an analysed route
-        // editable with ordinary Rhino curve tools. More than one leg means the manoeuvre reverses
-        // partway through, and each leg carries the direction it is driven in.
-        IReadOnlyList<IntentLeg> legs;
+        // Two ways to get a route. Driving legs interactively builds one the vehicle can certainly
+        // drive, because each leg starts from where the vehicle actually is. A selected curve is
+        // taken as the rear-axle path directly, and the checks report where the vehicle could not
+        // actually follow it -- so a line with corners no vehicle can turn is reported as such
+        // rather than quietly redrawn into something else.
+        IReadOnlyList<RouteSample> route;
+        Curve? interactivePath = null;
         Guid sourceId;
 
         if (settings.Source == PathSourceKind.ExistingCurve)
         {
-            var selected = SelectIntentLegs(document, preselectedPath, settings.Direction);
-            if (selected is null) return Result.Cancel;
-            if (selected.Count == 0) return Result.Failure;
-            legs = selected.Select(leg => leg.Leg).ToArray();
-            sourceId = selected[0].Identity;
+            ObjRef objectReference;
+            if (preselectedPath is not null)
+            {
+                objectReference = preselectedPath;
+                document.Objects.UnselectAll();
+                document.Views.Redraw();
+            }
+            else
+            {
+                using var getter = new GetObject();
+                getter.SetCommandPrompt("Select rear-axle midpoint path curve");
+                getter.GeometryFilter = ObjectType.Curve;
+                getter.SubObjectSelect = false;
+                getter.Get();
+                if (getter.CommandResult() != Result.Success) return getter.CommandResult();
+                objectReference = getter.Object(0);
+            }
+
+            var curve = objectReference.Curve();
+            if (curve is null) return Result.Failure;
+
+            // Re-running against a line RhinoRoad already analysed replaces that line's output
+            // instead of stacking another set beside it.
+            sourceId = IntentCurveIdentity(objectReference.Object());
+            try
+            {
+                route = RhinoRouteSampler.Sample(curve, document.ModelUnitSystem, settings.Direction);
+            }
+            catch (Exception exception)
+            {
+                RhinoApp.WriteLine($"Path sampling failed: {exception.Message}");
+                return Result.Failure;
+            }
         }
         else
         {
             var interactive = InteractiveRouteBuilder.TryBuild(
-                document, vehicle, drivingMode, settings.Direction, out legs);
+                document, vehicle, drivingMode, out route, out interactivePath);
             if (interactive != Result.Success) return interactive;
             sourceId = Guid.NewGuid();
         }
-
-        FollowedRoute followed;
-        try
-        {
-            followed = PathFollower.FollowLegs(
-                vehicle,
-                drivingMode,
-                legs.Select(leg => new RouteLeg(
-                    IntentPathFactory.FromCurve(leg.Curve, document.ModelUnitSystem),
-                    leg.Direction)).ToArray());
-        }
-        catch (Exception exception)
-        {
-            RhinoApp.WriteLine($"The intended line could not be followed: {exception.Message}");
-            return Result.Failure;
-        }
-
-        var route = followed.Samples;
 
         var obstacles = settings.CheckObstacles ? SelectCurves("Select obstacle curves; Enter to skip") : [];
         if (obstacles is null) return Result.Cancel;
@@ -125,7 +137,7 @@ public sealed class RRVehicleAccessCommand : Command
         analysis.MinimumClearanceMetres = clearance.MinimumClearanceMetres;
         var allViolations = analysis.Violations.Concat(clearance.Violations).ToArray();
 
-        ShowReport(analysis, allViolations, geometry.Warnings, followed, vehicle);
+        ShowReport(analysis, allViolations, geometry.Warnings);
         if (settings.PreviewBeforeBaking && !PreviewAndConfirm(document, geometry, allViolations))
         {
             return Result.Cancel;
@@ -135,8 +147,8 @@ public sealed class RRVehicleAccessCommand : Command
         var baked = RhinoOutputWriter.Bake(
             document,
             geometry,
-            legs,
-            settings.Source == PathSourceKind.Interactive,
+
+            interactivePath,
             analysis,
             allViolations,
             sourceId,
@@ -180,52 +192,6 @@ public sealed class RRVehicleAccessCommand : Command
         Guid.TryParse(rhinoObject.Attributes.GetUserString("RhinoRoad.SourceId"), out var stored)
             ? stored
             : rhinoObject.Id;
-
-    /// <summary>
-    /// The legs of a manoeuvre already in the document, in the order they are driven.
-    /// </summary>
-    /// <remarks>
-    /// Selection order is the driving order, because nothing in the geometry can imply it. A leg
-    /// RhinoRoad baked remembers which way it was driven; any other curve takes the direction set
-    /// in the dialog, which is what a single drawn line should do.
-    /// </remarks>
-    private static IReadOnlyList<(IntentLeg Leg, Guid Identity)>? SelectIntentLegs(
-        RhinoDoc document,
-        ObjRef? preselected,
-        TravelDirection fallbackDirection)
-    {
-        var chosen = new List<ObjRef>();
-        if (preselected is not null)
-        {
-            chosen.Add(preselected);
-            document.Objects.UnselectAll();
-            document.Views.Redraw();
-        }
-        else
-        {
-            using var getter = new GetObject();
-            getter.SetCommandPrompt("Select the intended rear-axle line, or the legs of a manoeuvre in driving order");
-            getter.GeometryFilter = ObjectType.Curve;
-            getter.SubObjectSelect = false;
-            getter.GetMultiple(1, 0);
-            if (getter.CommandResult() != Result.Success) return null;
-            chosen.AddRange(Enumerable.Range(0, getter.ObjectCount).Select(getter.Object));
-        }
-
-        var legs = new List<(IntentLeg, Guid)>(chosen.Count);
-        foreach (var reference in chosen)
-        {
-            var curve = reference.Curve();
-            if (curve is null) continue;
-            var rhinoObject = reference.Object();
-            legs.Add((
-                new IntentLeg(curve, IntentLegStore.Read(rhinoObject, fallbackDirection)),
-                IntentCurveIdentity(rhinoObject)));
-        }
-
-        if (legs.Count == 0) RhinoApp.WriteLine("No usable curve was selected.");
-        return legs;
-    }
 
     private static IReadOnlyList<Curve>? SelectCurves(string prompt, bool closedOnly = false)
     {
@@ -288,9 +254,7 @@ public sealed class RRVehicleAccessCommand : Command
     private static void ShowReport(
         VehicleAccessResult analysis,
         IReadOnlyList<AnalysisViolation> violations,
-        IReadOnlyList<string> warnings,
-        FollowedRoute followed,
-        VehicleDefinition vehicle)
+        IReadOnlyList<string> warnings)
     {
         var mode = analysis.DrivingMode;
         RhinoApp.WriteLine(string.Empty);
@@ -302,17 +266,6 @@ public sealed class RRVehicleAccessCommand : Command
         RhinoApp.WriteLine($"Max absolute grade: {analysis.MaximumAbsoluteGrade * 100.0:0.00}%");
         if (analysis.MinimumClearanceMetres.HasValue) RhinoApp.WriteLine($"Minimum obstacle clearance: {analysis.MinimumClearanceMetres.Value:0.00} m");
 
-        // How far the vehicle had to leave the line it was asked to follow. On a tight stretch this
-        // is usually the number the question turns on, so it is reported whether or not it is large.
-        RhinoApp.WriteLine(
-            $"Deviation from the drawn line: {followed.MaximumDeviationMetres:0.000} m max " +
-            $"at {followed.MaximumDeviationStationMetres:0.0} m, {followed.RootMeanSquareDeviationMetres:0.000} m rms.");
-        if (followed.MaximumDeviationMetres > vehicle.WidthMetres)
-        {
-            RhinoApp.WriteLine(
-                "WARNING: the vehicle leaves the drawn line by more than its own width. The line " +
-                "is tighter than this vehicle can drive; the swept envelope is where it actually goes.");
-        }
         foreach (var warning in warnings) RhinoApp.WriteLine($"WARNING: {warning}");
         foreach (var violation in violations) RhinoApp.WriteLine($"{violation.Kind} @ {violation.StationMetres:0.00} m: {violation.Message}");
         RhinoApp.WriteLine(string.Empty);

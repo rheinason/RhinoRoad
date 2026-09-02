@@ -161,7 +161,11 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         // width. Handing it the width the window actually has, every time the window changes, is
         // what makes the text wrap and the dialog narrowable.
         SizeChanged += (_, _) => FitWrappingText();
-        Shown += (_, _) => FitWrappingText();
+
+        // After layout, not during it. On first show the client size is not settled when Shown
+        // fires, so measuring then gives the wrapping text the wrong width and the dialog opens
+        // with both scrollbars up until the first resize nudges it right.
+        Shown += (_, _) => Application.Instance.AsyncInvoke(FitWrappingText);
 
         RefreshFacts();
     }

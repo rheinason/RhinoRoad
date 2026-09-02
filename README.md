@@ -116,17 +116,27 @@ reconstruct today; it must never shrink.
 
 ## Use `RRVehicleAccess`
 
-1. Select the intended rear-axle line, if you already have one, and run `RRVehicleAccess`.
+1. Select the rear-axle midpoint curve, if you already have one, and run `RRVehicleAccess`.
 2. In the dialog, set vehicle, mode, path source, clearance, road-edge widths, and optional checks.
 3. Press `Continue`.
-4. For `ExistingCurve`, select the line — skipped when exactly one curve was selected before the
-   command started. Selecting several curves treats them as the legs of one manoeuvre, driven in
-   selection order; a leg RhinoRoad baked remembers which way it was driven, and any other curve
-   takes the travel direction set in the dialog.
-5. For `Interactive`, click the points the line should pass through, the way `InterpCrv` works, and
-   press Enter. The vehicle is shown following the line as you draw, so the swept body appears while
-   the line is still being placed. `Reverse` ends the current leg and starts the next one going the
-   other way: a three-point turn is three legs, and the cusp between them is where the vehicle stops
+4. For `ExistingCurve`, select the curve — skipped when exactly one curve was selected before the
+   command started. Its parameter direction is the travel direction; choose `Reverse` when the
+   vehicle faces opposite that direction.
+5. For `Interactive`, pick the rear-axle start and vehicle heading, then click successive previewed
+   legs. Use `Reverse`, `Undo`, and Enter to finish. Requested turns beyond wheel lock are clamped.
+   The prompt shows how much lock is currently on, and a dotted ray marks the heading each leg
+   would end on.
+
+   Aiming at a point drives an arc that leaves the vehicle turned by **twice** the bearing you
+   picked, so clicking on the line you want to end up travelling along overshoots it and has to be
+   corrected back — which is what produces an unwanted S through the exit of a turn. To leave a turn
+   the way a driver does, switch to `Straighten`: the wheel runs back to centre at the mode's
+   lock-to-lock rate while the vehicle carries on, and the cursor sets how far to run it out. The
+   vehicle keeps turning as the wheel centres, which is exactly the gradual exit a single arc cannot
+   produce. Switch back with `Aim`.
+
+   `Reverse` flips the travel direction for the next leg, so a three-point turn is drawn as forward
+   legs, a reversing leg, then forward legs again — the cusp between them is where the vehicle stops
    and changes direction.
 6. Obstacle curves and closed allowed-area boundaries are only asked for when their checks are
    ticked; both are off by default.
@@ -134,33 +144,26 @@ reconstruct today; it must never shrink.
    *Preview and confirm before baking* to stop at a transient viewport preview first.
 
 A default run therefore asks for at most one thing after the dialog, and nothing at all when the
-line was pre-selected. `-RRVehicleAccess` keeps the option prompt for scripting.
+path was pre-selected. `-RRVehicleAccess` keeps the option prompt for scripting, with a `Preview`
+toggle matching the dialog's.
 
-## The drawn line and the driven route
+## Selecting a drawn curve
 
-The line you draw is **intent**, not the route. A drawn curve can turn tighter than any vehicle can,
-and it always turns instantly at a polyline corner, so the vehicle is *driven along* the line rather
-than placed on it: the wheel is steered towards where the line's curvature says it should be, under
-the mode's lock and its slew rate, and the route is where the vehicle actually ends up.
+A selected curve is taken as the rear-axle path directly, and the checks report where the vehicle
+could not actually follow it. A **polyline therefore reports tangent discontinuities at its
+corners**, which is the honest answer rather than a fault: no vehicle turns a right angle. For a
+meaningful report, draw the centreline smooth — `InterpCrv`, or `Fillet` at a radius the vehicle can
+hold — or drive it interactively instead, where every leg is feasible by construction.
 
-The gap between the two is reported on every run, as a maximum with the station it occurs at and an
-rms. On a line the vehicle can drive it is a few centimetres. Where it exceeds the vehicle's own
-width the report says so plainly — the line is tighter than the vehicle can follow, and the swept
-envelope, not the line, is where the vehicle goes.
+The tool deliberately does not smooth the line for you. What happened when it tried, with the
+measurements, is in [`path-model-notes.md`](path-model-notes.md).
 
-This is why an earlier rigid interpretation of a selected curve was misleading: a drawn polyline
-reported a vehicle rounding corners with no radius at all. Following it reports what a vehicle does.
+### Editing a route
 
-### Editing a driven route
-
-An interactive run bakes the line it drew on `RhinoRoad::Intent` as an ordinary Rhino curve. Edit it
-with any Rhino tool — grips, `Rebuild`, `Fair`, whatever — then select it and run `RRVehicleAccess`
-again. The route is re-driven along the edited line and the previous output is replaced rather than
-stacked beside it, because the line carries the identity its outputs were tagged with.
-
-There is nothing special about that curve: a line drawn beforehand and selected behaves identically.
-Interactive and `ExistingCurve` are the same path through the code, which is the point — the thing
-you edit is a curve, and Rhino already knows how to edit curves.
+An interactive run bakes its driven path as an ordinary curve on `RhinoRoad::Paths`. Edit it with any
+Rhino tool, select it, and run `RRVehicleAccess` again: it is analysed as a selected curve, and
+because it carries the id this run's output was tagged with, the re-run replaces the previous output
+rather than stacking another set beside it.
 
 Generated objects are grouped and placed below `RhinoRoad` layers. Metadata records the source
 GUID, analysis ID, vehicle/version, validation status, mode, clearance, and fixed widths. Re-running
@@ -168,8 +171,7 @@ with `ReplaceExisting=Yes` replaces only RhinoRoad objects linked to the same ex
 
 ## Meaning of the outputs
 
-- **Intended rear-axle line:** the line that was drawn, kept editable, one curve per leg. Re-run
-  against it — or against all its legs in order — to update.
+- **Driven rear-axle path:** what an interactive run drove, kept editable and re-runnable.
 - **Rear/front axle tracks:** kinematic reference curves.
 - **Vehicle footprints:** the body outline stamped along the route at the `FootprintInterval`
   station spacing; set the interval to 0 to omit them.
