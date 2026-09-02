@@ -127,18 +127,24 @@ reconstruct today; it must never shrink.
    The prompt shows how much lock is currently on, and a dotted ray marks the heading each leg
    would end on.
 
-   Aiming at a point drives an arc that leaves the vehicle turned by **twice** the bearing you
-   picked, so clicking on the line you want to end up travelling along overshoots it and has to be
-   corrected back — which is what produces an unwanted S through the exit of a turn. To leave a turn
-   the way a driver does, switch to `Straighten` and click **the direction you want to end up
-   travelling in**, not a distance. The vehicle holds its lock until unwinding the wheel would land
-   exactly on that direction, then runs the wheel back to centre at the mode's lock-to-lock rate, so
-   the leg finishes pointing where you pointed with the wheel straight and nothing to correct. If the
-   wheel is already turned further than that direction needs, it counter-steers through centre first,
-   which is what a driver does. Switch back with `Aim`.
+   Each click does two jobs. It says where to go next, and **the direction towards it says which
+   way the vehicle should be travelling when it leaves the corner it is in**. That is what lets the
+   exit be driven properly instead of corrected afterwards.
 
-   So a corner is two clicks: `Aim` at the point the arc should carry the vehicle to, then
-   `Straighten` along the line it should leave on.
+   The reason it matters: an arc through a picked point ends the vehicle turned by *twice* the
+   bearing of that point, so on its own every corner overshoots and the next leg has to correct back
+   — the unwanted S through a corner exit. But a driver does not correct at the exit; they ease the
+   wheel open through the second half of the bend. Easing has to *begin* before the point you want
+   to be straight at, and by then the leg has already been driven past it. So RhinoRoad rewinds: it
+   gives back the tail of the corner, restarts the ease from where the wheel should have begun
+   coming back, and drives the exit as one continuous opening turn. The part being given back is
+   drawn as a faint dotted line while you aim, so the reshaping is visible as it happens.
+
+   Rewinding never reaches back past the start of the leg in hand, or through a change of travel
+   direction, so an earlier decision cannot be undone behind your back.
+
+   `Finish` ends the route instead of continuing it: pick the direction to end up travelling in, and
+   the vehicle eases onto exactly that heading with the wheel centred. Switch back with `Aim`.
 
    `Reverse` flips the travel direction for the next leg, so a three-point turn is drawn as forward
    legs, a reversing leg, then forward legs again — the cusp between them is where the vehicle stops

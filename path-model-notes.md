@@ -38,24 +38,37 @@ angle result, not a bug. So a leg aimed along the line you mean to leave on over
 correcting back. That is what `Straighten` is for, and it is why aiming and straightening are two
 separate modes rather than one.
 
-`Straighten` originally took a *distance* — run the wheel out over this far — which left the
-finishing direction to fall out of the arithmetic, so it overshot in its own right. It now takes the
-**direction to end up travelling in**, which is solvable exactly because the heading still to come
-from unwinding the wheel has a closed form:
+**How the flaw is handled.** Not by correcting after the fact, which is what puts the S in. The
+*next* point picked supplies the direction the vehicle should leave the current corner on, and that
+is enough to know when the wheel should have started coming back:
 
 ```
-    Δψ = direction · (speed / (wheelbase · slewRate)) · −ln(cos δ)
+    dpsi = direction * (speed / (wheelbase * slewRate)) * -ln(cos delta)
 ```
 
-Hold the lock until that equals the turn still required, then unwind: the vehicle arrives on the
-chosen heading with the wheel centred, and cannot overshoot. Where the wheel is already turned
-further than the chosen direction needs, the same comparison calls for counter-steer through centre
-first. Measured over 50 combinations of starting wheel angle and target direction across both modes,
-forwards and reversing, every leg lands on its direction to within 0.01° with the wheel centred.
+is the closed form for the heading still to come while the wheel runs back to centre. Unwinding from
+early in a corner finishes on a shallower heading than unwinding from late in it, so there is exactly
+one station whose unwind lands on the chosen direction. The route is rewound to it and the exit
+re-driven as one continuous ease-out. Nothing counter-steers, and nothing is corrected.
 
-The one subtlety is that the moment to stop turning in almost never falls on a step boundary;
-stopping at the next one overshoots by a whole step's worth of turn, which at full lock is most of a
-degree. The step that crosses that moment has its length bisected so the turn ends exactly on it.
+Three details earned their keep:
+
+- **The rewind is bounded** at the start of the leg in hand and at any change of travel direction,
+  so easing a corner cannot silently undo a reversing leg on the far side of a cusp.
+- **Headings are unwrapped** for the search. A corner can turn past half a circle — PV at full lock
+  in mode B turns 377 degrees in 25 m — and comparing wrapped angles puts spurious crossings in.
+  The latest crossing is the one taken, giving back as little of the corner as will do.
+- **The switch from turning to unwinding is one-way**, and the step that crosses it is bisected.
+  Re-deciding every step leaves the command flipping either side of the answer and the wheel never
+  settles; stopping at the next step boundary instead overshoots by a whole step's worth of turn,
+  most of a degree at full lock.
+
+Measured across 50 combinations of starting wheel angle and target direction, both modes, forwards
+and reversing: every leg lands on its direction within 0.01 degrees with the wheel centred.
+
+An earlier attempt had `Straighten` take a *distance* — run the wheel out this far — which left the
+finishing direction to fall out of the arithmetic and so overshot in its own right. A control that
+exists to cure an overshoot must not have one.
 
 Measured: PV mode A, target 20 m away.
 

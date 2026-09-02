@@ -104,6 +104,98 @@ public static class HeadingLegGenerator
     }
 
     /// <summary>
+    /// Where along a driven route the wheel should have started coming back, and the leg that does it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A driver eases out of a corner from partway through it, not from the end of it. By the time
+    /// a leg has been committed the vehicle has usually driven past the point where the ease-out
+    /// should have begun, and from there the only ways onto the chosen exit are to turn in further
+    /// or to counter-steer — both of which look and feel wrong, because neither is what a driver
+    /// does.
+    /// </para>
+    /// <para>
+    /// So the route is rewound instead. Unwinding from a point early in the corner finishes on a
+    /// shallower heading than unwinding from a point late in it, and that relationship is monotonic,
+    /// so there is exactly one station whose unwind lands on the chosen direction. Everything after
+    /// it is discarded and replaced by the ease-out. The result is one continuous turn that opens
+    /// out into the exit, with no correction anywhere in it.
+    /// </para>
+    /// <para>
+    /// Where no station works the route is left alone and the leg is generated from its end: the
+    /// exit wanted needs more turn than the corner has produced, or less than it has already
+    /// committed to, and then holding on or counter-steering really is the answer.
+    /// </para>
+    /// </remarks>
+    /// <param name="earliestIndex">
+    /// How far back the ease-out may reach. The caller holds this at the last direction change,
+    /// because rewinding through a cusp would silently undo a reversing leg.
+    /// </param>
+    public static (int FromIndex, GeneratedTrajectory Leg) EaseOntoHeading(
+        VehicleDefinition vehicle,
+        DrivingModeDefinition mode,
+        IReadOnlyList<RouteSample> route,
+        int earliestIndex,
+        double targetMovementHeadingRadians,
+        double maximumStepMetres = 0.10)
+    {
+        ArgumentNullException.ThrowIfNull(route);
+        if (route.Count == 0) throw new ArgumentException("A route is required.", nameof(route));
+
+        var last = route.Count - 1;
+        var first = Math.Clamp(earliestIndex, 0, last);
+
+        // Where unwinding from each sample would finish, as a heading that keeps counting past half
+        // a turn instead of wrapping. Wrapping would put spurious sign changes into the search, and
+        // a corner that turns far enough to wrap is exactly where the exit matters most.
+        var finish = new double[route.Count];
+        var running = MovementHeading(route[0]);
+        finish[0] = running + HeadingChangeFromUnwinding(vehicle, mode, StateAt(route[0], vehicle));
+        for (var index = 1; index < route.Count; index++)
+        {
+            running += Geometry2D.NormalizeAngle(MovementHeading(route[index]) - MovementHeading(route[index - 1]));
+            finish[index] = running + HeadingChangeFromUnwinding(vehicle, mode, StateAt(route[index], vehicle));
+        }
+
+        // The chosen direction is a compass bearing, so it names a whole family of headings a turn
+        // apart. The one meant is the one nearest what the corner is already about to finish on.
+        var target = Geometry2D.NormalizeAngle(targetMovementHeadingRadians);
+        target += 2.0 * Math.PI * Math.Round((finish[last] - target) / (2.0 * Math.PI));
+
+        // Walking back from the end takes the latest crossing, which gives back as little of the
+        // corner as will do. Earlier ones are the same bearing reached on a previous lap.
+        var sign = Math.Sign(finish[last] - target);
+        if (sign != 0)
+        {
+            for (var index = last - 1; index >= first; index--)
+            {
+                if (Math.Sign(finish[index] - target) == sign) continue;
+                return (index, ToHeading(vehicle, mode, StateAt(route[index], vehicle), target, maximumStepMetres));
+            }
+        }
+
+        return (last, ToHeading(vehicle, mode, StateAt(route[last], vehicle), target, maximumStepMetres));
+    }
+
+    private static double MovementHeading(RouteSample sample) => sample.PathHeadingRadians;
+
+    /// <summary>
+    /// The vehicle state a route sample was taken at.
+    /// </summary>
+    /// <remarks>
+    /// The wheel angle is recoverable because curvature carries it: a sample records where the
+    /// vehicle was and how tightly it was turning, and the wheelbase turns the second into the
+    /// first. Rewinding a route to a sample therefore restores the vehicle exactly, wheel included.
+    /// </remarks>
+    public static VehicleState StateAt(RouteSample sample, VehicleDefinition vehicle) => new(
+        sample.PositionMetres,
+        Geometry2D.NormalizeAngle(
+            sample.PathHeadingRadians + (sample.Direction == TravelDirection.Reverse ? Math.PI : 0.0)),
+        Math.Atan(sample.SignedCurvaturePerMetre * vehicle.WheelbaseMetres * (double)sample.Direction),
+        sample.Direction,
+        sample.StationMetres);
+
+    /// <summary>
     /// How much more the vehicle must turn than unwinding from here would give it.
     /// </summary>
     /// <remarks>
