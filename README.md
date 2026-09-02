@@ -116,46 +116,47 @@ reconstruct today; it must never shrink.
 
 ## Use `RRVehicleAccess`
 
-1. Select the rear-axle midpoint curve, if you already have one, and run `RRVehicleAccess`.
+1. Select the intended rear-axle line, if you already have one, and run `RRVehicleAccess`.
 2. In the dialog, set vehicle, mode, path source, clearance, road-edge widths, and optional checks.
 3. Press `Continue`.
-4. For `ExistingCurve`, select a rear-axle midpoint curve — skipped when exactly one curve was
-   selected before the command started. Its parameter direction is the travel direction; choose
-   `Reverse` when the vehicle faces opposite that direction.
-5. For `Interactive`, pick the rear-axle start and vehicle heading, then click waypoints. It works
-   like Rhino's own `Polyline`: the next leg previews under the cursor, `Reverse` and `Undo` are
-   options, and Enter finishes. Because waypoints are ordinary picked points, object snaps, typed
-   coordinates, and ortho all apply — which is how a waypoint gets placed accurately enough to
-   matter on a tight stretch.
-
-   The vehicle is driven to each waypoint by re-aiming at it every 0.10 m under the mode's wheel
-   lock and steering rate, so what you draw is drivable by construction. A leg the vehicle cannot
-   reach without turning through more than a full circle previews in orange and is refused rather
-   than quietly ending somewhere else. Where the route ends up pointing follows from where the next
-   waypoint goes: aiming at a point says nothing about arrival direction, so a tight approach wants
-   waypoints placed closer together.
-
+4. For `ExistingCurve`, select the line — skipped when exactly one curve was selected before the
+   command started.
+5. For `Interactive`, click the points the line should pass through, the way `InterpCrv` works, and
+   press Enter. The vehicle is shown following the line as you draw, so the swept body appears while
+   the line is still being placed.
 6. Obstacle curves and closed allowed-area boundaries are only asked for when their checks are
    ticked; both are off by default.
 7. The PASS/FAIL report is written to the command line and the result is baked. Tick
    *Preview and confirm before baking* to stop at a transient viewport preview first.
 
 A default run therefore asks for at most one thing after the dialog, and nothing at all when the
-path was pre-selected. `-RRVehicleAccess` keeps the option prompt for scripting, with a `Preview`
-toggle matching the dialog's.
+line was pre-selected. `-RRVehicleAccess` keeps the option prompt for scripting.
+
+## The drawn line and the driven route
+
+The line you draw is **intent**, not the route. A drawn curve can turn tighter than any vehicle can,
+and it always turns instantly at a polyline corner, so the vehicle is *driven along* the line rather
+than placed on it: the wheel is steered towards where the line's curvature says it should be, under
+the mode's lock and its slew rate, and the route is where the vehicle actually ends up.
+
+The gap between the two is reported on every run, as a maximum with the station it occurs at and an
+rms. On a line the vehicle can drive it is a few centimetres. Where it exceeds the vehicle's own
+width the report says so plainly — the line is tighter than the vehicle can follow, and the swept
+envelope, not the line, is where the vehicle goes.
+
+This is why an earlier rigid interpretation of a selected curve was misleading: a drawn polyline
+reported a vehicle rounding corners with no radius at all. Following it reports what a vehicle does.
 
 ### Editing a driven route
 
-An interactive run also bakes a **control polyline** on `RhinoRoad::Control` — the start point
-followed by each waypoint — carrying the manoeuvre in its user text. Its grips are the decisions you
-made, so drag one, select it, and run `RRVehicleAccess` again: the route is rebuilt by replaying the
-waypoints, and the previous output is replaced rather than stacked beside it. An edited route is
-therefore still drivable, which dragging the 0.10 m sampled path could never guarantee.
+An interactive run bakes the line it drew on `RhinoRoad::Intent` as an ordinary Rhino curve. Edit it
+with any Rhino tool — grips, `Rebuild`, `Fair`, whatever — then select it and run `RRVehicleAccess`
+again. The route is re-driven along the edited line and the previous output is replaced rather than
+stacked beside it, because the line carries the identity its outputs were tagged with.
 
-The curve supplies the waypoint positions and the stored text supplies what geometry cannot — the
-start heading, which way each leg was driven, and the vehicle it was driven as. Adding or removing a
-grip works; new points inherit the travel direction of the last stored leg. Changing the vehicle or
-mode in the dialog before re-running drives the same waypoints as a different vehicle.
+There is nothing special about that curve: a line drawn beforehand and selected behaves identically.
+Interactive and `ExistingCurve` are the same path through the code, which is the point — the thing
+you edit is a curve, and Rhino already knows how to edit curves.
 
 Generated objects are grouped and placed below `RhinoRoad` layers. Metadata records the source
 GUID, analysis ID, vehicle/version, validation status, mode, clearance, and fixed widths. Re-running
@@ -163,7 +164,7 @@ with `ReplaceExisting=Yes` replaces only RhinoRoad objects linked to the same ex
 
 ## Meaning of the outputs
 
-- **Route control polyline:** the picked waypoints, and the editable form of a driven route.
+- **Intended rear-axle line:** the line that was drawn, kept editable. Re-run against it to update.
 - **Rear/front axle tracks:** kinematic reference curves.
 - **Vehicle footprints:** the body outline stamped along the route at the `FootprintInterval`
   station spacing; set the interval to 0 to omit them.

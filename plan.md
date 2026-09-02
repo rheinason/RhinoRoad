@@ -10,8 +10,9 @@ It is deliberately narrower than a general road-design or Civil 3D replacement.
 
 The `RRVehicleAccess` command supports:
 
-- an existing open or closed 3D Rhino curve, interpreted as the rear-axle midpoint path;
-- an interactive waypoint-driven forward/reverse path authoring mode, replayable and grip-editable;
+- an intended rear-axle line, drawn beforehand or clicked out in the command, followed under the
+  mode's wheel lock and steering rate, with the deviation from the drawn line reported;
+- editing by ordinary Rhino curve tools: change the line, re-run, and the output is replaced;
 - Danish PV, REN, and BUS 12 source-transcribed vehicle definitions;
 - Vejregler driving modes A and B;
 - wheel-angle, steering-rate, tangent-discontinuity, and optional grade-limit checks;

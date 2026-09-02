@@ -87,17 +87,12 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         if (_lastClientSize is { } remembered) ClientSize = remembered;
         Closing += (_, _) => _lastClientSize = ClientSize;
 
-        Content = new Scrollable
+        var body = new StackLayout
         {
-            Border = BorderType.None,
-            ExpandContentWidth = true,
-            ExpandContentHeight = false,
-            Content = new StackLayout
+            Spacing = 10,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Items =
             {
-                Spacing = 10,
-                HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Items =
-                {
                     Group("Vehicle", Stretched(
                         Fields(("Vehicle", _vehicle), ("Driving mode", _mode)),
                         _preview,
@@ -133,11 +128,27 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
                         Spacing = 8,
                         Items = { null, DefaultButton, AbortButton }
                     }
-                }
             }
         };
 
+        Content = body;
+
+        // A wrapping label has no width of its own to wrap at: asked how wide it wants to be, it
+        // answers with the whole sentence on one line, and that answer becomes the dialog's minimum
+        // width. Handing it the width the window actually has, every time the window changes, is
+        // what makes the text wrap and the dialog narrowable.
+        SizeChanged += (_, _) => FitWrappingText();
+        Shown += (_, _) => FitWrappingText();
+
         RefreshFacts();
+    }
+
+    private void FitWrappingText()
+    {
+        var available = ClientSize.Width - Padding.Horizontal - 26;
+        if (available < 80) return;
+        _vehicleFacts.Width = available;
+        _turningFacts.Width = available;
     }
 
     private static NumericStepper Metres(double minimum, double maximum) => new()

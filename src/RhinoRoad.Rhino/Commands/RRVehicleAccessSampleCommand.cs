@@ -19,9 +19,12 @@ public sealed class RRVehicleAccessSampleCommand : Command
         var middle = new Point3d(7.0710678119 * scale, 2.9289321881 * scale, 0.0);
         var end = new Point3d(10.0 * scale, 10.0 * scale, 0.0);
         var routeCurve = new ArcCurve(new Arc(start, middle, end));
-        var route = RhinoRouteSampler.Sample(routeCurve, document.ModelUnitSystem, TravelDirection.Forward, 0.10);
         var vehicle = VehicleCatalog.LoadEmbedded().Get("PV");
         var drivingMode = vehicle.DrivingModes["B"];
+        var route = PathFollower.Follow(
+            vehicle,
+            drivingMode,
+            IntentPathFactory.FromCurve(routeCurve, document.ModelUnitSystem)).Samples;
         var result = new VehicleAccessAnalyzer().Analyze(vehicle, drivingMode, route, maximumAbsoluteGrade: 0.08);
         var geometry = RhinoGeometryBuilder.Build(result, route, document, 0.30, 3.25, 3.25, createFixedEdges: true);
         var sourceId = Guid.NewGuid();
@@ -29,8 +32,8 @@ public sealed class RRVehicleAccessSampleCommand : Command
         var baked = RhinoOutputWriter.Bake(
             document,
             geometry,
-            // The sample drives a plain arc, not a clicked manoeuvre, so there is no control curve.
-            manoeuvre: null,
+            routeCurve,
+            bakeIntentCurve: true,
             result,
             result.Violations,
             sourceId,

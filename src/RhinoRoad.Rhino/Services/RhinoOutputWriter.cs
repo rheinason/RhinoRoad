@@ -13,7 +13,8 @@ internal static class RhinoOutputWriter
     public static IReadOnlyList<Guid> Bake(
         RhinoDoc document,
         RhinoAnalysisGeometry geometry,
-        Manoeuvre? manoeuvre,
+        Curve intentCurve,
+        bool bakeIntentCurve,
         VehicleAccessResult result,
         IReadOnlyList<AnalysisViolation> allViolations,
         Guid sourceId,
@@ -25,15 +26,13 @@ internal static class RhinoOutputWriter
     {
         if (replaceExisting) DeleteMatching(document, sourceId);
         var ids = new List<Guid>();
-        if (manoeuvre is not null)
+        if (bakeIntentCurve)
         {
-            // The editable half of the output. Its grips are the waypoints, and the manoeuvre
-            // travels with it, so re-running the command against this curve rebuilds everything
-            // else from it.
-            var attributes = Attributes(document, "Control", ManoeuvreStore.ControlCurveName, Color.DodgerBlue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres);
-            attributes.SetUserString(ManoeuvreStore.ManoeuvreKey, ManoeuvreSerializer.ToJson(manoeuvre));
-            var controlId = document.Objects.AddCurve(ManoeuvreStore.ControlCurve(manoeuvre, document.ModelUnitSystem), attributes);
-            if (controlId != Guid.Empty) ids.Add(controlId);
+            // The line that was drawn, kept as an ordinary editable curve. Selecting it and running
+            // the command again re-follows it, so a route is tweaked with Rhino's own curve tools
+            // rather than with anything this plugin has to invent. A line that was selected rather
+            // than drawn is already in the document and is not duplicated.
+            ids.Add(AddCurve(document, intentCurve, "Intent", "Intended rear-axle line", Color.DodgerBlue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
         }
         ids.Add(AddCurve(document, geometry.RearAxleTrack, "Paths", "Rear axle track", Color.Blue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
         ids.Add(AddCurve(document, geometry.FrontAxleTrack, "WheelTracks", "Front axle track", Color.CornflowerBlue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));

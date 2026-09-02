@@ -79,30 +79,6 @@ public sealed class RateLimitedTrajectoryGenerator
             headingChange);
     }
 
-    public static (double TargetSteeringRadians, double TravelDistanceMetres, bool RequestedAngleExceeded) ControlsFromCursor(
-        VehicleDefinition vehicle,
-        DrivingModeDefinition mode,
-        VehicleState state,
-        Point2 cursorMetres)
-    {
-        var movementHeading = state.VehicleHeadingRadians + (state.Direction == TravelDirection.Reverse ? Math.PI : 0.0);
-        var delta = cursorMetres - state.RearAxleCentreMetres.XY;
-        var cosine = Math.Cos(movementHeading);
-        var sine = Math.Sin(movementHeading);
-        var localX = (delta.X * cosine) + (delta.Y * sine);
-        var localY = (-delta.X * sine) + (delta.Y * cosine);
-        var chord = Math.Max(Math.Sqrt((localX * localX) + (localY * localY)), 0.01);
-        var pathCurvature = 2.0 * localY / (chord * chord);
-        var requestedSteering = Math.Atan(vehicle.WheelbaseMetres * pathCurvature / (double)state.Direction);
-        var exceeded = Math.Abs(requestedSteering) > mode.MaximumWheelAngleRadians;
-        var clamped = Math.Clamp(requestedSteering, -mode.MaximumWheelAngleRadians, mode.MaximumWheelAngleRadians);
-        var absoluteCurvature = Math.Abs(pathCurvature);
-        var distance = absoluteCurvature < 1e-6
-            ? chord
-            : Math.Abs(2.0 * Math.Asin(Math.Clamp(chord * absoluteCurvature * 0.5, -1.0, 1.0)) / absoluteCurvature);
-        return (clamped, Math.Max(distance, 0.05), exceeded);
-    }
-
     private static RouteSample ToRouteSample(VehicleState state, VehicleDefinition vehicle)
     {
         var directionSign = (double)state.Direction;
