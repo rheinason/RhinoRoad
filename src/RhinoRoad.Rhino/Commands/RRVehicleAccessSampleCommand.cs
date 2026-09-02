@@ -32,8 +32,8 @@ public sealed class RRVehicleAccessSampleCommand : Command
         var baked = RhinoOutputWriter.Bake(
             document,
             geometry,
-            routeCurve,
-            bakeIntentCurve: true,
+            [new IntentLeg(routeCurve, TravelDirection.Forward)],
+            bakeIntentCurves: true,
             result,
             result.Violations,
             sourceId,

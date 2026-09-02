@@ -115,6 +115,42 @@ public sealed class PathFollowerTests
         }
     }
 
+    /// <summary>
+    /// A line that comes back close to itself must not let the vehicle jump onto the other pass.
+    /// </summary>
+    /// <remarks>
+    /// Interpolating through clicked points can throw a loop into the line, and a follower that
+    /// looks for its nearest point over the whole line finds one on the far side of that loop. It
+    /// then steers for a part of the route it has not driven to, which showed up as the vehicle
+    /// wandering off into hairpins bearing no relation to what was drawn.
+    /// </remarks>
+    [Fact]
+    public void ALineThatLoopsBackDoesNotDerailTheVehicle()
+    {
+        var (vehicle, mode) = Preset();
+        var points = Straight(20.0, -20.0);
+
+        // A loop of 12 m radius, which brings the line back alongside where it started.
+        const double radius = 12.0;
+        for (var index = 1; index <= 700; index++)
+        {
+            var angle = index * 2.0 * Math.PI / 700.0;
+            points.Add(new Point3(radius * Math.Sin(angle), radius * (1.0 - Math.Cos(angle)), 0.0));
+        }
+
+        points.AddRange(Straight(20.0, 0.05).Select(point => new Point3(point.X, 0.0, 0.0)));
+        var intent = IntentPath.FromPoints(points);
+
+        var route = PathFollower.Follow(vehicle, mode, intent);
+
+        Assert.True(
+            route.MaximumDeviationMetres < vehicle.WidthMetres,
+            $"strayed {route.MaximumDeviationMetres:0.000} m from a line it can drive");
+        Assert.True(
+            route.Samples[^1].StationMetres < intent.LengthMetres * 1.2,
+            "the route ran far longer than the line it was following");
+    }
+
     [Fact]
     public void DeviationStatisticsAgreeWithEachOther()
     {

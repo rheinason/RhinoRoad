@@ -122,16 +122,39 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
                             ("Interval (m)", _footprintInterval)),
                         _previewBeforeBaking,
                         _replaceExisting)),
+            }
+        };
+
+        // The groups scroll; the buttons do not. Narrowing the window makes the wrapped text taller,
+        // and without this the Continue button is the first thing pushed off the bottom -- which is
+        // the one control the dialog cannot do without.
+        Content = new TableLayout
+        {
+            Spacing = new Size(0, 10),
+            Rows =
+            {
+                new TableRow(new TableCell(
+                    new Scrollable
+                    {
+                        Border = BorderType.None,
+                        ExpandContentWidth = true,
+                        ExpandContentHeight = false,
+                        Content = body
+                    },
+                    true))
+                {
+                    ScaleHeight = true
+                },
+                new TableRow(new TableCell(
                     new StackLayout
                     {
                         Orientation = Orientation.Horizontal,
                         Spacing = 8,
                         Items = { null, DefaultButton, AbortButton }
-                    }
+                    },
+                    true))
             }
         };
-
-        Content = body;
 
         // A wrapping label has no width of its own to wrap at: asked how wide it wants to be, it
         // answers with the whole sentence on one line, and that answer becomes the dialog's minimum
@@ -145,7 +168,8 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
 
     private void FitWrappingText()
     {
-        var available = ClientSize.Width - Padding.Horizontal - 26;
+        // Less the vertical scrollbar, which appears exactly when the text is tall enough to matter.
+        var available = ClientSize.Width - Padding.Horizontal - 34;
         if (available < 80) return;
         _vehicleFacts.Width = available;
         _turningFacts.Width = available;

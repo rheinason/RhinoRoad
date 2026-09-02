@@ -79,27 +79,34 @@ public sealed class IntentPath
         return new IntentPath(points, stations, headings, curvatures);
     }
 
-    /// <summary>The sample nearest <paramref name="point"/>, searching forward from <paramref name="from"/>.</summary>
+    /// <summary>
+    /// The sample nearest <paramref name="point"/>, searched only a little way ahead of
+    /// <paramref name="from"/>.
+    /// </summary>
     /// <remarks>
-    /// Forward-only, because the vehicle travels the line once and a global search would happily
-    /// snap to an earlier pass where the line loops back on itself.
+    /// <para>
+    /// A vehicle travels the line once, so its place on the line may only creep forward. Searching
+    /// the whole line instead lets that place teleport: where a line loops back near itself, the
+    /// closest point to a vehicle at the start of the loop is on the far side of it, and the
+    /// follower would steer for the wrong part of the curve or decide it had already finished.
+    /// </para>
+    /// <para>
+    /// <paramref name="maximumAdvanceMetres"/> is the leash. It has to exceed a single step, so the
+    /// place can keep up, without being long enough to skip a feature of the line.
+    /// </para>
     /// </remarks>
-    public int NearestIndex(Point2 point, int from)
+    public int NearestIndex(Point2 point, int from, double maximumAdvanceMetres)
     {
-        var best = double.MaxValue;
-        var bestIndex = Math.Clamp(from, 0, Points.Count - 1);
-        for (var index = bestIndex; index < Points.Count; index++)
+        var start = Math.Clamp(from, 0, Points.Count - 1);
+        var limit = _stations[start] + maximumAdvanceMetres;
+        var best = Points[start].XY.DistanceTo(point);
+        var bestIndex = start;
+        for (var index = start + 1; index < Points.Count && _stations[index] <= limit; index++)
         {
             var distance = Points[index].XY.DistanceTo(point);
-            if (distance < best)
-            {
-                best = distance;
-                bestIndex = index;
-            }
-            else if (_stations[index] - _stations[bestIndex] > SearchWindowMetres)
-            {
-                break;
-            }
+            if (distance >= best) continue;
+            best = distance;
+            bestIndex = index;
         }
 
         return bestIndex;
@@ -113,7 +120,4 @@ public sealed class IntentPath
         return Math.Clamp(index, 0, Points.Count - 1);
     }
 
-    // How far past the running best the nearest-point search keeps looking before giving up. Wide
-    // enough to cross a hairpin the vehicle has cut across, short enough not to scan the whole line.
-    private const double SearchWindowMetres = 30.0;
 }

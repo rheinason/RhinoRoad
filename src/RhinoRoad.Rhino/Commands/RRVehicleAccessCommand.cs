@@ -42,57 +42,38 @@ public sealed class RRVehicleAccessCommand : Command
 
         var vehicle = Catalog.Get(settings.VehicleId);
         var drivingMode = vehicle.DrivingModes[settings.ModeId];
-        // One input for both modes: a curve. Selected, or drawn by clicking through points — after
+        // One input for both modes: curves. Selected, or drawn by clicking through points — after
         // this point nothing downstream knows or cares which, which is what makes an analysed route
-        // editable with ordinary Rhino curve tools.
-        Curve? intentCurve;
+        // editable with ordinary Rhino curve tools. More than one leg means the manoeuvre reverses
+        // partway through, and each leg carries the direction it is driven in.
+        IReadOnlyList<IntentLeg> legs;
         Guid sourceId;
 
         if (settings.Source == PathSourceKind.ExistingCurve)
         {
-            ObjRef objectReference;
-            if (preselectedPath is not null)
-            {
-                objectReference = preselectedPath;
-                document.Objects.UnselectAll();
-                document.Views.Redraw();
-            }
-            else
-            {
-                using var getter = new GetObject();
-                getter.SetCommandPrompt("Select the intended rear-axle line");
-                getter.GeometryFilter = ObjectType.Curve;
-                getter.SubObjectSelect = false;
-                getter.Get();
-                if (getter.CommandResult() != Result.Success) return getter.CommandResult();
-                objectReference = getter.Object(0);
-            }
-
-            intentCurve = objectReference.Curve();
-            if (intentCurve is null) return Result.Failure;
-
-            // Re-running against an already-analysed line replaces that line's output rather than
-            // stacking another set beside it, so editing and re-running converges instead of piling up.
-            sourceId = IntentCurveIdentity(objectReference.Object());
+            var selected = SelectIntentLegs(document, preselectedPath, settings.Direction);
+            if (selected is null) return Result.Cancel;
+            if (selected.Count == 0) return Result.Failure;
+            legs = selected.Select(leg => leg.Leg).ToArray();
+            sourceId = selected[0].Identity;
         }
         else
         {
             var interactive = InteractiveRouteBuilder.TryBuild(
-                document, vehicle, drivingMode, settings.Direction, out intentCurve);
+                document, vehicle, drivingMode, settings.Direction, out legs);
             if (interactive != Result.Success) return interactive;
             sourceId = Guid.NewGuid();
         }
 
-        if (intentCurve is null) return Result.Failure;
-
         FollowedRoute followed;
         try
         {
-            followed = PathFollower.Follow(
+            followed = PathFollower.FollowLegs(
                 vehicle,
                 drivingMode,
-                IntentPathFactory.FromCurve(intentCurve, document.ModelUnitSystem),
-                settings.Direction);
+                legs.Select(leg => new RouteLeg(
+                    IntentPathFactory.FromCurve(leg.Curve, document.ModelUnitSystem),
+                    leg.Direction)).ToArray());
         }
         catch (Exception exception)
         {
@@ -154,7 +135,7 @@ public sealed class RRVehicleAccessCommand : Command
         var baked = RhinoOutputWriter.Bake(
             document,
             geometry,
-            intentCurve,
+            legs,
             settings.Source == PathSourceKind.Interactive,
             analysis,
             allViolations,
@@ -199,6 +180,52 @@ public sealed class RRVehicleAccessCommand : Command
         Guid.TryParse(rhinoObject.Attributes.GetUserString("RhinoRoad.SourceId"), out var stored)
             ? stored
             : rhinoObject.Id;
+
+    /// <summary>
+    /// The legs of a manoeuvre already in the document, in the order they are driven.
+    /// </summary>
+    /// <remarks>
+    /// Selection order is the driving order, because nothing in the geometry can imply it. A leg
+    /// RhinoRoad baked remembers which way it was driven; any other curve takes the direction set
+    /// in the dialog, which is what a single drawn line should do.
+    /// </remarks>
+    private static IReadOnlyList<(IntentLeg Leg, Guid Identity)>? SelectIntentLegs(
+        RhinoDoc document,
+        ObjRef? preselected,
+        TravelDirection fallbackDirection)
+    {
+        var chosen = new List<ObjRef>();
+        if (preselected is not null)
+        {
+            chosen.Add(preselected);
+            document.Objects.UnselectAll();
+            document.Views.Redraw();
+        }
+        else
+        {
+            using var getter = new GetObject();
+            getter.SetCommandPrompt("Select the intended rear-axle line, or the legs of a manoeuvre in driving order");
+            getter.GeometryFilter = ObjectType.Curve;
+            getter.SubObjectSelect = false;
+            getter.GetMultiple(1, 0);
+            if (getter.CommandResult() != Result.Success) return null;
+            chosen.AddRange(Enumerable.Range(0, getter.ObjectCount).Select(getter.Object));
+        }
+
+        var legs = new List<(IntentLeg, Guid)>(chosen.Count);
+        foreach (var reference in chosen)
+        {
+            var curve = reference.Curve();
+            if (curve is null) continue;
+            var rhinoObject = reference.Object();
+            legs.Add((
+                new IntentLeg(curve, IntentLegStore.Read(rhinoObject, fallbackDirection)),
+                IntentCurveIdentity(rhinoObject)));
+        }
+
+        if (legs.Count == 0) RhinoApp.WriteLine("No usable curve was selected.");
+        return legs;
+    }
 
     private static IReadOnlyList<Curve>? SelectCurves(string prompt, bool closedOnly = false)
     {

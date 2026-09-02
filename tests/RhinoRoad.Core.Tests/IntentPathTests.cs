@@ -62,27 +62,27 @@ public sealed class IntentPathTests
     }
 
     [Fact]
-    public void TheNearestSampleIsFoundSearchingForward()
+    public void TheNearestSampleIsFoundWithinTheLeash()
     {
         var path = IntentPath.FromPoints(Arc(20.0, 90.0));
         var target = path.Points[300].XY;
 
-        Assert.Equal(300, path.NearestIndex(target, 0));
-        Assert.Equal(300, path.NearestIndex(target, 250));
+        Assert.Equal(300, path.NearestIndex(target, 295, 5.0));
+        Assert.Equal(300, path.NearestIndex(target, 250, 10.0));
     }
 
     /// <summary>
-    /// A line that loops back near itself must not let the search snap to the earlier pass, or the
-    /// vehicle would be told it is somewhere it has already been.
+    /// A line that loops back near itself must not let the search snap to another pass, or the
+    /// vehicle would be told it is somewhere it has not driven to yet.
     /// </summary>
     [Fact]
-    public void TheSearchDoesNotJumpBackToAnEarlierPass()
+    public void TheSearchDoesNotJumpToAnotherPass()
     {
         var points = Arc(6.0, 350.0);
         var path = IntentPath.FromPoints(points);
         var nearTheEnd = path.Count - 5;
 
-        Assert.True(path.NearestIndex(path.Points[nearTheEnd].XY, nearTheEnd - 20) >= nearTheEnd - 20);
+        Assert.True(path.NearestIndex(path.Points[nearTheEnd].XY, nearTheEnd - 20, 5.0) >= nearTheEnd - 20);
     }
 
     [Fact]

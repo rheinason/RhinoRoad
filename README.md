@@ -120,10 +120,14 @@ reconstruct today; it must never shrink.
 2. In the dialog, set vehicle, mode, path source, clearance, road-edge widths, and optional checks.
 3. Press `Continue`.
 4. For `ExistingCurve`, select the line — skipped when exactly one curve was selected before the
-   command started.
+   command started. Selecting several curves treats them as the legs of one manoeuvre, driven in
+   selection order; a leg RhinoRoad baked remembers which way it was driven, and any other curve
+   takes the travel direction set in the dialog.
 5. For `Interactive`, click the points the line should pass through, the way `InterpCrv` works, and
    press Enter. The vehicle is shown following the line as you draw, so the swept body appears while
-   the line is still being placed.
+   the line is still being placed. `Reverse` ends the current leg and starts the next one going the
+   other way: a three-point turn is three legs, and the cusp between them is where the vehicle stops
+   and changes direction.
 6. Obstacle curves and closed allowed-area boundaries are only asked for when their checks are
    ticked; both are off by default.
 7. The PASS/FAIL report is written to the command line and the result is baked. Tick
@@ -164,7 +168,8 @@ with `ReplaceExisting=Yes` replaces only RhinoRoad objects linked to the same ex
 
 ## Meaning of the outputs
 
-- **Intended rear-axle line:** the line that was drawn, kept editable. Re-run against it to update.
+- **Intended rear-axle line:** the line that was drawn, kept editable, one curve per leg. Re-run
+  against it — or against all its legs in order — to update.
 - **Rear/front axle tracks:** kinematic reference curves.
 - **Vehicle footprints:** the body outline stamped along the route at the `FootprintInterval`
   station spacing; set the interval to 0 to omit them.

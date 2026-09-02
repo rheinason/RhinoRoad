@@ -1,5 +1,12 @@
 namespace RhinoRoad.Core;
 
+/// <summary>One leg of a manoeuvre: a line, and the direction it is driven in.</summary>
+/// <remarks>
+/// A three-point turn is three legs. Splitting at the cusp rather than trying to express a reversal
+/// inside one line keeps each leg an ordinary curve, which is what makes the whole thing editable.
+/// </remarks>
+public sealed record RouteLeg(IntentPath Intent, TravelDirection Direction);
+
 /// <summary>What a vehicle made of an intended line, and how far it had to stray from it.</summary>
 public sealed record FollowedRoute(
     IReadOnlyList<RouteSample> Samples,
@@ -43,20 +50,90 @@ public static class PathFollower
     // feed-forward, and a stiff cross-track term makes the vehicle weave on a line it is already
     // following. Measured across the vehicle presets rather than derived.
     private const double HeadingGain = 1.0;
+
+    // How far the vehicle's place on the line may move in one step. Ten steps' worth, so cutting a
+    // corner cannot outrun it, and short enough that it can never skip to another part of the line.
+    private const double NearestAdvanceMetres = StepMetres * 10.0;
     private const double CrossTrackGain = 0.5;
+
+    /// <summary>
+    /// Drives a manoeuvre of one or more legs, reversing at each cusp between them.
+    /// </summary>
+    /// <remarks>
+    /// The vehicle carries its pose and its wheel across a cusp rather than being replanted on the
+    /// next line: that is what a cusp is — the vehicle stops and goes the other way from exactly
+    /// where it stopped. So a later leg is followed from where the vehicle actually is, and if that
+    /// is not where the leg was drawn, the deviation says so instead of the gap being papered over.
+    /// </remarks>
+    public static FollowedRoute FollowLegs(
+        VehicleDefinition vehicle,
+        DrivingModeDefinition mode,
+        IReadOnlyList<RouteLeg> legs)
+    {
+        ArgumentNullException.ThrowIfNull(legs);
+        if (legs.Count == 0) throw new ArgumentException("A manoeuvre needs at least one leg.", nameof(legs));
+
+        var samples = new List<RouteSample>();
+        VehicleState? carried = null;
+        var maximumDeviation = 0.0;
+        var maximumDeviationStation = 0.0;
+        var sumOfSquares = 0.0;
+        var measurements = 0;
+        var endGap = 0.0;
+
+        foreach (var leg in legs)
+        {
+            var followed = Follow(vehicle, mode, leg.Intent, leg.Direction, carried);
+
+            // The seed sample of a later leg is the cusp itself, already the last sample of the
+            // previous one, so it is dropped rather than repeated.
+            samples.AddRange(carried is null ? followed.Samples : followed.Samples.Skip(1));
+            if (followed.MaximumDeviationMetres > maximumDeviation)
+            {
+                maximumDeviation = followed.MaximumDeviationMetres;
+                maximumDeviationStation = followed.MaximumDeviationStationMetres;
+            }
+
+            var count = Math.Max(1, followed.Samples.Count);
+            sumOfSquares += followed.RootMeanSquareDeviationMetres * followed.RootMeanSquareDeviationMetres * count;
+            measurements += count;
+            endGap = followed.DeviationAtEndMetres;
+
+            var last = samples[^1];
+            carried = new VehicleState(
+                last.PositionMetres,
+                Geometry2D.NormalizeAngle(
+                    last.PathHeadingRadians + (leg.Direction == TravelDirection.Reverse ? Math.PI : 0.0)),
+                Math.Atan(last.SignedCurvaturePerMetre * vehicle.WheelbaseMetres * (double)leg.Direction),
+                leg.Direction,
+                last.StationMetres);
+        }
+
+        return new FollowedRoute(
+            samples,
+            maximumDeviation,
+            Math.Sqrt(sumOfSquares / Math.Max(1, measurements)),
+            endGap)
+        {
+            MaximumDeviationStationMetres = maximumDeviationStation
+        };
+    }
 
     public static FollowedRoute Follow(
         VehicleDefinition vehicle,
         DrivingModeDefinition mode,
         IntentPath intent,
-        TravelDirection direction = TravelDirection.Forward)
+        TravelDirection direction = TravelDirection.Forward,
+        VehicleState? startState = null)
     {
         ArgumentNullException.ThrowIfNull(vehicle);
         ArgumentNullException.ThrowIfNull(intent);
 
         var startHeading = intent.Headings[0] + (direction == TravelDirection.Reverse ? Math.PI : 0.0);
-        var state = new VehicleState(intent.Points[0], startHeading, 0.0, direction, 0.0);
-        var samples = new List<RouteSample> { Seed(intent, direction) };
+        var state = startState is null
+            ? new VehicleState(intent.Points[0], startHeading, 0.0, direction, 0.0)
+            : startState with { Direction = direction };
+        var samples = new List<RouteSample> { startState is null ? Seed(intent, direction) : Cusp(state, vehicle) };
 
         var maximumDeviation = 0.0;
         var maximumDeviationStation = 0.0;
@@ -70,7 +147,7 @@ public static class PathFollower
 
         while (true)
         {
-            index = intent.NearestIndex(state.RearAxleCentreMetres.XY, index);
+            index = intent.NearestIndex(state.RearAxleCentreMetres.XY, index, NearestAdvanceMetres);
             var deviation = intent.Points[index].XY.DistanceTo(state.RearAxleCentreMetres.XY);
             if (deviation > maximumDeviation)
             {
@@ -118,6 +195,20 @@ public static class PathFollower
             MaximumDeviationStationMetres = maximumDeviationStation
         };
     }
+
+    /// <summary>The sample at a cusp: the vehicle where it stopped, now facing the other way.</summary>
+    /// <remarks>
+    /// The wheel is left where it was, so the curvature flips sign with the direction while the
+    /// steering angle does not. That is the same wheel position, described from the other end, and
+    /// it keeps the steering-rate check from seeing a jump that never happened.
+    /// </remarks>
+    private static RouteSample Cusp(VehicleState state, VehicleDefinition vehicle) => new(
+        state.StationMetres,
+        state.RearAxleCentreMetres,
+        Geometry2D.NormalizeAngle(
+            state.VehicleHeadingRadians + (state.Direction == TravelDirection.Reverse ? Math.PI : 0.0)),
+        (double)state.Direction * Math.Tan(state.SteeringAngleRadians) / vehicle.WheelbaseMetres,
+        state.Direction);
 
     private static RouteSample Seed(IntentPath intent, TravelDirection direction) => new(
         0.0,

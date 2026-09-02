@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.4",
-  "generatedUtc": "2026-09-02T17:30:33.5811395\u002B00:00",
+  "generatedUtc": "2026-09-02T22:56:56.6508167\u002B00:00",
   "rhinoVersion": "8.34.26223.11001",
   "method": "Official DWG red envelope compared to RhinoRoad sweep reconstructed from paired outer front/rear wheel-area boundaries. Vehicle heading and rear-axle midpoint are solved from the rigid-body chord between the two traces using the preset wheelbase, axle track and tyre width; the chord the drawing\u0027s own traces hold is measured and reported alongside the chord the preset predicts, so a disagreement between drawing and preset is visible. Traces tessellated at differing densities are reconciled against that chord. Swept envelopes are built at a fixed geometry tolerance so verdicts do not depend on document setup.",
   "environment": {
@@ -159,7 +159,7 @@
       "expectedChordMetres": 5.2178922947872355,
       "routeSampleCount": 0,
       "passed": false,
-      "notes": "DWG path extraction failed sanity checks; no deviation is reported for this case. The traces are not vertex-paired (64 front vertices against 40 rear) and could not be reconciled. The first rear vertex pairs 100,0% of the way along the front trace, past the 5,0% a shared start allows. The traces are chord-consistent but begin at different points of the manoeuvre, so they are not a matched pair."
+      "notes": "DWG extraction failed: Rhino could not import \u0027C:\\Users\\hbxma\\RhinoRoad\\reference/vejdirektoratet-koerekurver/01-koeremaade-a/REN_A.dwg\u0027."
     },
     {
       "vehicleId": "REN",
@@ -175,7 +175,7 @@
       "expectedChordMetres": 5.2178922947872355,
       "routeSampleCount": 0,
       "passed": false,
-      "notes": "DWG path extraction failed sanity checks; no deviation is reported for this case. The traces are not vertex-paired (54 front vertices against 39 rear) and could not be reconciled. The first rear vertex pairs 44,1% of the way along the front trace, past the 5,0% a shared start allows. The traces are chord-consistent but begin at different points of the manoeuvre, so they are not a matched pair."
+      "notes": "DWG extraction failed: Rhino could not import \u0027C:\\Users\\hbxma\\RhinoRoad\\reference/vejdirektoratet-koerekurver/01-koeremaade-a/REN_A.dwg\u0027."
     },
     {
       "vehicleId": "REN",
@@ -191,7 +191,7 @@
       "expectedChordMetres": 5.2178922947872355,
       "routeSampleCount": 0,
       "passed": false,
-      "notes": "DWG path extraction failed sanity checks; no deviation is reported for this case. The traces are not vertex-paired (47 front vertices against 39 rear) and could not be reconciled. The first rear vertex pairs 29,1% of the way along the front trace, past the 5,0% a shared start allows. The traces are chord-consistent but begin at different points of the manoeuvre, so they are not a matched pair."
+      "notes": "DWG extraction failed: Rhino could not import \u0027C:\\Users\\hbxma\\RhinoRoad\\reference/vejdirektoratet-koerekurver/01-koeremaade-a/REN_A.dwg\u0027."
     },
     {
       "vehicleId": "REN",
@@ -259,9 +259,9 @@
       "measuredChordMetres": null,
       "measuredChordSpreadMetres": null,
       "expectedChordMetres": 6.480933574725172,
-      "routeSampleCount": 1021,
+      "routeSampleCount": 0,
       "passed": false,
-      "notes": "DWG path extraction failed sanity checks; no deviation is reported for this case. The extracted reference envelope self-intersects."
+      "notes": "DWG extraction failed: Rhino could not import \u0027C:\\Users\\hbxma\\RhinoRoad\\reference/vejdirektoratet-koerekurver/01-koeremaade-a/BUS_12_A.dwg\u0027."
     },
     {
       "vehicleId": "BUS12",
@@ -275,9 +275,9 @@
       "measuredChordMetres": null,
       "measuredChordSpreadMetres": null,
       "expectedChordMetres": 6.480933574725172,
-      "routeSampleCount": 1011,
+      "routeSampleCount": 0,
       "passed": false,
-      "notes": "DWG path extraction failed sanity checks; no deviation is reported for this case. The extracted reference envelope self-intersects."
+      "notes": "DWG extraction failed: Rhino could not import \u0027C:\\Users\\hbxma\\RhinoRoad\\reference/vejdirektoratet-koerekurver/01-koeremaade-a/BUS_12_A.dwg\u0027."
     },
     {
       "vehicleId": "BUS12",
@@ -285,21 +285,15 @@
       "angleGon": 180,
       "sourceFile": "reference/vejdirektoratet-koerekurver/01-koeremaade-a/BUS_12_A.dwg",
       "sourceSha256": "d706c282db89b38fc15dbdba63dd9380d8594738a494cffc43a0a3899ab81fdc",
-      "maximumEnvelopeDeviationMetres": 1.5361213347660183,
-      "maximumInwardUnderpredictionMetres": 1.5361213347660183,
-      "deviation": {
-        "medianMetres": 0.011404498534314014,
-        "percentile90Metres": 0.057477862770700196,
-        "percentile99Metres": 1.520546807391194,
-        "maximumMetres": 1.5361213347660183,
-        "shareOverToleranceFraction": 0.04742362061103511
-      },
-      "measuredChordMetres": 6.528396375489672,
-      "measuredChordSpreadMetres": 0.08045066591341499,
+      "maximumEnvelopeDeviationMetres": null,
+      "maximumInwardUnderpredictionMetres": null,
+      "deviation": null,
+      "measuredChordMetres": null,
+      "measuredChordSpreadMetres": null,
       "expectedChordMetres": 6.480933574725172,
-      "routeSampleCount": 1028,
+      "routeSampleCount": 0,
       "passed": false,
-      "notes": "Exceeds tolerance on 4,7% of the compared boundary length (median 0,011 m, 90th percentile 0,057 m, maximum 1,536 m). The preset remains unvalidated."
+      "notes": "DWG extraction failed: Rhino could not import \u0027C:\\Users\\hbxma\\RhinoRoad\\reference/vejdirektoratet-koerekurver/01-koeremaade-a/BUS_12_A.dwg\u0027."
     },
     {
       "vehicleId": "BUS12",
@@ -315,7 +309,7 @@
       "expectedChordMetres": 6.480933574725172,
       "routeSampleCount": 0,
       "passed": false,
-      "notes": "DWG extraction failed: Block \u0027BUS 12 B\u0027 case 180 gon could not be joined into two envelope and wheel chains."
+      "notes": "DWG extraction failed: Rhino could not import \u0027C:\\Users\\hbxma\\RhinoRoad\\reference/vejdirektoratet-koerekurver/02-koeremaade-b/BUS_12_B.dwg\u0027."
     },
     {
       "vehicleId": "BUS12",
@@ -331,7 +325,7 @@
       "expectedChordMetres": 6.480933574725172,
       "routeSampleCount": 0,
       "passed": false,
-      "notes": "DWG extraction failed: Block \u0027BUS 12 B\u0027 case 180 gon could not be joined into two envelope and wheel chains."
+      "notes": "DWG extraction failed: Rhino could not import \u0027C:\\Users\\hbxma\\RhinoRoad\\reference/vejdirektoratet-koerekurver/02-koeremaade-b/BUS_12_B.dwg\u0027."
     },
     {
       "vehicleId": "BUS12",
@@ -347,7 +341,7 @@
       "expectedChordMetres": 6.480933574725172,
       "routeSampleCount": 0,
       "passed": false,
-      "notes": "DWG extraction failed: Block \u0027BUS 12 B\u0027 case 180 gon could not be joined into two envelope and wheel chains."
+      "notes": "DWG extraction failed: Rhino could not import \u0027C:\\Users\\hbxma\\RhinoRoad\\reference/vejdirektoratet-koerekurver/02-koeremaade-b/BUS_12_B.dwg\u0027."
     }
   ]
 }

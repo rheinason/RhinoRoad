@@ -4,6 +4,9 @@ using RhinoRoad.Core;
 
 namespace RhinoRoad.Rhino.Services;
 
+/// <summary>One leg of a manoeuvre as it exists in the document: a curve, and how it is driven.</summary>
+internal sealed record IntentLeg(Curve Curve, TravelDirection Direction);
+
 /// <summary>
 /// Turns a Rhino curve into the intended line a vehicle is asked to follow.
 /// </summary>
@@ -47,14 +50,47 @@ internal static class IntentPathFactory
     /// The smooth line through a set of picked points.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Interpolated rather than joined: a polyline's corners have no radius, and asking a vehicle
     /// to follow one only ever reports how far it misses them by. The picked points are the through
-    /// points, so the curve passes through exactly where it was clicked.
+    /// points, so the line passes through exactly where it was clicked.
+    /// </para>
+    /// <para>
+    /// Centripetal knots, not the default uniform ones. Uniform spacing assumes the points are
+    /// evenly spread, and where they are not it overshoots — badly enough to throw loops into the
+    /// line between closely clicked points, which the vehicle then dutifully drives. Centripetal
+    /// spacing weights each span by the square root of its length and is the standard cure.
+    /// </para>
     /// </remarks>
-    public static Curve? InterpolateThrough(IReadOnlyList<Point3d> points) =>
-        points.Count < 2
-            ? null
-            : points.Count == 2
-                ? new LineCurve(points[0], points[1])
-                : Curve.CreateInterpolatedCurve(points, 3);
+    public static Curve? InterpolateThrough(IReadOnlyList<Point3d> points)
+    {
+        var distinct = WithoutRepeats(points);
+        return distinct.Count switch
+        {
+            < 2 => null,
+            2 => new LineCurve(distinct[0], distinct[1]),
+            _ => Curve.CreateInterpolatedCurve(distinct, 3, CurveKnotStyle.ChordSquareRoot)
+        };
+    }
+
+    /// <summary>
+    /// Drops points that repeat the one before them.
+    /// </summary>
+    /// <remarks>
+    /// A double-click, or a click that snapped to the same place twice, leaves a span of no length.
+    /// Interpolation through it is undefined and comes back as a kink or a loop rather than an
+    /// error, so the point is discarded before it can do that.
+    /// </remarks>
+    private static IReadOnlyList<Point3d> WithoutRepeats(IReadOnlyList<Point3d> points)
+    {
+        const double minimumSpacingModelUnits = 1e-6;
+        var kept = new List<Point3d>(points.Count);
+        foreach (var point in points)
+        {
+            if (kept.Count > 0 && kept[^1].DistanceTo(point) <= minimumSpacingModelUnits) continue;
+            kept.Add(point);
+        }
+
+        return kept;
+    }
 }
