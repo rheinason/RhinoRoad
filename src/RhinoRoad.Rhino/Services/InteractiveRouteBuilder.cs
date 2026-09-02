@@ -68,7 +68,7 @@ internal static class InteractiveRouteBuilder
             using var getter = new GetPoint();
             var wheelNow = state.SteeringAngleRadians * 180.0 / Math.PI;
             getter.SetCommandPrompt(straighten
-                ? $"Straightening from {wheelNow:0.#}° of lock: pick how far to run it out; Enter to finish"
+                ? $"Straightening from {wheelNow:0.#}° of lock: pick the direction to end up travelling in; Enter to finish"
                 : $"Pick next target ({state.Direction}, wheel {wheelNow:0.#}°); Enter to finish");
             getter.AcceptNothing(true);
             var reverseOption = getter.AddOption("Reverse");
@@ -83,26 +83,26 @@ internal static class InteractiveRouteBuilder
                 }
 
                 var cursor = new Point2(args.CurrentPoint.X * metresPerModelUnit, args.CurrentPoint.Y * metresPerModelUnit);
-                double targetSteering;
-                double travelDistance;
                 if (straighten)
                 {
-                    // Unwind the wheel to centre while running on. The vehicle keeps turning as the
-                    // wheel comes back, which is the gradual exit a driver actually makes -- an arc
-                    // aimed at a point cannot produce it, because it holds one curvature throughout.
-                    targetSteering = 0.0;
-                    travelDistance = StraightenDistance(state, cursor);
+                    // The cursor picks a direction, not a distance. The vehicle holds its lock until
+                    // unwinding the wheel would land exactly on that direction, then runs the wheel
+                    // back to centre -- so the leg ends travelling the way you pointed, wheel
+                    // straight, with no overshoot to correct back.
+                    var bearing = Math.Atan2(
+                        cursor.Y - state.RearAxleCentreMetres.Y,
+                        cursor.X - state.RearAxleCentreMetres.X);
+                    preview = HeadingLegGenerator.ToHeading(vehicle, mode, state, bearing, 0.10);
                     requestedExceeded = false;
                 }
                 else
                 {
                     var controls = RateLimitedTrajectoryGenerator.ControlsFromCursor(vehicle, mode, state, cursor);
-                    targetSteering = controls.TargetSteeringRadians;
-                    travelDistance = controls.TravelDistanceMetres;
                     requestedExceeded = controls.RequestedAngleExceeded;
+                    preview = generator.GenerateLeg(
+                        vehicle, mode, state, controls.TargetSteeringRadians, controls.TravelDistanceMetres, 0.10);
                 }
 
-                preview = generator.GenerateLeg(vehicle, mode, state, targetSteering, travelDistance, 0.10);
                 var previewPolyline = new Polyline(preview.Samples.Select(sample => ToModelPoint(sample.PositionMetres, document.ModelUnitSystem)));
                 args.Display.DrawPolyline(previewPolyline, requestedExceeded ? Color.OrangeRed : Color.CornflowerBlue, 3);
                 DrawVehicle(args.Display, vehicle, preview.EndState, document.ModelUnitSystem, requestedExceeded ? Color.OrangeRed : Color.DarkBlue);
@@ -167,15 +167,6 @@ internal static class InteractiveRouteBuilder
         samples = route;
         pathCurve = new PolylineCurve(route.Select(sample => ToModelPoint(sample.PositionMetres, document.ModelUnitSystem)));
         return Result.Success;
-    }
-
-    /// <summary>How far to run a straightening leg: the cursor projected onto the travel direction.</summary>
-    private static double StraightenDistance(VehicleState state, Point2 cursorMetres)
-    {
-        var movementHeading = state.VehicleHeadingRadians + (state.Direction == TravelDirection.Reverse ? Math.PI : 0.0);
-        var delta = cursorMetres - state.RearAxleCentreMetres.XY;
-        var along = (delta.X * Math.Cos(movementHeading)) + (delta.Y * Math.Sin(movementHeading));
-        return Math.Max(along, 0.05);
     }
 
     /// <summary>

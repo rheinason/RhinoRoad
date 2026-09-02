@@ -25,8 +25,8 @@ below, and it is why the handbook defines `LockToLockSeconds` at all.
 ## 1. Aiming at a point, one leg per click — **in use**
 
 Each click solves the arc from the rear axle through the picked point, and the vehicle drives that
-arc under the mode's lock and slew rate. `Straighten` runs the wheel back to centre over a picked
-distance instead.
+arc under the mode's lock and slew rate. `Straighten` instead takes the direction the vehicle should
+end up travelling in, and lands on it exactly.
 
 **Why it works.** Every leg begins from the state the vehicle is actually in, so the result is
 drivable by construction — there is no gap between what is previewed and what is possible, and no
@@ -37,6 +37,25 @@ next leg backs up from where the last one stopped, which is exactly a three-poin
 angle result, not a bug. So a leg aimed along the line you mean to leave on overshoots it, and needs
 correcting back. That is what `Straighten` is for, and it is why aiming and straightening are two
 separate modes rather than one.
+
+`Straighten` originally took a *distance* — run the wheel out over this far — which left the
+finishing direction to fall out of the arithmetic, so it overshot in its own right. It now takes the
+**direction to end up travelling in**, which is solvable exactly because the heading still to come
+from unwinding the wheel has a closed form:
+
+```
+    Δψ = direction · (speed / (wheelbase · slewRate)) · −ln(cos δ)
+```
+
+Hold the lock until that equals the turn still required, then unwind: the vehicle arrives on the
+chosen heading with the wheel centred, and cannot overshoot. Where the wheel is already turned
+further than the chosen direction needs, the same comparison calls for counter-steer through centre
+first. Measured over 50 combinations of starting wheel angle and target direction across both modes,
+forwards and reversing, every leg lands on its direction to within 0.01° with the wheel centred.
+
+The one subtlety is that the moment to stop turning in almost never falls on a step boundary;
+stopping at the next one overshoots by a whole step's worth of turn, which at full lock is most of a
+degree. The step that crosses that moment has its length bisected so the turn ends exactly on it.
 
 Measured: PV mode A, target 20 m away.
 

@@ -130,10 +130,15 @@ reconstruct today; it must never shrink.
    Aiming at a point drives an arc that leaves the vehicle turned by **twice** the bearing you
    picked, so clicking on the line you want to end up travelling along overshoots it and has to be
    corrected back — which is what produces an unwanted S through the exit of a turn. To leave a turn
-   the way a driver does, switch to `Straighten`: the wheel runs back to centre at the mode's
-   lock-to-lock rate while the vehicle carries on, and the cursor sets how far to run it out. The
-   vehicle keeps turning as the wheel centres, which is exactly the gradual exit a single arc cannot
-   produce. Switch back with `Aim`.
+   the way a driver does, switch to `Straighten` and click **the direction you want to end up
+   travelling in**, not a distance. The vehicle holds its lock until unwinding the wheel would land
+   exactly on that direction, then runs the wheel back to centre at the mode's lock-to-lock rate, so
+   the leg finishes pointing where you pointed with the wheel straight and nothing to correct. If the
+   wheel is already turned further than that direction needs, it counter-steers through centre first,
+   which is what a driver does. Switch back with `Aim`.
+
+   So a corner is two clicks: `Aim` at the point the arc should carry the vehicle to, then
+   `Straighten` along the line it should leave on.
 
    `Reverse` flips the travel direction for the next leg, so a three-point turn is drawn as forward
    legs, a reversing leg, then forward legs again — the cusp between them is where the vehicle stops
