@@ -18,7 +18,15 @@ public sealed class VehicleCatalogTests
             Assert.Contains("A", vehicle.DrivingModes.Keys);
             Assert.Contains("B", vehicle.DrivingModes.Keys);
             Assert.False(string.IsNullOrWhiteSpace(vehicle.Source.Url));
-            Assert.Equal(ValidationStatus.SourceTranscribed, vehicle.ValidationStatus);
+            // Which presets are validated is decided by the stored certification report, not by a
+            // constant here -- see PresetValidationStatusCannotOutrunTheStoredReport. This asserts
+            // only that a preset never claims validation without recording why.
+            Assert.NotEqual(ValidationStatus.ValidationFailed, vehicle.ValidationStatus);
+            Assert.False(string.IsNullOrWhiteSpace(vehicle.ValidationNotes));
+            if (vehicle.ValidationStatus == ValidationStatus.ReferenceValidated)
+            {
+                Assert.Contains("certification", vehicle.ValidationNotes, StringComparison.OrdinalIgnoreCase);
+            }
         });
     }
 
@@ -32,6 +40,29 @@ public sealed class VehicleCatalogTests
         Assert.Equal(45.0, catalog.Get("BUS12").DrivingModes["B"].MaximumWheelAngleDegrees);
         Assert.All(catalog.Vehicles, vehicle =>
             Assert.Equal(0.30, vehicle.DrivingModes["A"].DefaultClearanceMetres, 6));
+    }
+
+    [Fact]
+    public void CarriesDwgMeasuredWheelGeometryForReferenceReconstruction()
+    {
+        var catalog = VehicleCatalog.LoadEmbedded();
+
+        AssertWheelGeometry(catalog.Get("PV"), 1.579, 0.171, 0.704, 0.875);
+        AssertWheelGeometry(catalog.Get("REN"), 2.246, 0.254, 0.996, 1.250);
+        AssertWheelGeometry(catalog.Get("BUS12"), 2.196, 0.254, 0.971, 1.225);
+    }
+
+    private static void AssertWheelGeometry(
+        VehicleDefinition vehicle,
+        double axleTrack,
+        double tyreWidth,
+        double innerEdge,
+        double outerEdge)
+    {
+        Assert.Equal(axleTrack, vehicle.AxleTrackMetres, 6);
+        Assert.Equal(tyreWidth, vehicle.TyreWidthMetres, 6);
+        Assert.Equal(innerEdge, vehicle.RearWheelInnerEdgeOffsetMetres, 6);
+        Assert.Equal(outerEdge, vehicle.WheelOuterEdgeOffsetMetres, 6);
     }
 
     private static double TotalLength(VehicleDefinition vehicle) =>

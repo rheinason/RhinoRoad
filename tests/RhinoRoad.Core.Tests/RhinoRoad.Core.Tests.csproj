@@ -18,5 +18,7 @@
   <ItemGroup>
     <None Include="..\..\Previous Attempts\VehicleTurn_VD_v12.py" Link="Reference\VehicleTurn_VD_v12.py" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\reference\certification\reference-certification.json" Link="Reference\reference-certification.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\reference\certification\certification-plan.json" Link="Reference\certification-plan.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\reference\certification\fixtures\*.json" Link="Reference\fixtures\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

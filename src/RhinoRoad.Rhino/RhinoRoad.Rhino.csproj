@@ -6,18 +6,32 @@
     <TargetExt>.rhp</TargetExt>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <!-- This assembly is loaded dynamically by a host rather than started as an app. -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <!-- Rhino loads the .rhp directly, so NuGet assemblies must sit beside it rather than being
+         resolved from the developer's package cache. Without this the plugin loads here and fails
+         on a clean machine. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <AssemblyTitle>RhinoRoad</AssemblyTitle>
     <AssemblyDescription>Architect-friendly rigid vehicle access screening for Rhino 8.</AssemblyDescription>
     <Company>RhinoRoad</Company>
     <Product>RhinoRoad</Product>
-    <Version>0.1.0</Version>
-    <FileVersion>0.1.0</FileVersion>
+    <Version>$(RhinoRoadVersion)</Version>
+    <FileVersion>$(RhinoRoadAssemblyVersion)</FileVersion>
+    <AssemblyVersion>$(RhinoRoadAssemblyVersion)</AssemblyVersion>
+    <InformationalVersion>$(RhinoRoadVersion)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\RhinoRoad.Core\RhinoRoad.Core.csproj" />
-    <Reference Include="RhinoCommon">
-      <HintPath>C:\Program Files\Rhino 8\System\netcore\RhinoCommon.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
+    <!-- The reference version sets the minimum Rhino the Yak package will install on, so it is
+         pinned as low as the package allows: 8.19 is the earliest RhinoCommon that ships a real
+         .NET target, so it is the widest Rhino 8 audience reachable without compiling against the
+         .NET Framework assets and hoping they match at run time. ExcludeAssets="runtime" keeps
+         RhinoCommon.dll out of the output: the host supplies it, and shipping a second copy risks
+         loading two different RhinoCommon assemblies into one process. Referencing the package
+         rather than a path under Program Files is what makes the build work on CI and on a machine
+         where Rhino is installed somewhere else. -->
+    <PackageReference Include="RhinoCommon" Version="8.19.25132.1001" ExcludeAssets="runtime" />
   </ItemGroup>
 </Project>

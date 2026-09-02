@@ -12,7 +12,36 @@ internal sealed record RhinoAnalysisGeometry(
     Curve? ClearanceEnvelope,
     IReadOnlyList<Curve> FixedRoadEdges,
     Curve? FixedRoadBoundary,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    /// <summary>Vehicle outlines stamped along the route; empty when the interval is off.</summary>
+    public IReadOnlyList<Curve> Footprints { get; init; } = [];
+
+    /// <summary>Enclosed holes in the body envelope, e.g. the island of a roundabout circulation.</summary>
+    public IReadOnlyList<Curve> BodyEnvelopeHoles { get; init; } = [];
+
+    /// <summary>Enclosed holes in the clearance envelope.</summary>
+    public IReadOnlyList<Curve> ClearanceEnvelopeHoles { get; init; } = [];
+
+    /// <summary>
+    /// The regions behind the envelope curves, in metres. Clearance checks read these directly:
+    /// re-sampling the baked curve and calling Rhino's point-in-curve test per sample costs
+    /// thousands of interop calls on a long route, for vertices Core already has.
+    /// </summary>
+    public SweptRegion? BodyRegion { get; init; }
+
+    public SweptRegion? ClearanceRegion { get; init; }
+
+    /// <summary>The fixed-width corridor, once self-overlap on tight inside curves is resolved.</summary>
+    public SweptRegion? RoadCorridorRegion { get; init; }
+
+    /// <summary>
+    /// False when the swept footprints did not collapse into a single closed region. The largest
+    /// surviving fragment is still returned, so callers that compare envelopes MUST check this --
+    /// a fragment measures as a plausible but wrong envelope.
+    /// </summary>
+    public bool BodyEnvelopeMerged { get; init; } = true;
+}
 
 internal sealed record ClearanceOutcome(
     double? MinimumClearanceMetres,
@@ -20,6 +49,7 @@ internal sealed record ClearanceOutcome(
 
 internal static class RhinoGeometryBuilder
 {
+    /// <summary>Builds using the active document's units and tolerance.</summary>
     public static RhinoAnalysisGeometry Build(
         VehicleAccessResult result,
         IReadOnlyList<RouteSample> route,
@@ -27,28 +57,81 @@ internal static class RhinoGeometryBuilder
         double clearanceMetres,
         double leftRoadWidthMetres,
         double rightRoadWidthMetres,
-        bool createFixedEdges)
+        bool createFixedEdges,
+        double footprintIntervalMetres = 0.0,
+        bool footprintEndsOnly = false)
     {
         var modelUnitsPerMetre = RhinoMath.UnitScale(UnitSystem.Meters, document.ModelUnitSystem);
+        return Build(
+            result,
+            route,
+            document.ModelUnitSystem,
+            Math.Max(document.ModelAbsoluteTolerance, 0.001 * modelUnitsPerMetre),
+            clearanceMetres,
+            leftRoadWidthMetres,
+            rightRoadWidthMetres,
+            createFixedEdges,
+            footprintIntervalMetres,
+            footprintEndsOnly);
+    }
+
+    /// <summary>
+    /// Builds against an explicit units/tolerance context. Certification uses this so its verdicts
+    /// do not depend on whatever document the command happens to run in.
+    /// </summary>
+    public static RhinoAnalysisGeometry Build(
+        VehicleAccessResult result,
+        IReadOnlyList<RouteSample> route,
+        UnitSystem modelUnits,
+        double toleranceModelUnits,
+        double clearanceMetres,
+        double leftRoadWidthMetres,
+        double rightRoadWidthMetres,
+        bool createFixedEdges,
+        double footprintIntervalMetres = 0.0,
+        bool footprintEndsOnly = false)
+    {
+        var modelUnitsPerMetre = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
         var elevationMetres = route[0].PositionMetres.Z;
         var elevationModel = elevationMetres * modelUnitsPerMetre;
-        var tolerance = Math.Max(document.ModelAbsoluteTolerance, 0.001 * modelUnitsPerMetre);
+        var tolerance = toleranceModelUnits;
         var warnings = new List<string>();
 
         var rearTrack = TrackCurve(result.RearAxleTrackMetres, elevationModel, modelUnitsPerMetre);
         var frontTrack = TrackCurve(result.FrontAxleTrackMetres, elevationModel, modelUnitsPerMetre);
-        var bodyEnvelope = SweptEnvelope(result.Poses, 0.0, elevationModel, modelUnitsPerMetre, tolerance);
-        if (bodyEnvelope is null) warnings.Add("Swept-envelope Boolean failed.");
-        var clearanceEnvelope = clearanceMetres <= 1e-9
-            ? bodyEnvelope?.DuplicateCurve()
-            : SweptEnvelope(result.Poses, clearanceMetres, elevationModel, modelUnitsPerMetre, tolerance);
-        if (clearanceEnvelope is null) warnings.Add("Clearance-envelope Boolean failed.");
+        // Envelope construction is a polygon union in Core: deterministic, tolerance independent,
+        // and able to carry holes. Rhino only converts the resulting loops back into curves.
+        var body = SweptRegionBuilder.FromPoses(result.Poses);
+        if (!body.IsSuccess) warnings.Add($"Swept-envelope union failed. {body.Message}");
+        var bodyEnvelope = body.Region is null ? null : LoopCurve(body.Region.OuterBoundary, elevationModel, modelUnitsPerMetre);
+        var bodyHoles = HoleCurves(body.Region, elevationModel, modelUnitsPerMetre);
 
-        var fixedEdges = createFixedEdges
-            ? FixedWidthEdges(route, elevationMetres, document.ModelUnitSystem, leftRoadWidthMetres, rightRoadWidthMetres, tolerance)
-            : [];
-        var roadBoundary = fixedEdges.Count == 2 ? CloseCorridor(fixedEdges[0], fixedEdges[1], tolerance) : null;
-        if (createFixedEdges && fixedEdges.Count != 2) warnings.Add("Fixed-width road offsets could not be generated.");
+        var clearance = clearanceMetres <= 1e-9 || body.Region is null
+            ? body
+            : SweptRegionBuilder.Inflate(body.Region, clearanceMetres);
+        if (!clearance.IsSuccess && body.Region is not null && clearanceMetres > 1e-9)
+        {
+            warnings.Add($"Clearance-envelope offset failed. {clearance.Message}");
+        }
+        var clearanceEnvelope = clearance.Region is null ? null : LoopCurve(clearance.Region.OuterBoundary, elevationModel, modelUnitsPerMetre);
+        var clearanceHoles = HoleCurves(clearance.Region, elevationModel, modelUnitsPerMetre);
+
+        // Corridor offsets are computed in Core from the per-sample headings; Rhino's curve offset
+        // is superlinear in vertex count and dominated the post-path step on long routes.
+        var corridor = createFixedEdges
+            ? RoadCorridorBuilder.Build(route, leftRoadWidthMetres, rightRoadWidthMetres)
+            : null;
+        var fixedEdges = corridor is null || corridor.LeftEdge.Count < 2
+            ? []
+            : new Curve[]
+            {
+                OpenCurve(corridor.LeftEdge, elevationModel, modelUnitsPerMetre),
+                OpenCurve(corridor.RightEdge, elevationModel, modelUnitsPerMetre)
+            };
+        var roadBoundary = corridor?.Region is null
+            ? null
+            : LoopCurve(corridor.Region.OuterBoundary, elevationModel, modelUnitsPerMetre);
+        if (createFixedEdges && roadBoundary is null) warnings.Add("Fixed-width road offsets could not be generated.");
 
         return new RhinoAnalysisGeometry(
             rearTrack,
@@ -57,12 +140,24 @@ internal static class RhinoGeometryBuilder
             clearanceEnvelope,
             fixedEdges,
             roadBoundary,
-            warnings);
+            warnings)
+        {
+            BodyEnvelopeMerged = body.IsSuccess,
+            BodyEnvelopeHoles = bodyHoles,
+            ClearanceEnvelopeHoles = clearanceHoles,
+            BodyRegion = body.Region,
+            ClearanceRegion = clearance.Region,
+            RoadCorridorRegion = corridor?.Region,
+            Footprints = (footprintEndsOnly
+                    ? PoseSampler.EndsOnly(result.Poses)
+                    : PoseSampler.AtStationInterval(result.Poses, footprintIntervalMetres))
+                .Select(pose => FootprintCurve(pose, elevationModel, modelUnitsPerMetre))
+                .ToArray()
+        };
     }
 
     public static ClearanceOutcome CheckClearance(
-        Curve? bodyEnvelope,
-        Curve? clearanceEnvelope,
+        RhinoAnalysisGeometry geometry,
         Curve? fixedRoadBoundary,
         IEnumerable<Curve> obstacles,
         IEnumerable<Curve> allowedBoundaries,
@@ -71,11 +166,17 @@ internal static class RhinoGeometryBuilder
         double tolerance)
     {
         var violations = new List<AnalysisViolation>();
-        if (bodyEnvelope is null || clearanceEnvelope is null) return new ClearanceOutcome(null, violations);
+        var bodyEnvelope = geometry.BodyEnvelope;
+        var clearanceEnvelope = geometry.ClearanceEnvelope;
+        if (bodyEnvelope is null || clearanceEnvelope is null || geometry.BodyRegion is null || geometry.ClearanceRegion is null)
+        {
+            return new ClearanceOutcome(null, violations);
+        }
+
         var metresPerModelUnit = RhinoMath.UnitScale(modelUnits, UnitSystem.Meters);
         var minimum = double.PositiveInfinity;
-        var bodyPoints = SampleCurve(bodyEnvelope, modelUnits, 0.10);
-        var clearancePoints = SampleCurve(clearanceEnvelope, modelUnits, 0.10);
+        var bodyPoints = geometry.BodyRegion.OuterBoundary;
+        var clearancePoints = geometry.ClearanceRegion.OuterBoundary;
 
         foreach (var obstacle in obstacles)
         {
@@ -92,37 +193,27 @@ internal static class RhinoGeometryBuilder
             }
         }
 
-        var plane = PlaneAt(clearanceEnvelope.PointAtStart.Z);
         var closedBoundaries = allowedBoundaries.Where(curve => curve.IsClosed).ToArray();
-        foreach (var boundary in closedBoundaries)
+        var boundaryPolygons = closedBoundaries.Select(boundary => SampleCurve(boundary, modelUnits, 0.10)).ToArray();
+        foreach (var boundaryPoints in boundaryPolygons)
         {
-            var boundaryPoints = SampleCurve(boundary, modelUnits, 0.10);
             minimum = Math.Min(minimum, Geometry2D.MinimumDistance(bodyPoints, boundaryPoints));
         }
-        if (closedBoundaries.Length > 0)
+        if (boundaryPolygons.Length > 0 &&
+            TryFindOutside(clearancePoints, point => boundaryPolygons.Any(polygon => Geometry2D.Contains(polygon, point)), out var outsidePoint))
         {
-            var outsidePoints = clearancePoints.Where(point => !closedBoundaries.Any(boundary =>
-                boundary.Contains(ToPoint3d(point, clearanceEnvelope.PointAtStart.Z, modelUnits), plane, tolerance) != PointContainment.Outside)).ToArray();
-            if (outsidePoints.Length > 0)
-            {
-                var outsidePoint = outsidePoints[0];
-                violations.Add(new AnalysisViolation(
-                    ViolationKind.OutsideAllowedArea,
-                    0.0,
-                    new Point3(outsidePoint.X, outsidePoint.Y, clearanceEnvelope.PointAtStart.Z * metresPerModelUnit),
-                    "The clearance envelope extends outside the allowed area."));
-            }
+            violations.Add(new AnalysisViolation(
+                ViolationKind.OutsideAllowedArea,
+                0.0,
+                new Point3(outsidePoint.X, outsidePoint.Y, clearanceEnvelope.PointAtStart.Z * metresPerModelUnit),
+                "The clearance envelope extends outside the allowed area."));
         }
 
         if (fixedRoadBoundary is not null)
         {
-            var roadPlane = PlaneAt(fixedRoadBoundary.PointAtStart.Z);
-            var outsideRoadPoints = clearancePoints.Where(point =>
-                fixedRoadBoundary.Contains(ToPoint3d(point, fixedRoadBoundary.PointAtStart.Z, modelUnits), roadPlane, tolerance) == PointContainment.Outside);
-            var outsideRoad = outsideRoadPoints.ToArray();
-            if (outsideRoad.Length > 0)
+            var roadPolygon = geometry.RoadCorridorRegion?.OuterBoundary ?? SampleCurve(fixedRoadBoundary, modelUnits, 0.10);
+            if (TryFindOutside(clearancePoints, candidate => Geometry2D.Contains(roadPolygon, candidate), out var point))
             {
-                var point = outsideRoad[0];
                 violations.Add(new AnalysisViolation(
                     ViolationKind.FixedWidthRoad,
                     0.0,
@@ -137,120 +228,56 @@ internal static class RhinoGeometryBuilder
     private static Curve TrackCurve(IReadOnlyList<Point2> points, double elevationModel, double modelUnitsPerMetre) =>
         new PolylineCurve(points.Select(point => new Point3d(point.X * modelUnitsPerMetre, point.Y * modelUnitsPerMetre, elevationModel)));
 
-    private static Curve? SweptEnvelope(
-        IReadOnlyList<VehiclePose> poses,
-        double clearanceMetres,
-        double elevationModel,
-        double modelUnitsPerMetre,
-        double tolerance)
+    /// <summary>Closed outline of one vehicle pose, in model units.</summary>
+    private static Curve FootprintCurve(VehiclePose pose, double elevationModel, double modelUnitsPerMetre)
     {
-        var footprints = new List<Curve>(poses.Count);
-        foreach (var pose in poses)
+        var points = pose.BodyOutlineWorldMetres
+            .Select(point => new Point3d(point.X * modelUnitsPerMetre, point.Y * modelUnitsPerMetre, elevationModel))
+            .ToList();
+        points.Add(points[0]);
+        return new PolylineCurve(points);
+    }
+
+    /// <summary>Closed model-unit curve from a Core loop in metres.</summary>
+    /// <summary>
+    /// First envelope vertex that fails <paramref name="isInside"/>. One violation is all the report
+    /// needs, so this stops at the first failure rather than classifying every vertex.
+    /// </summary>
+    private static bool TryFindOutside(
+        IReadOnlyList<Point2> envelope,
+        Func<Point2, bool> isInside,
+        out Point2 outside)
+    {
+        foreach (var point in envelope)
         {
-            var outline = new PolylineCurve(pose.BodyOutlineWorldMetres
-                .Select(point => new Point3d(point.X * modelUnitsPerMetre, point.Y * modelUnitsPerMetre, elevationModel))
-                .Append(new Point3d(
-                    pose.BodyOutlineWorldMetres[0].X * modelUnitsPerMetre,
-                    pose.BodyOutlineWorldMetres[0].Y * modelUnitsPerMetre,
-                    elevationModel)));
-            Curve? footprint = outline;
-            if (clearanceMetres > 1e-9)
-            {
-                footprint = OffsetOutward(outline, clearanceMetres * modelUnitsPerMetre, tolerance);
-            }
-            if (footprint is not null) footprints.Add(footprint);
+            if (isInside(point)) continue;
+            outside = point;
+            return true;
         }
 
-        var union = BooleanUnionBatched(footprints, tolerance);
-        return LargestClosed(union);
+        outside = default;
+        return false;
     }
 
-    private static IReadOnlyList<Curve> FixedWidthEdges(
-        IReadOnlyList<RouteSample> route,
-        double elevationMetres,
-        UnitSystem modelUnits,
-        double leftMetres,
-        double rightMetres,
-        double tolerance)
+    /// <summary>Open model-unit polyline from a Core point list in metres.</summary>
+    private static Curve OpenCurve(IReadOnlyList<Point2> points, double elevationModel, double modelUnitsPerMetre) =>
+        new PolylineCurve(points.Select(point =>
+            new Point3d(point.X * modelUnitsPerMetre, point.Y * modelUnitsPerMetre, elevationModel)));
+
+    private static Curve LoopCurve(IReadOnlyList<Point2> loop, double elevationModel, double modelUnitsPerMetre)
     {
-        var plan = RhinoRouteSampler.ToPlanCurve(route, modelUnits, elevationMetres);
-        var modelUnitsPerMetre = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
-        var plane = PlaneAt(elevationMetres * modelUnitsPerMetre);
-        var left = plan.Offset(plane, leftMetres * modelUnitsPerMetre, tolerance, CurveOffsetCornerStyle.Round);
-        var right = plan.Offset(plane, -rightMetres * modelUnitsPerMetre, tolerance, CurveOffsetCornerStyle.Round);
-        if (left is null || left.Length == 0 || right is null || right.Length == 0) return [];
-        return [left.OrderByDescending(curve => curve.GetLength()).First(), right.OrderByDescending(curve => curve.GetLength()).First()];
+        var points = loop
+            .Select(point => new Point3d(point.X * modelUnitsPerMetre, point.Y * modelUnitsPerMetre, elevationModel))
+            .ToList();
+        points.Add(points[0]);
+        return new PolylineCurve(points);
     }
 
-    private static Curve? CloseCorridor(Curve left, Curve right, double tolerance)
-    {
-        var rightReversed = right.DuplicateCurve();
-        rightReversed.Reverse();
-        var start = new LineCurve(left.PointAtEnd, rightReversed.PointAtStart);
-        var end = new LineCurve(rightReversed.PointAtEnd, left.PointAtStart);
-        var joined = Curve.JoinCurves([left.DuplicateCurve(), start, rightReversed, end], tolerance, preserveDirection: true);
-        return joined?.Where(curve => curve.IsClosed).OrderByDescending(curve => Math.Abs(Area(curve))).FirstOrDefault();
-    }
+    private static IReadOnlyList<Curve> HoleCurves(SweptRegion? region, double elevationModel, double modelUnitsPerMetre) =>
+        region is null
+            ? []
+            : region.Holes.Select(hole => LoopCurve(hole, elevationModel, modelUnitsPerMetre)).ToArray();
 
-    private static Curve? OffsetOutward(Curve curve, double distance, double tolerance)
-    {
-        var plane = PlaneAt(curve.PointAtStart.Z);
-        var positive = curve.Offset(plane, distance, tolerance, CurveOffsetCornerStyle.Round);
-        var negative = curve.Offset(plane, -distance, tolerance, CurveOffsetCornerStyle.Round);
-        return (positive ?? []).Concat(negative ?? [])
-            .Where(item => item.IsClosed)
-            .OrderByDescending(item => Math.Abs(Area(item)))
-            .FirstOrDefault();
-    }
-
-    private static IReadOnlyList<Curve> BooleanUnionBatched(IReadOnlyList<Curve> curves, double tolerance, int batchSize = 32)
-    {
-        if (curves.Count <= 1) return curves;
-        var work = curves.ToList();
-        var reduced = new List<Curve>();
-        for (var index = 0; index < work.Count; index += batchSize)
-        {
-            var chunk = work.Skip(index).Take(batchSize).ToArray();
-            var union = TryUnion(chunk, tolerance);
-            reduced.AddRange(union.Count > 0 ? union : chunk);
-        }
-
-        work = reduced;
-        for (var pass = 0; pass < 8 && work.Count > 1; pass++)
-        {
-            var union = TryUnion(work, tolerance);
-            if (union.Count > 0) return union;
-            if (work.Count <= batchSize) break;
-            var next = new List<Curve>();
-            for (var index = 0; index < work.Count; index += batchSize)
-            {
-                var chunk = work.Skip(index).Take(batchSize).ToArray();
-                var partial = TryUnion(chunk, tolerance);
-                next.AddRange(partial.Count > 0 ? partial : chunk);
-            }
-            if (next.Count >= work.Count) break;
-            work = next;
-        }
-
-        return work;
-    }
-
-    private static IReadOnlyList<Curve> TryUnion(IEnumerable<Curve> curves, double tolerance)
-    {
-        try
-        {
-            return Curve.CreateBooleanUnion(curves, tolerance) ?? [];
-        }
-        catch
-        {
-            return [];
-        }
-    }
-
-    private static Curve? LargestClosed(IEnumerable<Curve> curves) => curves
-        .Where(curve => curve is not null && curve.IsClosed)
-        .OrderByDescending(curve => Math.Abs(Area(curve)))
-        .FirstOrDefault();
 
     private static double Area(Curve curve) => AreaMassProperties.Compute(curve)?.Area ?? 0.0;
 

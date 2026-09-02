@@ -41,17 +41,26 @@ public sealed record VehicleDefinition(
     double WheelbaseMetres,
     double FrontOverhangMetres,
     double RearOverhangMetres,
+    double AxleTrackMetres,
+    double TyreWidthMetres,
     IReadOnlyList<Point2> BodyOutline,
     IReadOnlyDictionary<string, DrivingModeDefinition> DrivingModes,
     VehicleSource Source,
     ValidationStatus ValidationStatus,
     string ValidationNotes)
 {
+    public double RearWheelInnerEdgeOffsetMetres => (AxleTrackMetres - TyreWidthMetres) * 0.5;
+    public double WheelOuterEdgeOffsetMetres => (AxleTrackMetres + TyreWidthMetres) * 0.5;
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(Id)) throw new InvalidDataException("Vehicle id is required.");
         if (WheelbaseMetres <= 0.0) throw new InvalidDataException($"{Id}: wheelbase must be positive.");
         if (WidthMetres <= 0.0) throw new InvalidDataException($"{Id}: width must be positive.");
+        if (AxleTrackMetres <= 0.0 || AxleTrackMetres >= WidthMetres)
+            throw new InvalidDataException($"{Id}: axle track must be positive and narrower than the body.");
+        if (TyreWidthMetres <= 0.0 || TyreWidthMetres >= AxleTrackMetres)
+            throw new InvalidDataException($"{Id}: tyre width must be positive and narrower than the axle track.");
         if (BodyOutline.Count < 3) throw new InvalidDataException($"{Id}: body outline needs at least three points.");
         if (DrivingModes.Count == 0) throw new InvalidDataException($"{Id}: at least one driving mode is required.");
         foreach (var mode in DrivingModes.Values)

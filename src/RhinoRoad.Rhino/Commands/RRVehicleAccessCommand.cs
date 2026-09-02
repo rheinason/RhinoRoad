@@ -9,22 +9,9 @@ using Rhino.Input;
 using Rhino.Input.Custom;
 using RhinoRoad.Core;
 using RhinoRoad.Rhino.Services;
+using RhinoRoad.Rhino.UI;
 
 namespace RhinoRoad.Rhino.Commands;
-
-internal enum PathSourceKind
-{
-    ExistingCurve,
-    Interactive
-}
-
-internal enum RoadEdgeMethod
-{
-    Both,
-    MinimumFootprint,
-    FixedWidth,
-    None
-}
 
 [Guid("14708FCE-5B4E-484C-A540-6A0F3861B12A")]
 public sealed class RRVehicleAccessCommand : Command
@@ -35,9 +22,23 @@ public sealed class RRVehicleAccessCommand : Command
 
     protected override Result RunCommand(RhinoDoc document, RunMode mode)
     {
-        var settings = new CommandSettings();
-        var configure = settings.Configure(Catalog);
-        if (configure != Result.Success) return configure;
+        // Settings persist for the session so a second run starts where the last one left off.
+        _settings.Reconcile(Catalog);
+        // Read before the dialog: showing a modal window can clear the document selection.
+        var preselectedPath = PreselectedCurve(document);
+        if (mode == RunMode.Interactive)
+        {
+            if (!VehicleAccessDialog.Show(document, Catalog, _settings)) return Result.Cancel;
+        }
+        else
+        {
+            // A scripted run cannot raise a modal dialog, so the option prompt remains the
+            // scripting interface for -RRVehicleAccess.
+            var configure = CommandLinePrompt.Configure(_settings, Catalog);
+            if (configure != Result.Success) return configure;
+        }
+
+        var settings = _settings;
 
         var vehicle = Catalog.Get(settings.VehicleId);
         var drivingMode = vehicle.DrivingModes[settings.ModeId];
@@ -47,13 +48,24 @@ public sealed class RRVehicleAccessCommand : Command
 
         if (settings.Source == PathSourceKind.ExistingCurve)
         {
-            using var getter = new GetObject();
-            getter.SetCommandPrompt("Select rear-axle midpoint path curve");
-            getter.GeometryFilter = ObjectType.Curve;
-            getter.SubObjectSelect = false;
-            getter.Get();
-            if (getter.CommandResult() != Result.Success) return getter.CommandResult();
-            var objectReference = getter.Object(0);
+            ObjRef objectReference;
+            if (preselectedPath is not null)
+            {
+                objectReference = preselectedPath;
+                document.Objects.UnselectAll();
+                document.Views.Redraw();
+            }
+            else
+            {
+                using var getter = new GetObject();
+                getter.SetCommandPrompt("Select rear-axle midpoint path curve");
+                getter.GeometryFilter = ObjectType.Curve;
+                getter.SubObjectSelect = false;
+                getter.Get();
+                if (getter.CommandResult() != Result.Success) return getter.CommandResult();
+                objectReference = getter.Object(0);
+            }
+
             var curve = objectReference.Curve();
             if (curve is null) return Result.Failure;
             sourceId = objectReference.ObjectId;
@@ -94,7 +106,7 @@ public sealed class RRVehicleAccessCommand : Command
             return Result.Failure;
         }
 
-        var createFixedEdges = settings.EdgeMethod is RoadEdgeMethod.Both or RoadEdgeMethod.FixedWidth;
+        var createFixedEdges = settings.CreateFixedEdges;
         var geometry = RhinoGeometryBuilder.Build(
             analysis,
             route,
@@ -102,10 +114,11 @@ public sealed class RRVehicleAccessCommand : Command
             settings.ClearanceMetres,
             settings.LeftWidthMetres,
             settings.RightWidthMetres,
-            createFixedEdges);
+            createFixedEdges,
+            settings.Footprints == FootprintMode.AtInterval ? settings.FootprintIntervalMetres : 0.0,
+            settings.Footprints == FootprintMode.EndsOnly);
         var clearance = RhinoGeometryBuilder.CheckClearance(
-            geometry.BodyEnvelope,
-            geometry.ClearanceEnvelope,
+            geometry,
             createFixedEdges ? geometry.FixedRoadBoundary : null,
             obstacles,
             boundaries,
@@ -116,7 +129,10 @@ public sealed class RRVehicleAccessCommand : Command
         var allViolations = analysis.Violations.Concat(clearance.Violations).ToArray();
 
         ShowReport(analysis, allViolations, geometry.Warnings);
-        if (!PreviewAndConfirm(document, geometry, allViolations)) return Result.Cancel;
+        if (settings.PreviewBeforeBaking && !PreviewAndConfirm(document, geometry, allViolations))
+        {
+            return Result.Cancel;
+        }
 
         var analysisId = Guid.NewGuid().ToString("N");
         var baked = RhinoOutputWriter.Bake(
@@ -134,6 +150,24 @@ public sealed class RRVehicleAccessCommand : Command
         RhinoApp.WriteLine($"RhinoRoad created {baked.Count} objects. Analysis {analysisId[..8]}.");
         return Result.Success;
 
+    }
+
+    /// <summary>
+    /// The single curve selected before the command started, if there is exactly one.
+    /// </summary>
+    /// <remarks>
+    /// Rhino's own commands honour a pre-selection, and the common case here is rerunning against
+    /// a path already highlighted from the last run. Exactly one, because two selected curves give
+    /// no way to say which is the route.
+    /// </remarks>
+    private static ObjRef? PreselectedCurve(RhinoDoc document)
+    {
+        var selected = document.Objects
+            .GetSelectedObjects(includeLights: false, includeGrips: false)
+            .Where(candidate => candidate.Geometry is Curve)
+            .Take(2)
+            .ToArray();
+        return selected.Length == 1 ? new ObjRef(selected[0]) : null;
     }
 
     private static IReadOnlyList<Curve>? SelectCurves(string prompt, bool closedOnly = false)
@@ -215,42 +249,37 @@ public sealed class RRVehicleAccessCommand : Command
 
     private static double Degrees(double radians) => radians * 180.0 / Math.PI;
 
-    private sealed class CommandSettings
-    {
-        public PathSourceKind Source { get; private set; } = PathSourceKind.ExistingCurve;
-        public string VehicleId { get; private set; } = "PV";
-        public string ModeId { get; private set; } = "A";
-        public TravelDirection Direction { get; private set; } = TravelDirection.Forward;
-        public RoadEdgeMethod EdgeMethod { get; private set; } = RoadEdgeMethod.Both;
-        public double ClearanceMetres { get; private set; } = 0.30;
-        public double LeftWidthMetres { get; private set; } = 3.25;
-        public double RightWidthMetres { get; private set; } = 3.25;
-        public bool CheckMaximumGrade { get; private set; }
-        public double MaximumGradePercent { get; private set; } = 8.0;
-        public bool CheckObstacles { get; private set; } = true;
-        public bool CheckAllowedArea { get; private set; }
-        public bool ReplaceExisting { get; private set; } = true;
+    private static readonly VehicleAccessSettings _settings = new();
 
-        public Result Configure(VehicleCatalog catalog)
+    /// <summary>
+    /// The scripted interface. <c>-RRVehicleAccess</c> in a macro or script cannot raise a modal
+    /// dialog, so the option prompt stays — it configures the same settings object the dialog does.
+    /// </summary>
+    private static class CommandLinePrompt
+    {
+        public static Result Configure(VehicleAccessSettings settings, VehicleCatalog catalog)
         {
             var vehicleIds = catalog.Vehicles.Select(vehicle => vehicle.Id).ToArray();
-            var clearance = new OptionDouble(ClearanceMetres, setLowerLimit: true, limit: 0.0);
-            var leftWidth = new OptionDouble(LeftWidthMetres, setLowerLimit: true, limit: 0.0);
-            var rightWidth = new OptionDouble(RightWidthMetres, setLowerLimit: true, limit: 0.0);
-            var maximumGrade = new OptionDouble(MaximumGradePercent, setLowerLimit: true, limit: 0.0);
-            var gradeToggle = new OptionToggle(CheckMaximumGrade, "ReportOnly", "CheckLimit");
-            var obstacleToggle = new OptionToggle(CheckObstacles, "No", "Yes");
-            var boundaryToggle = new OptionToggle(CheckAllowedArea, "No", "Yes");
-            var replaceToggle = new OptionToggle(ReplaceExisting, "No", "Yes");
+            var modeIds = catalog.Get(settings.VehicleId).DrivingModes.Keys.OrderBy(key => key).ToArray();
+            var clearance = new OptionDouble(settings.ClearanceMetres, setLowerLimit: true, limit: 0.0);
+            var leftWidth = new OptionDouble(settings.LeftWidthMetres, setLowerLimit: true, limit: 0.0);
+            var rightWidth = new OptionDouble(settings.RightWidthMetres, setLowerLimit: true, limit: 0.0);
+            var maximumGrade = new OptionDouble(settings.MaximumGradePercent, setLowerLimit: true, limit: 0.0);
+            var footprintInterval = new OptionDouble(settings.FootprintIntervalMetres, setLowerLimit: true, limit: 0.0);
+            var gradeToggle = new OptionToggle(settings.CheckMaximumGrade, "ReportOnly", "CheckLimit");
+            var obstacleToggle = new OptionToggle(settings.CheckObstacles, "No", "Yes");
+            var boundaryToggle = new OptionToggle(settings.CheckAllowedArea, "No", "Yes");
+            var replaceToggle = new OptionToggle(settings.ReplaceExisting, "No", "Yes");
+            var previewToggle = new OptionToggle(settings.PreviewBeforeBaking, "No", "Yes");
 
             using var getter = new GetOption();
             getter.SetCommandPrompt("Configure vehicle access; Enter to continue");
             getter.AcceptNothing(true);
-            var sourceIndex = getter.AddOptionList("Source", ["ExistingCurve", "Interactive"], (int)Source);
-            var vehicleIndex = getter.AddOptionList("Vehicle", vehicleIds, Array.IndexOf(vehicleIds, VehicleId));
-            var modeIndex = getter.AddOptionList("Mode", ["A", "B"], ModeId == "A" ? 0 : 1);
-            var directionIndex = getter.AddOptionList("Direction", ["Forward", "Reverse"], Direction == TravelDirection.Forward ? 0 : 1);
-            var edgeIndex = getter.AddOptionList("RoadEdges", ["Both", "MinimumFootprint", "FixedWidth", "None"], (int)EdgeMethod);
+            var sourceIndex = getter.AddOptionList("Source", ["ExistingCurve", "Interactive"], (int)settings.Source);
+            var vehicleIndex = getter.AddOptionList("Vehicle", vehicleIds, Math.Max(0, Array.IndexOf(vehicleIds, settings.VehicleId)));
+            var modeIndex = getter.AddOptionList("Mode", modeIds, Math.Max(0, Array.IndexOf(modeIds, settings.ModeId)));
+            var directionIndex = getter.AddOptionList("Direction", ["Forward", "Reverse"], settings.Direction == TravelDirection.Forward ? 0 : 1);
+            var edgeIndex = getter.AddOptionList("RoadEdges", Enum.GetNames<RoadEdgeMethod>(), (int)settings.EdgeMethod);
             getter.AddOptionDouble("Clearance", ref clearance);
             getter.AddOptionDouble("LeftWidth", ref leftWidth);
             getter.AddOptionDouble("RightWidth", ref rightWidth);
@@ -259,6 +288,8 @@ public sealed class RRVehicleAccessCommand : Command
             getter.AddOptionToggle("Obstacles", ref obstacleToggle);
             getter.AddOptionToggle("AllowedArea", ref boundaryToggle);
             getter.AddOptionToggle("ReplaceExisting", ref replaceToggle);
+            getter.AddOptionToggle("Preview", ref previewToggle);
+            getter.AddOptionDouble("FootprintInterval", ref footprintInterval);
 
             while (true)
             {
@@ -267,21 +298,24 @@ public sealed class RRVehicleAccessCommand : Command
                 if (result == GetResult.Nothing) break;
                 if (result != GetResult.Option) continue;
                 var option = getter.Option();
-                if (option.Index == sourceIndex) Source = (PathSourceKind)option.CurrentListOptionIndex;
-                else if (option.Index == vehicleIndex) VehicleId = vehicleIds[option.CurrentListOptionIndex];
-                else if (option.Index == modeIndex) ModeId = option.CurrentListOptionIndex == 0 ? "A" : "B";
-                else if (option.Index == directionIndex) Direction = option.CurrentListOptionIndex == 0 ? TravelDirection.Forward : TravelDirection.Reverse;
-                else if (option.Index == edgeIndex) EdgeMethod = (RoadEdgeMethod)option.CurrentListOptionIndex;
+                if (option.Index == sourceIndex) settings.Source = (PathSourceKind)option.CurrentListOptionIndex;
+                else if (option.Index == vehicleIndex) settings.VehicleId = vehicleIds[option.CurrentListOptionIndex];
+                else if (option.Index == modeIndex) settings.ModeId = modeIds[option.CurrentListOptionIndex];
+                else if (option.Index == directionIndex) settings.Direction = option.CurrentListOptionIndex == 0 ? TravelDirection.Forward : TravelDirection.Reverse;
+                else if (option.Index == edgeIndex) settings.EdgeMethod = (RoadEdgeMethod)option.CurrentListOptionIndex;
             }
 
-            ClearanceMetres = clearance.CurrentValue;
-            LeftWidthMetres = leftWidth.CurrentValue;
-            RightWidthMetres = rightWidth.CurrentValue;
-            CheckMaximumGrade = gradeToggle.CurrentValue;
-            MaximumGradePercent = maximumGrade.CurrentValue;
-            CheckObstacles = obstacleToggle.CurrentValue;
-            CheckAllowedArea = boundaryToggle.CurrentValue;
-            ReplaceExisting = replaceToggle.CurrentValue;
+            settings.ClearanceMetres = clearance.CurrentValue;
+            settings.LeftWidthMetres = leftWidth.CurrentValue;
+            settings.RightWidthMetres = rightWidth.CurrentValue;
+            settings.MaximumGradePercent = maximumGrade.CurrentValue;
+            settings.FootprintIntervalMetres = footprintInterval.CurrentValue;
+            settings.CheckMaximumGrade = gradeToggle.CurrentValue;
+            settings.CheckObstacles = obstacleToggle.CurrentValue;
+            settings.CheckAllowedArea = boundaryToggle.CurrentValue;
+            settings.ReplaceExisting = replaceToggle.CurrentValue;
+            settings.PreviewBeforeBaking = previewToggle.CurrentValue;
+            settings.Reconcile(catalog);
             return Result.Success;
         }
     }

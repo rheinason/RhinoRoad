@@ -55,6 +55,8 @@ public sealed class VehicleCatalog
         public double WheelbaseMetres { get; init; }
         public double FrontOverhangMetres { get; init; }
         public double RearOverhangMetres { get; init; }
+        public double AxleTrackMetres { get; init; }
+        public double TyreWidthMetres { get; init; }
         public List<double[]> BodyOutline { get; init; } = [];
         public Dictionary<string, ModeDto> DrivingModes { get; init; } = new(StringComparer.OrdinalIgnoreCase);
         public VehicleSource Source { get; init; } = new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
@@ -69,6 +71,8 @@ public sealed class VehicleCatalog
             WheelbaseMetres,
             FrontOverhangMetres,
             RearOverhangMetres,
+            AxleTrackMetres,
+            TyreWidthMetres,
             BodyOutline.Select(point => new Point2(point[0], point[1])).ToArray(),
             DrivingModes.ToDictionary(pair => pair.Key, pair => pair.Value.ToDefinition(pair.Key), StringComparer.OrdinalIgnoreCase),
             Source,

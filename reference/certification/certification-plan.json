@@ -1,0 +1,29 @@
+{
+  "anglesGon": [ 40, 100, 180 ],
+  "vehicles": [
+    {
+      "vehicleId": "PV",
+      "required": true,
+      "drawings": [
+        { "modeId": "A", "path": "reference/vejdirektoratet-koerekurver/01-koeremaade-a/PV_A.dwg", "blockName": "PV A" },
+        { "modeId": "B", "path": "reference/vejdirektoratet-koerekurver/02-koeremaade-b/PV_B.dwg", "blockName": "PV B" }
+      ]
+    },
+    {
+      "vehicleId": "REN",
+      "required": true,
+      "drawings": [
+        { "modeId": "A", "path": "reference/vejdirektoratet-koerekurver/01-koeremaade-a/REN_A.dwg", "blockName": "REN A" },
+        { "modeId": "B", "path": "reference/vejdirektoratet-koerekurver/02-koeremaade-b/REN_B.dwg", "blockName": "REN_B" }
+      ]
+    },
+    {
+      "vehicleId": "BUS12",
+      "required": true,
+      "drawings": [
+        { "modeId": "A", "path": "reference/vejdirektoratet-koerekurver/01-koeremaade-a/BUS_12_A.dwg", "blockName": "BUS 12 A" },
+        { "modeId": "B", "path": "reference/vejdirektoratet-koerekurver/02-koeremaade-b/BUS_12_B.dwg", "blockName": "BUS 12 B" }
+      ]
+    }
+  ]
+}

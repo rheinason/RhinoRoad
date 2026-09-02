@@ -11,25 +11,49 @@ namespace RhinoRoad.Rhino.Services;
 
 internal static class ReferenceCertificationService
 {
-    private const double RouteSpacingMetres = 0.025;
     private const double BoundarySpacingMetres = 0.025;
     private const double JoinToleranceMetres = 0.02;
-    private static readonly int[] AnglesGon = [40, 100, 180];
     private static readonly ReferenceCertificationThresholds Thresholds = new(0.10, 0.05);
+
+    /// <summary>
+    /// Certification builds its swept envelopes at a fixed tolerance rather than inheriting the
+    /// document's. The envelope is a Boolean union of ~1500 footprints whose success is
+    /// tolerance-dependent, so an ambient value makes verdicts depend on document setup: at 0.001 m
+    /// the union silently fails and every case reports a ~10 m deviation against a fragment.
+    /// </summary>
+    private const double GeometryToleranceMetres = 0.01;
+
+    /// <summary>Chord the rigid-body geometry predicts between the two outer wheel-edge traces.</summary>
+    private static double ExpectedChord(VehicleDefinition vehicle) => Math.Sqrt(
+        (vehicle.WheelbaseMetres * vehicle.WheelbaseMetres) +
+        (4.0 * vehicle.WheelOuterEdgeOffsetMetres * vehicle.WheelOuterEdgeOffsetMetres));
+    private static readonly WheelTrackReconstructionOptions ReconstructionOptions = new()
+    {
+        SampleSpacingMetres = 0.025,
+        MaximumSeparationErrorMetres = 0.15,
+        MinimumSampleCount = 500
+    };
 
     private sealed record ReferenceFile(string VehicleId, string ModeId, string RelativePath, string BlockName);
     private sealed record IndexedCurve(int Index, Curve Curve, System.Drawing.Color Color);
-    private sealed record ExtractedCase(int AngleGon, Curve ReferenceEnvelope, Curve InnerRearWheelTrack, double TrackWidthMetres);
+    private sealed record ExtractedCase(
+        int AngleGon,
+        Curve ReferenceEnvelope,
+        Curve OuterFrontWheelTrack,
+        Curve OuterRearWheelTrack,
+        double WheelOuterEdgeOffsetMetres,
+        IReadOnlyList<Curve> WheelTraceCandidates,
+        IReadOnlyList<Curve> AllWheelChains,
+        Point3d IncomingLower,
+        Point3d IncomingUpper);
+    private sealed record DistanceDetail(
+        double DistanceMetres,
+        Point3d SourcePoint,
+        Point3d TargetPoint,
+        IReadOnlyList<double> AllDistances);
 
-    private static readonly ReferenceFile[] Files =
-    [
-        new("PV", "A", @"reference\vejdirektoratet-koerekurver\01-koeremaade-a\PV_A.dwg", "PV A"),
-        new("PV", "B", @"reference\vejdirektoratet-koerekurver\02-koeremaade-b\PV_B.dwg", "PV B"),
-        new("REN", "A", @"reference\vejdirektoratet-koerekurver\01-koeremaade-a\REN_A.dwg", "REN A"),
-        new("REN", "B", @"reference\vejdirektoratet-koerekurver\02-koeremaade-b\REN_B.dwg", "REN_B"),
-        new("BUS12", "A", @"reference\vejdirektoratet-koerekurver\01-koeremaade-a\BUS_12_A.dwg", "BUS 12 A"),
-        new("BUS12", "B", @"reference\vejdirektoratet-koerekurver\02-koeremaade-b\BUS_12_B.dwg", "BUS 12 B")
-    ];
+    public static CertificationPlan LoadPlan(string repositoryRoot) =>
+        CertificationPlan.Load(Path.Combine(repositoryRoot, "reference", "certification", CertificationPlan.FileName));
 
     public static string FindRepositoryRoot()
     {
@@ -43,31 +67,46 @@ internal static class ReferenceCertificationService
         throw new DirectoryNotFoundException("Could not find RhinoRoad.sln above the loaded plugin.");
     }
 
-    public static ReferenceCertificationReport Run(RhinoDoc document, string repositoryRoot)
+    public static ReferenceCertificationReport Run(RhinoDoc document, string repositoryRoot, CertificationPlan plan)
     {
+        // The reference geometry arrives in document units, so a non-metric document would compare
+        // it against a metre-built sweep. Fail loudly rather than emit meaningless verdicts.
+        if (document.ModelUnitSystem != UnitSystem.Meters)
+        {
+            throw new InvalidOperationException(
+                $"Reference certification requires a document in meters; this document is in {document.ModelUnitSystem}.");
+        }
+
         var catalog = VehicleCatalog.LoadEmbedded();
         var cases = new List<ReferenceCertificationCase>();
-        foreach (var referenceFile in Files)
+        var fixtureDirectory = Path.Combine(repositoryRoot, "reference", "certification", "fixtures");
+        Directory.CreateDirectory(fixtureDirectory);
+        var referenceFiles = plan.Vehicles
+            .SelectMany(vehicle => vehicle.Drawings.Select(drawing =>
+                new ReferenceFile(vehicle.VehicleId, drawing.ModeId, drawing.Path, drawing.BlockName)))
+            .ToArray();
+        foreach (var referenceFile in referenceFiles)
         {
             var path = Path.Combine(repositoryRoot, referenceFile.RelativePath);
             if (!File.Exists(path)) throw new FileNotFoundException("Reference DWG was not found.", path);
             var sha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
             try
             {
-                var extracted = ImportAndExtract(document, path, referenceFile.BlockName);
                 var vehicle = catalog.Get(referenceFile.VehicleId);
+                var extracted = ImportAndExtract(document, path, referenceFile.BlockName, vehicle, plan.AnglesGon);
                 var drivingMode = vehicle.DrivingModes[referenceFile.ModeId];
-                foreach (var angle in AnglesGon)
+                foreach (var angle in plan.AnglesGon)
                 {
                     if (!extracted.TryGetValue(angle, out var sourceCase))
                     {
                         cases.Add(new ReferenceCertificationCase(
                             referenceFile.VehicleId, referenceFile.ModeId, angle, referenceFile.RelativePath, sha256,
-                            null, null, null, 0, false,
+                            null, null, null, null, null, ExpectedChord(vehicle), 0, false,
                             "The official DWG did not contain extractable geometry for the requested annotated case."));
                         continue;
                     }
 
+                    WriteFixture(fixtureDirectory, referenceFile, sha256, vehicle, sourceCase);
                     var evaluated = EvaluateCase(document, vehicle, drivingMode, referenceFile, sha256, sourceCase);
                     cases.Add(evaluated);
                     RhinoApp.WriteLine(
@@ -80,20 +119,24 @@ internal static class ReferenceCertificationService
             catch (Exception exception)
             {
                 RhinoApp.WriteLine($"  {referenceFile.VehicleId} {referenceFile.ModeId}: extraction failed: {exception.Message}");
-                foreach (var angle in AnglesGon)
+                foreach (var angle in plan.AnglesGon)
                 {
                     cases.Add(new ReferenceCertificationCase(
                         referenceFile.VehicleId, referenceFile.ModeId, angle, referenceFile.RelativePath, sha256,
-                        null, null, null, 0, false, $"DWG extraction failed: {exception.Message}"));
+                            null, null, null, null, null, ExpectedChord(catalog.Get(referenceFile.VehicleId)), 0, false, $"DWG extraction failed: {exception.Message}"));
                 }
             }
         }
 
         return new ReferenceCertificationReport(
-            "1.0",
+            ReferenceCertificationReport.CurrentSchemaVersion,
             DateTimeOffset.UtcNow.ToString("O"),
             RhinoApp.Version.ToString(),
-            "Official DWG red envelope compared to RhinoRoad sweep reconstructed from the DWG inner rear-wheel trace.",
+            "Official DWG red envelope compared to RhinoRoad sweep reconstructed from paired outer front/rear wheel-area boundaries. Vehicle heading and rear-axle midpoint are solved from the rigid-body chord between the two traces using the preset wheelbase, axle track and tyre width; the chord the drawing's own traces hold is measured and reported alongside the chord the preset predicts, so a disagreement between drawing and preset is visible. Traces tessellated at differing densities are reconciled against that chord. Swept envelopes are built at a fixed geometry tolerance so verdicts do not depend on document setup.",
+            new ReferenceCertificationEnvironment(
+                document.ModelUnitSystem.ToString(),
+                document.ModelAbsoluteTolerance,
+                GeometryToleranceMetres),
             Thresholds,
             cases);
     }
@@ -113,7 +156,7 @@ internal static class ReferenceCertificationService
         return path;
     }
 
-    private static Dictionary<int, ExtractedCase> ImportAndExtract(RhinoDoc document, string path, string blockName)
+    private static Dictionary<int, ExtractedCase> ImportAndExtract(RhinoDoc document, string path, string blockName, VehicleDefinition vehicle, IReadOnlyList<int> angles)
     {
         var priorObjects = document.Objects
             .Where(item => !item.IsInstanceDefinitionGeometry)
@@ -145,7 +188,7 @@ internal static class ReferenceCertificationService
             }
 
             var transform = topLevel.Definition is null ? Transform.Identity : topLevel.Reference.Xform;
-            return ExtractCases(definition, transform);
+            return ExtractCases(definition, transform, vehicle, angles);
         }
         finally
         {
@@ -177,7 +220,7 @@ internal static class ReferenceCertificationService
         }
     }
 
-    private static Dictionary<int, ExtractedCase> ExtractCases(InstanceDefinition definition, Transform transform)
+    private static Dictionary<int, ExtractedCase> ExtractCases(InstanceDefinition definition, Transform transform, VehicleDefinition vehicle, IReadOnlyList<int> angles)
     {
         var curves = new List<IndexedCurve>();
         var annotations = new List<(int Index, int Angle)>();
@@ -234,7 +277,7 @@ internal static class ReferenceCertificationService
         var result = new Dictionary<int, ExtractedCase>();
         for (var groupIndex = 0; groupIndex < groupStarts.Length; groupIndex++)
         {
-            if (!AnglesGon.Contains(annotations[groupIndex].Angle)) continue;
+            if (!angles.Contains(annotations[groupIndex].Angle)) continue;
             var startIndex = groupIndex == 0 ? 0 : groupStarts[groupIndex].Index - 2;
             var endIndex = groupIndex + 1 < groupStarts.Length ? groupStarts[groupIndex + 1].Index - 2 : firstAnnotationIndex;
             var groupRed = red.Where(item => item.Index >= startIndex && item.Index < endIndex).Select(item => item.Curve).ToArray();
@@ -253,12 +296,29 @@ internal static class ReferenceCertificationService
                 .First();
             var lowerRed = OrientFromPoint(lowerSource, incomingRed);
             var upperRed = OrientFromPoint(upperSource, incomingRedUpper);
-            var centreY = (lowerRed.PointAtStart.Y + upperRed.PointAtStart.Y) * 0.5;
-            var innerWheelSource = yellowChains.OrderBy(chain => MinimumEndpointDistance(chain, incomingRedUpper)).First();
-            var innerWheel = OrientFromPoint(innerWheelSource, incomingRedUpper);
-            var trackHalf = Math.Abs(innerWheel.PointAtStart.Y - centreY);
+            var viableYellow = yellowChains
+                .Where(chain => chain.GetLength() >= 10.0)
+                .OrderBy(chain => chain.GetLength())
+                .ToArray();
+            if (viableYellow.Length < 2)
+            {
+                throw new InvalidDataException(
+                    $"Block '{definition.Name}' case {annotations[groupIndex].Angle} gon did not contain both viable front and rear wheel traces.");
+            }
+
+            var outerRearWheel = OrientFromPoint(viableYellow[0], incomingRedUpper);
+            var outerFrontWheel = OrientFromPoint(viableYellow[^1], incomingRed);
             var envelope = CloseEnvelope(lowerRed, upperRed);
-            result[annotations[groupIndex].Angle] = new ExtractedCase(annotations[groupIndex].Angle, envelope, innerWheel, trackHalf * 2.0);
+            result[annotations[groupIndex].Angle] = new ExtractedCase(
+                annotations[groupIndex].Angle,
+                envelope,
+                outerFrontWheel,
+                outerRearWheel,
+                vehicle.WheelOuterEdgeOffsetMetres,
+                viableYellow,
+                yellowChains,
+                incomingRed,
+                incomingRedUpper);
         }
 
         return result;
@@ -272,86 +332,187 @@ internal static class ReferenceCertificationService
         string sha256,
         ExtractedCase sourceCase)
     {
-        var route = RouteFromInnerRearTrack(sourceCase.InnerRearWheelTrack, sourceCase.TrackWidthMetres * 0.5);
+        var reconstruction = ReconstructRoute(vehicle, sourceCase);
+        var route = reconstruction.Samples;
         var selfIntersections = Intersection.CurveSelf(sourceCase.ReferenceEnvelope, 0.001);
-        if (sourceCase.TrackWidthMetres <= 0.0 || sourceCase.TrackWidthMetres > vehicle.WidthMetres + 0.10 ||
-            route.Count < 500 || selfIntersections.Count > 0)
+        if (!reconstruction.IsSuccess || selfIntersections.Count > 0)
         {
+            var reason = reconstruction.IsSuccess
+                ? "The extracted reference envelope self-intersects."
+                : reconstruction.Message;
             return new ReferenceCertificationCase(
                 referenceFile.VehicleId, referenceFile.ModeId, sourceCase.AngleGon, referenceFile.RelativePath, sha256,
-                null, null, sourceCase.TrackWidthMetres, route.Count, false,
-                "DWG path extraction failed sanity checks; no deviation is reported for this case.");
+                null, null, null, null, null, ExpectedChord(vehicle), route.Count, false,
+                $"DWG path extraction failed sanity checks; no deviation is reported for this case. {reason}");
         }
         var analysis = new VehicleAccessAnalyzer().Analyze(vehicle, mode, route);
-        var generated = RhinoGeometryBuilder.Build(analysis, route, document, 0.0, 0.0, 0.0, false).BodyEnvelope;
-        if (generated is null)
+        var built = RhinoGeometryBuilder.Build(
+            analysis, route, UnitSystem.Meters, GeometryToleranceMetres, 0.0, 0.0, 0.0, false);
+        var generated = built.BodyEnvelope;
+        if (generated is null || !built.BodyEnvelopeMerged)
         {
+            var reason = generated is null
+                ? "Rhino could not construct the generated swept envelope."
+                : string.Join(" ", built.Warnings);
             return new ReferenceCertificationCase(
                 referenceFile.VehicleId, referenceFile.ModeId, sourceCase.AngleGon, referenceFile.RelativePath, sha256,
-                null, null, sourceCase.TrackWidthMetres, route.Count, false,
-                "Rhino could not construct the generated swept envelope.");
+                null, null, null, reconstruction.MeasuredChordMetres, reconstruction.MeasuredChordSpreadMetres, ExpectedChord(vehicle), route.Count, false,
+                $"The generated swept envelope is not trustworthy, so no deviation is reported. {reason}");
         }
 
-        var maximumDeviation = Math.Max(
-            MaximumDistance(sourceCase.ReferenceEnvelope, generated),
-            MaximumDistance(generated, sourceCase.ReferenceEnvelope));
+        var referenceToGenerated = MaximumDistanceDetail(sourceCase.ReferenceEnvelope, generated);
+        var generatedToReference = MaximumDistanceDetail(generated, sourceCase.ReferenceEnvelope);
+        var maximumDeviation = Math.Max(referenceToGenerated.DistanceMetres, generatedToReference.DistanceMetres);
+        var deviation = DeviationStatistics.From(
+            [.. referenceToGenerated.AllDistances, .. generatedToReference.AllDistances],
+            Thresholds.MaximumEnvelopeDeviationMetres);
         var inward = MaximumOutsideDistance(sourceCase.ReferenceEnvelope, generated);
-        var passed = maximumDeviation <= Thresholds.MaximumEnvelopeDeviationMetres + 1e-9 &&
-                     inward <= Thresholds.MaximumInwardUnderpredictionMetres + 1e-9;
+        var passed = Thresholds.Accepts(maximumDeviation, inward);
         var notes = passed
             ? "Meets both reference tolerances."
-            : "Exceeds one or both reference tolerances; the preset remains unvalidated.";
+            : $"Exceeds tolerance on {deviation.ShareOverToleranceFraction * 100.0:0.0}% of the compared " +
+              $"boundary length (median {deviation.MedianMetres:0.000} m, 90th percentile " +
+              $"{deviation.Percentile90Metres:0.000} m, maximum {deviation.MaximumMetres:0.000} m). " +
+              "The preset remains unvalidated.";
+
         var sourceBounds = sourceCase.ReferenceEnvelope.GetBoundingBox(true);
         var generatedBounds = generated.GetBoundingBox(true);
         RhinoApp.WriteLine(
-            $"    track={sourceCase.TrackWidthMetres:0.000} m samples={route.Count}; " +
+            $"    chord measured={reconstruction.MeasuredChordMetres:0.000} m " +
+            $"expected={ExpectedChord(vehicle):0.000} m (spread {reconstruction.MeasuredChordSpreadMetres:0.000} m) samples={route.Count}; " +
             $"ref=({sourceBounds.Min.X:0.00},{sourceBounds.Min.Y:0.00})..({sourceBounds.Max.X:0.00},{sourceBounds.Max.Y:0.00}); " +
             $"gen=({generatedBounds.Min.X:0.00},{generatedBounds.Min.Y:0.00})..({generatedBounds.Max.X:0.00},{generatedBounds.Max.Y:0.00})");
+        RhinoApp.WriteLine(
+            $"    ref->gen={referenceToGenerated.DistanceMetres:0.000} m " +
+            $"at ({referenceToGenerated.SourcePoint.X:0.000},{referenceToGenerated.SourcePoint.Y:0.000}) -> " +
+            $"({referenceToGenerated.TargetPoint.X:0.000},{referenceToGenerated.TargetPoint.Y:0.000}); " +
+            $"gen->ref={generatedToReference.DistanceMetres:0.000} m " +
+            $"at ({generatedToReference.SourcePoint.X:0.000},{generatedToReference.SourcePoint.Y:0.000}) -> " +
+            $"({generatedToReference.TargetPoint.X:0.000},{generatedToReference.TargetPoint.Y:0.000})");
         return new ReferenceCertificationCase(
             referenceFile.VehicleId, referenceFile.ModeId, sourceCase.AngleGon, referenceFile.RelativePath, sha256,
-            maximumDeviation, inward, sourceCase.TrackWidthMetres, route.Count, passed, notes);
+            maximumDeviation, inward, deviation, reconstruction.MeasuredChordMetres, reconstruction.MeasuredChordSpreadMetres,
+            ExpectedChord(vehicle), route.Count, passed, notes);
     }
 
-    private static IReadOnlyList<RouteSample> RouteFromInnerRearTrack(Curve source, double trackHalfMetres)
+    /// <summary>
+    /// Writes the extracted geometry for one case as data, at the boundary between DWG extraction
+    /// (Rhino-only, per-drawing conventions) and route reconstruction (pure, tested). Extraction is
+    /// where per-vehicle fragility lives; dumping it here lets Core replay and diagnose every
+    /// vehicle offline in milliseconds instead of through a Rhino round trip.
+    /// </summary>
+    private static void WriteFixture(
+        string directory,
+        ReferenceFile referenceFile,
+        string sha256,
+        VehicleDefinition vehicle,
+        ExtractedCase sourceCase)
     {
-        var curve = source.DuplicateCurve();
-        var startScore = Math.Abs(curve.TangentAtStart.Y) + Math.Max(0.0, curve.TangentAtStart.X);
-        var endScore = Math.Abs(curve.TangentAtEnd.Y) + Math.Max(0.0, curve.TangentAtEnd.X);
-        if (endScore < startScore) curve.Reverse();
-        var parameters = curve.DivideByLength(RouteSpacingMetres, true) ?? [curve.Domain.T0, curve.Domain.T1];
-        if (parameters[^1] < curve.Domain.T1 - 1e-9) parameters = [.. parameters, curve.Domain.T1];
-        var raw = new List<(Point3 Point, double Heading)>(parameters.Length);
-        foreach (var parameter in parameters)
+        try
         {
-            var wheel = curve.PointAt(parameter);
-            var tangent = curve.TangentAt(parameter);
-            tangent.Z = 0.0;
-            if (!tangent.Unitize()) continue;
-            var centre = new Point3d(
-                wheel.X - (tangent.Y * trackHalfMetres),
-                wheel.Y + (tangent.X * trackHalfMetres),
-                0.0);
-            raw.Add((new Point3(centre.X, centre.Y, 0.0), Math.Atan2(tangent.Y, tangent.X)));
-        }
+            var fixture = new CertificationFixture(
+                CertificationFixture.CurrentSchemaVersion,
+                referenceFile.VehicleId,
+                referenceFile.ModeId,
+                sourceCase.AngleGon,
+                referenceFile.RelativePath,
+                sha256,
+                vehicle.WheelbaseMetres,
+                sourceCase.WheelOuterEdgeOffsetMetres,
+                Vertices(sourceCase.ReferenceEnvelope),
+                Vertices(sourceCase.OuterFrontWheelTrack),
+                Vertices(sourceCase.OuterRearWheelTrack),
+                sourceCase.WheelTraceCandidates.Select(Vertices).ToArray(),
+                sourceCase.AllWheelChains.Select(Vertices).ToArray());
 
-        var stations = new double[raw.Count];
-        for (var index = 1; index < raw.Count; index++)
+            var name = $"{referenceFile.VehicleId}_{referenceFile.ModeId}_{sourceCase.AngleGon}.json";
+            File.WriteAllText(
+                Path.Combine(directory, name),
+                JsonSerializer.Serialize(fixture, FixtureJsonOptions) + System.Environment.NewLine);
+        }
+        catch (Exception exception)
         {
-            stations[index] = stations[index - 1] + raw[index].Point.XY.DistanceTo(raw[index - 1].Point.XY);
+            RhinoApp.WriteLine($"    fixture dump failed: {exception.Message}");
         }
-
-        var samples = new List<RouteSample>(raw.Count);
-        for (var index = 0; index < raw.Count; index++)
-        {
-            var before = Math.Max(0, index - 1);
-            var after = Math.Min(raw.Count - 1, index + 1);
-            var span = Math.Max(stations[after] - stations[before], 1e-9);
-            var curvature = Geometry2D.NormalizeAngle(raw[after].Heading - raw[before].Heading) / span;
-            samples.Add(new RouteSample(stations[index], raw[index].Point, raw[index].Heading, curvature, TravelDirection.Forward));
-        }
-
-        return samples;
     }
+
+    private static readonly JsonSerializerOptions FixtureJsonOptions = new()
+    {
+        WriteIndented = false,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
+    /// <summary>Plan vertices of a curve; non-polyline curves are divided at the sampling spacing.</summary>
+    private static double[][] Vertices(Curve curve)
+    {
+        if (curve.TryGetPolyline(out var polyline))
+        {
+            return polyline.Select(point => new[] { point.X, point.Y }).ToArray();
+        }
+
+        var parameters = curve.DivideByLength(BoundarySpacingMetres, true)
+                         ?? [curve.Domain.T0, curve.Domain.T1];
+        return parameters
+            .Select(parameter => curve.PointAt(parameter))
+            .Select(point => new[] { point.X, point.Y })
+            .ToArray();
+    }
+
+    /// <summary>
+    /// Reconstructs the route from the wheel traces the extractor chose by chain length. That
+    /// heuristic mis-picks when a case carries more than two long yellow chains, so on failure the
+    /// remaining candidates are searched for a pair that actually reconciles against the rigid-body
+    /// chord. The heuristic pair is tried first, leaving already-reconciling cases untouched.
+    /// </summary>
+    private static WheelTrackReconstruction ReconstructRoute(VehicleDefinition vehicle, ExtractedCase sourceCase)
+    {
+        var chosen = WheelTrackRouteReconstructor.Reconstruct(
+            PlanVertices(sourceCase.OuterFrontWheelTrack),
+            PlanVertices(sourceCase.OuterRearWheelTrack),
+            vehicle.WheelbaseMetres,
+            sourceCase.WheelOuterEdgeOffsetMetres,
+            ReconstructionOptions);
+        if (chosen.IsSuccess) return chosen;
+
+        var anchors = new[] { sourceCase.IncomingLower, sourceCase.IncomingUpper };
+        foreach (var frontSource in sourceCase.WheelTraceCandidates)
+        {
+            foreach (var rearSource in sourceCase.WheelTraceCandidates)
+            {
+                if (ReferenceEquals(frontSource, rearSource)) continue;
+                foreach (var frontAnchor in anchors)
+                {
+                    foreach (var rearAnchor in anchors)
+                    {
+                        var candidate = WheelTrackRouteReconstructor.Reconstruct(
+                            PlanVertices(OrientFromPoint(frontSource, frontAnchor)),
+                            PlanVertices(OrientFromPoint(rearSource, rearAnchor)),
+                            vehicle.WheelbaseMetres,
+                            sourceCase.WheelOuterEdgeOffsetMetres,
+                            ReconstructionOptions);
+                        if (candidate.IsSuccess)
+                        {
+                            RhinoApp.WriteLine(
+                                $"    recovered a chord-consistent wheel-trace pair after the length heuristic failed: {candidate.Message}");
+                            return candidate;
+                        }
+                    }
+                }
+            }
+        }
+
+        return chosen;
+    }
+
+    /// <summary>
+    /// Projects an extracted wheel-edge polyline onto the plan for
+    /// <see cref="WheelTrackRouteReconstructor"/>; a non-polyline curve yields no vertices,
+    /// which the reconstructor reports as an insufficient-vertex failure.
+    /// </summary>
+    private static IReadOnlyList<Point2> PlanVertices(Curve curve) =>
+        curve.TryGetPolyline(out var polyline)
+            ? polyline.Select(point => new Point2(point.X, point.Y)).ToArray()
+            : [];
 
     private static Curve CloseEnvelope(Curve first, Curve second)
     {
@@ -388,19 +549,33 @@ internal static class ReferenceCertificationService
     }
 
     private static double MaximumDistance(Curve source, Curve target)
+        => MaximumDistanceDetail(source, target).DistanceMetres;
+
+    private static DistanceDetail MaximumDistanceDetail(Curve source, Curve target)
     {
         var parameters = source.DivideByLength(BoundarySpacingMetres, true) ?? [source.Domain.T0, source.Domain.T1];
         var maximum = 0.0;
+        var maximumSource = source.PointAtStart;
+        var maximumTarget = target.PointAtStart;
+        var distances = new List<double>(parameters.Length);
         foreach (var parameter in parameters)
         {
             var point = source.PointAt(parameter);
             if (target.ClosestPoint(point, out var targetParameter))
             {
-                maximum = Math.Max(maximum, point.DistanceTo(target.PointAt(targetParameter)));
+                var targetPoint = target.PointAt(targetParameter);
+                var distance = point.DistanceTo(targetPoint);
+                distances.Add(distance);
+                if (distance > maximum)
+                {
+                    maximum = distance;
+                    maximumSource = point;
+                    maximumTarget = targetPoint;
+                }
             }
         }
 
-        return maximum;
+        return new DistanceDetail(maximum, maximumSource, maximumTarget, distances);
     }
 
     private static double MaximumOutsideDistance(Curve reference, Curve generated)

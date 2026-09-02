@@ -16,17 +16,18 @@ public sealed class RRReferenceCertifyCommand : Command
         try
         {
             var repositoryRoot = ReferenceCertificationService.FindRepositoryRoot();
-            var report = ReferenceCertificationService.Run(document, repositoryRoot);
+            var plan = ReferenceCertificationService.LoadPlan(repositoryRoot);
+            var report = ReferenceCertificationService.Run(document, repositoryRoot, plan);
             var outputPath = ReferenceCertificationService.WriteReport(repositoryRoot, report);
             var passed = report.Cases.Count(item => item.Passed);
             RhinoApp.WriteLine($"RhinoRoad reference certification: {passed}/{report.Cases.Count} cases passed.");
             RhinoApp.WriteLine($"Report: {outputPath}");
-            foreach (var vehicleId in Core.ReferenceCertificationReport.RequiredVehicleIds)
+            foreach (var vehicleId in plan.RequiredVehicleIds)
             {
-                RhinoApp.WriteLine($"  {vehicleId}: {(report.IsValidated(vehicleId) ? "VALIDATED" : "NOT VALIDATED")}");
+                RhinoApp.WriteLine($"  {vehicleId}: {(report.IsValidated(plan, vehicleId) ? "VALIDATED" : "NOT VALIDATED")}");
             }
 
-            return report.Cases.Count == 18 ? Result.Success : Result.Failure;
+            return report.Cases.Count == plan.ExpectedCaseCount ? Result.Success : Result.Failure;
         }
         catch (Exception exception)
         {

@@ -1,5 +1,11 @@
 <Project>
   <PropertyGroup>
+    <!-- Single source of truth for the shipped version; the plugin project and the Yak package
+         both consume it. The pre-release suffix marks this as a beta on the package server, where
+         it is only installed by someone who asks for pre-releases. FileVersion and AssemblyVersion
+         must stay purely numeric, so they take the base version. -->
+    <RhinoRoadVersion>0.1.0-beta</RhinoRoadVersion>
+    <RhinoRoadAssemblyVersion>0.1.0</RhinoRoadAssemblyVersion>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

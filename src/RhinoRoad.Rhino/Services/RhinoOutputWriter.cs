@@ -39,6 +39,18 @@ internal static class RhinoOutputWriter
         {
             ids.Add(AddCurve(document, geometry.ClearanceEnvelope, "Clearance", "Clearance envelope", Color.OrangeRed, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
         }
+        foreach (var hole in geometry.BodyEnvelopeHoles)
+        {
+            ids.Add(AddCurve(document, hole, "Swept", "Body swept envelope hole", Color.DarkOrange, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
+        }
+        foreach (var hole in geometry.ClearanceEnvelopeHoles)
+        {
+            ids.Add(AddCurve(document, hole, "Clearance", "Clearance envelope hole", Color.OrangeRed, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
+        }
+        foreach (var footprint in geometry.Footprints)
+        {
+            ids.Add(AddCurve(document, footprint, "Footprints", "Vehicle footprint", Color.SlateGray, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
+        }
         foreach (var edge in geometry.FixedRoadEdges)
         {
             ids.Add(AddCurve(document, edge, "RoadEdges", "Fixed-width preliminary road edge", Color.ForestGreen, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
