@@ -26,6 +26,9 @@ public sealed class RRVehicleAccessCommand : Command
         _settings.Reconcile(Catalog);
         // Read before the dialog: showing a modal window can clear the document selection.
         var preselectedPath = PreselectedCurve(document);
+        var storedManoeuvre = preselectedPath is null
+            ? null
+            : ManoeuvreStore.Read(preselectedPath.Object(), document.ModelUnitSystem);
         if (mode == RunMode.Interactive)
         {
             if (!VehicleAccessDialog.Show(document, Catalog, _settings)) return Result.Cancel;
@@ -43,10 +46,27 @@ public sealed class RRVehicleAccessCommand : Command
         var vehicle = Catalog.Get(settings.VehicleId);
         var drivingMode = vehicle.DrivingModes[settings.ModeId];
         IReadOnlyList<RouteSample> route;
-        Curve? interactivePath = null;
+        Manoeuvre? manoeuvre = null;
         Guid sourceId;
 
-        if (settings.Source == PathSourceKind.ExistingCurve)
+        if (storedManoeuvre is not null)
+        {
+            // A control curve was selected: rebuild from its waypoints, honouring any grip edit,
+            // and replace the output that curve produced last time rather than stacking a new set
+            // beside it. The vehicle and mode come from the dialog, so the same route can be re-run
+            // against a different vehicle by selecting the curve and changing the preset.
+            manoeuvre = storedManoeuvre;
+            var replay = PursuitDriver.Replay(vehicle, drivingMode, manoeuvre);
+            route = replay.Samples;
+            sourceId = ManoeuvreStore.SourceId(preselectedPath!.Object());
+            if (!replay.Arrived)
+            {
+                RhinoApp.WriteLine(
+                    "Some waypoints could not be reached by this vehicle in this mode; the route " +
+                    "stops short of them.");
+            }
+        }
+        else if (settings.Source == PathSourceKind.ExistingCurve)
         {
             ObjRef objectReference;
             if (preselectedPath is not null)
@@ -81,8 +101,12 @@ public sealed class RRVehicleAccessCommand : Command
         }
         else
         {
-            var interactiveResult = InteractiveRouteBuilder.TryBuild(document, vehicle, drivingMode, out route, out interactivePath);
+            var interactiveResult = InteractiveRouteBuilder.TryBuild(
+                document, vehicle, drivingMode, out route, out _, out manoeuvre);
             if (interactiveResult != Result.Success) return interactiveResult;
+
+            // A fresh identity, stored on the control curve, so the next run against that curve
+            // replaces this output instead of drawing a second copy over it.
             sourceId = Guid.NewGuid();
         }
 
@@ -138,7 +162,7 @@ public sealed class RRVehicleAccessCommand : Command
         var baked = RhinoOutputWriter.Bake(
             document,
             geometry,
-            interactivePath,
+            manoeuvre,
             analysis,
             allViolations,
             sourceId,

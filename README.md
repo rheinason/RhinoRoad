@@ -122,18 +122,19 @@ reconstruct today; it must never shrink.
 4. For `ExistingCurve`, select a rear-axle midpoint curve — skipped when exactly one curve was
    selected before the command started. Its parameter direction is the travel direction; choose
    `Reverse` when the vehicle faces opposite that direction.
-5. For `Interactive`, pick the rear-axle start and vehicle heading, then click successive previewed
-   legs. Use `Reverse`, `Undo`, and Enter to finish. Requested turns beyond wheel lock are clamped.
-   The prompt shows how much lock is currently on, and a dotted ray marks the heading each leg
-   would end on.
+5. For `Interactive`, pick the rear-axle start and vehicle heading, then click waypoints. It works
+   like Rhino's own `Polyline`: the next leg previews under the cursor, `Reverse` and `Undo` are
+   options, and Enter finishes. Because waypoints are ordinary picked points, object snaps, typed
+   coordinates, and ortho all apply — which is how a waypoint gets placed accurately enough to
+   matter on a tight stretch.
 
-   Aiming at a point drives an arc that leaves the vehicle turned by **twice** the bearing you
-   picked, so clicking on the line you want to end up travelling along overshoots it and has to be
-   corrected back — which is what produces an unwanted S through the exit of a turn. To leave a turn
-   the way a driver does, switch to `Straighten`: the wheel runs back to centre at the mode's
-   lock-to-lock rate while the vehicle carries on, and the cursor sets how far to run it out. The
-   vehicle keeps turning as the wheel centres, which is exactly the gradual exit a single arc cannot
-   produce. Switch back with `Aim`.
+   The vehicle is driven to each waypoint by re-aiming at it every 0.10 m under the mode's wheel
+   lock and steering rate, so what you draw is drivable by construction. A leg the vehicle cannot
+   reach without turning through more than a full circle previews in orange and is refused rather
+   than quietly ending somewhere else. Where the route ends up pointing follows from where the next
+   waypoint goes: aiming at a point says nothing about arrival direction, so a tight approach wants
+   waypoints placed closer together.
+
 6. Obstacle curves and closed allowed-area boundaries are only asked for when their checks are
    ticked; both are off by default.
 7. The PASS/FAIL report is written to the command line and the result is baked. Tick
@@ -143,12 +144,26 @@ A default run therefore asks for at most one thing after the dialog, and nothing
 path was pre-selected. `-RRVehicleAccess` keeps the option prompt for scripting, with a `Preview`
 toggle matching the dialog's.
 
+### Editing a driven route
+
+An interactive run also bakes a **control polyline** on `RhinoRoad::Control` — the start point
+followed by each waypoint — carrying the manoeuvre in its user text. Its grips are the decisions you
+made, so drag one, select it, and run `RRVehicleAccess` again: the route is rebuilt by replaying the
+waypoints, and the previous output is replaced rather than stacked beside it. An edited route is
+therefore still drivable, which dragging the 0.10 m sampled path could never guarantee.
+
+The curve supplies the waypoint positions and the stored text supplies what geometry cannot — the
+start heading, which way each leg was driven, and the vehicle it was driven as. Adding or removing a
+grip works; new points inherit the travel direction of the last stored leg. Changing the vehicle or
+mode in the dialog before re-running drives the same waypoints as a different vehicle.
+
 Generated objects are grouped and placed below `RhinoRoad` layers. Metadata records the source
 GUID, analysis ID, vehicle/version, validation status, mode, clearance, and fixed widths. Re-running
 with `ReplaceExisting=Yes` replaces only RhinoRoad objects linked to the same existing source curve.
 
 ## Meaning of the outputs
 
+- **Route control polyline:** the picked waypoints, and the editable form of a driven route.
 - **Rear/front axle tracks:** kinematic reference curves.
 - **Vehicle footprints:** the body outline stamped along the route at the `FootprintInterval`
   station spacing; set the interval to 0 to omit them.

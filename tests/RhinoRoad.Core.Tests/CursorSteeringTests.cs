@@ -3,8 +3,13 @@ using RhinoRoad.Core;
 namespace RhinoRoad.Core.Tests;
 
 /// <summary>
-/// Pins the behaviour of aiming the vehicle at a point, and of unwinding the wheel instead.
+/// Pins the steering law and the cost of the wheel's own slew rate.
 /// </summary>
+/// <remarks>
+/// These are the facts the driving model is built around rather than features in their own right:
+/// why aiming cannot be done in one arc, and why the steering rate — not the turning radius — is
+/// what actually limits these vehicles.
+/// </remarks>
 public sealed class CursorSteeringTests
 {
     private static (VehicleDefinition Vehicle, DrivingModeDefinition Mode) Preset(string id = "PV", string mode = "B")
@@ -24,8 +29,9 @@ public sealed class CursorSteeringTests
     public void AimingAtAPointTurnsTheVehicleTwiceTheBearingPicked(double bearingDegrees)
     {
         // An arc tangent to the current heading and passing through the cursor ends rotated by twice
-        // the bearing of that cursor. It is the reason a path aimed straight at the exit line
-        // overshoots and has to be corrected back, producing an S.
+        // the bearing of that cursor — an inscribed-angle result. It is why the driver re-aims every
+        // step instead of committing to the arc it solves: driven to its end, a single arc always
+        // overshoots the direction the point was clicked in.
         var (vehicle, mode) = Preset();
         var bearing = bearingDegrees * Math.PI / 180.0;
         var target = new Point2(20.0 * Math.Cos(bearing), 20.0 * Math.Sin(bearing));
@@ -41,8 +47,8 @@ public sealed class CursorSteeringTests
     [Fact]
     public void UnwindingTheWheelKeepsTurningWhileItCentres()
     {
-        // The straightening move: hold no target bearing, just run the wheel back to centre. The
-        // vehicle keeps turning as it does, which is the gradual exit an aimed arc cannot make.
+        // Centring the wheel does not stop the turn; the vehicle keeps rotating until the wheel is
+        // actually straight. That lag is what makes a corner exit gradual rather than abrupt.
         var (vehicle, mode) = Preset();
         var turning = Start(0.0, mode.MaximumWheelAngleRadians);
 
@@ -55,7 +61,7 @@ public sealed class CursorSteeringTests
     }
 
     [Fact]
-    public void AStraighteningLegEndsWithNoCurvature()
+    public void ALegLongEnoughToCentreTheWheelEndsWithNoCurvature()
     {
         var (vehicle, mode) = Preset();
         var turning = Start(0.5, mode.MaximumWheelAngleRadians);
@@ -69,10 +75,11 @@ public sealed class CursorSteeringTests
     }
 
     [Fact]
-    public void TooShortAStraighteningRunLeavesLockOn()
+    public void TooShortARunLeavesLockOn()
     {
-        // Lock-to-lock time is a real constraint: the wheel cannot centre in no distance, so a short
-        // run leaves the vehicle still turning. The command has to let the user run it out further.
+        // Lock-to-lock time is the binding constraint on these vehicles: in mode A the wheel needs
+        // 12.5 m of travel to go from centre to full lock. A short leg therefore cannot centre the
+        // wheel at all, which is why paths built from arcs alone are not drivable here.
         var (vehicle, mode) = Preset();
         var turning = Start(0.0, mode.MaximumWheelAngleRadians);
 

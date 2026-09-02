@@ -130,3 +130,10 @@ public sealed record VehicleState(
     double StationMetres);
 
 public sealed record GeneratedTrajectory(VehicleState EndState, IReadOnlyList<RouteSample> Samples);
+
+/// <summary>The outcome of one integration step: where it ended, what it drew, and how far it turned.</summary>
+/// <remarks>
+/// <paramref name="HeadingChangeRadians"/> is the raw change, not the difference of two normalised
+/// headings — a caller accumulating rotation over many steps needs it to survive the wrap at pi.
+/// </remarks>
+public sealed record AdvanceResult(VehicleState State, RouteSample Sample, double HeadingChangeRadians);

@@ -13,7 +13,7 @@ internal static class RhinoOutputWriter
     public static IReadOnlyList<Guid> Bake(
         RhinoDoc document,
         RhinoAnalysisGeometry geometry,
-        Curve? interactiveSourcePath,
+        Manoeuvre? manoeuvre,
         VehicleAccessResult result,
         IReadOnlyList<AnalysisViolation> allViolations,
         Guid sourceId,
@@ -25,9 +25,15 @@ internal static class RhinoOutputWriter
     {
         if (replaceExisting) DeleteMatching(document, sourceId);
         var ids = new List<Guid>();
-        if (interactiveSourcePath is not null)
+        if (manoeuvre is not null)
         {
-            ids.Add(AddCurve(document, interactiveSourcePath, "Paths", "Interactive rear-axle path", Color.DodgerBlue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
+            // The editable half of the output. Its grips are the waypoints, and the manoeuvre
+            // travels with it, so re-running the command against this curve rebuilds everything
+            // else from it.
+            var attributes = Attributes(document, "Control", ManoeuvreStore.ControlCurveName, Color.DodgerBlue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres);
+            attributes.SetUserString(ManoeuvreStore.ManoeuvreKey, ManoeuvreSerializer.ToJson(manoeuvre));
+            var controlId = document.Objects.AddCurve(ManoeuvreStore.ControlCurve(manoeuvre, document.ModelUnitSystem), attributes);
+            if (controlId != Guid.Empty) ids.Add(controlId);
         }
         ids.Add(AddCurve(document, geometry.RearAxleTrack, "Paths", "Rear axle track", Color.Blue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
         ids.Add(AddCurve(document, geometry.FrontAxleTrack, "WheelTracks", "Front axle track", Color.CornflowerBlue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));

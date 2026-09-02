@@ -29,7 +29,8 @@ public sealed class RRVehicleAccessSampleCommand : Command
         var baked = RhinoOutputWriter.Bake(
             document,
             geometry,
-            routeCurve,
+            // The sample drives a plain arc, not a clicked manoeuvre, so there is no control curve.
+            manoeuvre: null,
             result,
             result.Violations,
             sourceId,
