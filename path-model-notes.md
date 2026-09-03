@@ -211,6 +211,31 @@ actually follow it. A polyline therefore reports tangent discontinuities at its 
 the honest answer: no vehicle turns a right angle. Draw the centreline smooth — `InterpCrv`, or
 `Fillet` at a radius the vehicle can hold — and the report becomes meaningful.
 
+## Telling the designer what to change
+
+Reporting that an alignment is undrivable is only half an answer, and on its own it is a bad one:
+the designer has no clothoid tool in Rhino and no way to act on it. The length of transition each
+join needs is not a matter of judgement, so the tool computes it:
+
+```
+    length = speed x |atan(wheelbase / R2) - atan(wheelbase / R1)| / slewRate
+```
+
+On the customer's test road — 25 m radius corners — that is 2.64 m per arc end for PV, 4.37 m for
+REN, 5.68 m for BUS 12, all in mode A, and under 1.25 m for any of them in mode B. Only one stretch
+on that road fails: the 9.15 m tangent between two of the corners has to hold the run-out of one and
+the run-in of the next, needing 11.36 m, and only for BUS 12 at 15 km/h.
+
+That is an answer a designer can act on. It also shows why the check must be per stretch rather than
+per join: the join is never the problem, the room either side of it is.
+
+**Still unbuilt:** generating the transitioned alignment. The method is straightforward given the
+above — sample the drawn alignment's curvature profile, slew-limit it in both directions so no
+change exceeds what the wheel can do over the distance available, and integrate the result back into
+a curve. The output is a drivable alignment differing from the drawn one by the classic clothoid
+shift, which at these radii is a few centimetres. It is the natural next piece, and it would let the
+tool answer "make this drivable" rather than only "this is not".
+
 ## Rules of thumb this leaves behind
 
 1. **Model the wheel, not the curve.** Anything expressed as geometry alone will ask for curvature

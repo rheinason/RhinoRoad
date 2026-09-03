@@ -137,7 +137,7 @@ public sealed class RRVehicleAccessCommand : Command
         analysis.MinimumClearanceMetres = clearance.MinimumClearanceMetres;
         var allViolations = analysis.Violations.Concat(clearance.Violations).ToArray();
 
-        ShowReport(analysis, allViolations, geometry.Warnings);
+        ShowReport(analysis, allViolations, geometry.Warnings, route, settings.Source);
         if (settings.PreviewBeforeBaking && !PreviewAndConfirm(document, geometry, allViolations))
         {
             return Result.Cancel;
@@ -254,7 +254,9 @@ public sealed class RRVehicleAccessCommand : Command
     private static void ShowReport(
         VehicleAccessResult analysis,
         IReadOnlyList<AnalysisViolation> violations,
-        IReadOnlyList<string> warnings)
+        IReadOnlyList<string> warnings,
+        IReadOnlyList<RouteSample> route,
+        PathSourceKind source)
     {
         var mode = analysis.DrivingMode;
         RhinoApp.WriteLine(string.Empty);
@@ -266,9 +268,54 @@ public sealed class RRVehicleAccessCommand : Command
         RhinoApp.WriteLine($"Max absolute grade: {analysis.MaximumAbsoluteGrade * 100.0:0.00}%");
         if (analysis.MinimumClearanceMetres.HasValue) RhinoApp.WriteLine($"Minimum obstacle clearance: {analysis.MinimumClearanceMetres.Value:0.00} m");
 
+        // A selected alignment of arcs joined onto tangents asks the wheel to move instantly at
+        // every join, and saying so once per join tells the designer nothing they can act on. What
+        // they can act on is how long each transition has to be, and whether the stretch it has to
+        // fit into is long enough. A driven route is drivable by construction and needs none of it.
+        if (source == PathSourceKind.ExistingCurve)
+        {
+            ReportTransitions(analysis, route);
+        }
+
         foreach (var warning in warnings) RhinoApp.WriteLine($"WARNING: {warning}");
         foreach (var violation in violations) RhinoApp.WriteLine($"{violation.Kind} @ {violation.StationMetres:0.00} m: {violation.Message}");
         RhinoApp.WriteLine(string.Empty);
+    }
+
+    /// <summary>
+    /// What the drawn alignment costs the steering wheel, stretch by stretch.
+    /// </summary>
+    private static void ReportTransitions(VehicleAccessResult analysis, IReadOnlyList<RouteSample> route)
+    {
+        var runs = AlignmentTransitions.Runs(analysis.Vehicle, analysis.DrivingMode, route);
+        if (runs.Count < 2) return;
+
+        var tight = runs.Where(run => !run.Fits).ToArray();
+        if (tight.Length == 0)
+        {
+            var worst = runs.MaxBy(run => run.RequiredTransitionMetres);
+            RhinoApp.WriteLine(
+                $"Transitions: every stretch has room. The tightest is {worst!.RequiredTransitionMetres:0.00} m " +
+                $"needed in {worst.LengthMetres:0.00} m at {worst.StartStationMetres:0.0} m.");
+            return;
+        }
+
+        RhinoApp.WriteLine(
+            $"Transitions: {tight.Length} stretch(es) are too short for {analysis.Vehicle.Id} in mode " +
+            $"{analysis.DrivingMode.Id}. The wheel cannot reach the curvature drawn within them:");
+        foreach (var run in tight)
+        {
+            var shape = double.IsPositiveInfinity(run.RadiusMetres)
+                ? "straight"
+                : $"R={run.RadiusMetres:0.0} m";
+            RhinoApp.WriteLine(
+                $"  {run.StartStationMetres,8:0.0} to {run.EndStationMetres,8:0.0} m ({shape}): " +
+                $"{run.LengthMetres:0.00} m available, {run.RequiredTransitionMetres:0.00} m needed.");
+        }
+
+        RhinoApp.WriteLine(
+            "  Lengthen those stretches, ease the radius either side of them, or use a slower " +
+            "driving mode: the wheel moves at the same rate but the vehicle covers less ground.");
     }
 
     private static double Degrees(double radians) => radians * 180.0 / Math.PI;

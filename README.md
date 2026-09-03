@@ -175,6 +175,28 @@ hold — or drive it interactively instead, where every leg is feasible by const
 The tool deliberately does not smooth the line for you. What happened when it tried, with the
 measurements, is in [`path-model-notes.md`](path-model-notes.md).
 
+### Transitions
+
+An alignment drawn as arcs joined straight onto tangents asks the steering wheel to change angle
+instantly at every join, which no vehicle can do. Rather than report that as an anonymous violation
+at each join, a selected curve is broken into its constant-curvature stretches and each is priced:
+
+```
+    transition length = speed x |atan(wheelbase / R2) - atan(wheelbase / R1)| / slew rate
+```
+
+Every stretch must be long enough for the transitions at both its ends, because the wheel has to
+arrive at that curvature and then leave it. A short tangent between two bends is the usual place
+this fails, since it has to hold the run-out of one and the run-in of the next.
+
+The report names the stretches that are too short, with how much length they have and how much they
+need. The three ways out are to lengthen the stretch, ease the radius either side of it, or use a
+slower driving mode — the wheel moves at the same rate either way, but a slower vehicle covers less
+ground while it does.
+
+The numbers are small in practice. A 25 m radius needs 2.6 m of transition for PV, 4.4 m for REN and
+5.7 m for BUS 12 in mode A, and under 1.3 m for any of them in mode B.
+
 ### Editing a route
 
 An interactive run bakes its driven path as an ordinary curve on `RhinoRoad::Paths`. Edit it with any
