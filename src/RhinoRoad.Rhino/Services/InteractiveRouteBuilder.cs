@@ -128,9 +128,13 @@ internal static class InteractiveRouteBuilder
                     args.Display.DrawPolyline(new Polyline(committedPath.Take(kept)), Color.RoyalBlue, 2);
                 }
 
-                foreach (var footprint in committedFootprints)
+                // Only the stamps the ease-out keeps. Drawing all of them leaves the discarded
+                // tail's body outlines sitting in the viewport, so a corner whose overshoot has
+                // just been rewound away still looks as though it overshoots.
+                foreach (var stamp in committedFootprints)
                 {
-                    args.Display.DrawPolyline(footprint, Color.LightSteelBlue, 1);
+                    if (stamp.SampleIndex > planned.FromIndex) break;
+                    args.Display.DrawPolyline(stamp.Outline, Color.LightSteelBlue, 1);
                 }
 
                 var colour = planned.RequestedAngleExceeded ? Color.OrangeRed : Color.CornflowerBlue;
@@ -306,8 +310,14 @@ internal static class InteractiveRouteBuilder
     private static Polyline CommittedPolyline(IReadOnlyList<RouteSample> route, UnitSystem modelUnits) =>
         new(route.Select(sample => ToModelPoint(sample.PositionMetres, modelUnits)));
 
-    /// <summary>Body outlines stamped along the committed route, at the footprint reading interval.</summary>
-    private static IReadOnlyList<Polyline> CommittedFootprints(
+    /// <summary>
+    /// Body outlines stamped along the committed route, at the footprint reading interval.
+    /// </summary>
+    /// <remarks>
+    /// Each stamp remembers which sample it was taken at, so a preview that rewinds part of the
+    /// route can drop the stamps belonging to the part being given back.
+    /// </remarks>
+    private static IReadOnlyList<(Polyline Outline, int SampleIndex)> CommittedFootprints(
         IReadOnlyList<RouteSample> route,
         VehicleDefinition vehicle,
         UnitSystem modelUnits)
@@ -319,10 +329,11 @@ internal static class InteractiveRouteBuilder
         var routeLength = route.Count == 0 ? 0.0 : route[^1].StationMetres;
         var intervalMetres = Math.Max(2.0, routeLength / maximumStamps);
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
-        var stamps = new List<Polyline>();
+        var stamps = new List<(Polyline Outline, int SampleIndex)>();
         var nextStation = 0.0;
-        foreach (var sample in route)
+        for (var index = 0; index < route.Count; index++)
         {
+            var sample = route[index];
             if (sample.StationMetres < nextStation) continue;
             nextStation = sample.StationMetres + intervalMetres;
             var heading = Geometry2D.NormalizeAngle(
@@ -332,7 +343,7 @@ internal static class InteractiveRouteBuilder
                 .Select(point => new Point3d(point.X * scale, point.Y * scale, sample.PositionMetres.Z * scale))
                 .ToList();
             points.Add(points[0]);
-            stamps.Add(new Polyline(points));
+            stamps.Add((new Polyline(points), index));
         }
 
         return stamps;
