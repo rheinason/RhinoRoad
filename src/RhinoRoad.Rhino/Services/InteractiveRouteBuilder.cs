@@ -30,6 +30,18 @@ internal static class InteractiveRouteBuilder
     /// <summary>Below this much lock the vehicle is straight enough that there is nothing to ease.</summary>
     private const double StraightEnoughRadians = 1e-3;
 
+    /// <summary>
+    /// How much less lock the next point must ask for before the corner counts as being left.
+    /// </summary>
+    /// <remarks>
+    /// Measured against a 571 m test road of 25 m radius corners, 3 m wide, driven by clicking along
+    /// its centreline. Easing on every click instead put the worst case 27 m off the road; easing
+    /// only on a genuine exit brings the same case to 3 m, and PV to 1.3 m with nothing outside the
+    /// road at all. Below about 0.5 the exits are missed and the error grows again, so the useful
+    /// range is narrow and this sits in the middle of it.
+    /// </remarks>
+    private const double ExitingFraction = 0.85;
+
     private sealed record HistoryEntry(VehicleState State, RouteSample[] Route, int LegStartIndex);
 
     /// <summary>A leg as previewed: what it rewinds to, what it adds, and where it leaves the vehicle.</summary>
@@ -232,13 +244,22 @@ internal static class InteractiveRouteBuilder
         var bearing = Math.Atan2(
             cursorMetres.Y - state.RearAxleCentreMetres.Y,
             cursorMetres.X - state.RearAxleCentreMetres.X);
+        var controls = RateLimitedTrajectoryGenerator.ControlsFromCursor(vehicle, mode, state, cursorMetres);
+
+        // Only ease when the next point actually asks for less turn than the wheel is already
+        // holding. Easing always ends with the wheel centred, so easing towards a point that still
+        // wants most of the current lock straightens the vehicle out in the middle of a bend and
+        // then turns it back in -- which reads as the exit being given back far too much. Halfway
+        // round a corner the right answer is to keep turning.
         var turning = Math.Abs(state.SteeringAngleRadians) > StraightEnoughRadians;
+        var leavingTheCorner = Math.Abs(controls.TargetSteeringRadians)
+            < Math.Abs(state.SteeringAngleRadians) * ExitingFraction;
 
         var fromIndex = route.Count - 1;
         var samples = new List<RouteSample>();
         var current = state;
 
-        if (turning)
+        if (turning && (finishing || leavingTheCorner))
         {
             var eased = HeadingLegGenerator.EaseOntoHeading(
                 vehicle, mode, route, legStartIndex, bearing, 0.10);
@@ -253,13 +274,13 @@ internal static class InteractiveRouteBuilder
 
         if (finishing) return new PlannedLeg(fromIndex, samples, current, false);
 
-        // Then aim at the point. With the exit already eased onto the bearing towards it, this is
-        // nearly a straight run, so it adds almost none of the doubling an aimed arc otherwise would.
-        var controls = RateLimitedTrajectoryGenerator.ControlsFromCursor(vehicle, mode, current, cursorMetres);
+        // Then aim at the point. Where the exit was eased first, the vehicle is already pointing
+        // near it, so this adds almost none of the doubling an aimed arc otherwise would.
+        var aim = RateLimitedTrajectoryGenerator.ControlsFromCursor(vehicle, mode, current, cursorMetres);
         var leg = new RateLimitedTrajectoryGenerator()
-            .GenerateLeg(vehicle, mode, current, controls.TargetSteeringRadians, controls.TravelDistanceMetres, 0.10);
+            .GenerateLeg(vehicle, mode, current, aim.TargetSteeringRadians, aim.TravelDistanceMetres, 0.10);
         samples.AddRange(leg.Samples.Skip(1));
-        return new PlannedLeg(fromIndex, samples, leg.EndState, controls.RequestedAngleExceeded);
+        return new PlannedLeg(fromIndex, samples, leg.EndState, aim.RequestedAngleExceeded);
     }
 
     /// <summary>

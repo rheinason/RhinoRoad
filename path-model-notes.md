@@ -70,6 +70,30 @@ An earlier attempt had `Straighten` take a *distance* — run the wheel out this
 finishing direction to fall out of the arithmetic and so overshot in its own right. A control that
 exists to cure an overshoot must not have one.
 
+**When the exit is taken.** Only when the next point asks for materially less lock than the wheel
+is already holding — below 0.85 of it. Easing always finishes with the wheel centred, so easing
+towards a point that still wants most of the current lock straightens the vehicle in the middle of a
+bend and then turns it back in. Halfway round a corner the right answer is to keep turning.
+
+Measured against a customer test road: 571 m, four 25 m radius corners, 3 m wide, driven by clicking
+along its centreline.
+
+| clicks every 20 m | never ease | ease every click | ease only on a real exit |
+| --- | --- | --- | --- |
+| PV max deviation | 5.34 m | 2.87 m | **1.31 m** (at 15 m clicks, nothing off the road) |
+| REN max deviation | 30.60 m | 26.87 m | **3.36 m** |
+| BUS12 max deviation | 122.72 m | 8.20 m | **4.92 m** |
+
+Never easing diverges outright at close click spacing — REN reached 2.5 km off a 571 m road — so the
+ease is doing real work; it was simply being applied when the vehicle was still cornering.
+
+**What this method cannot do.** Even at its best it is metres, not centimetres, and only PV stays
+inside a 3 m road. Clicking legs has no mechanism that pulls the vehicle back towards an intended
+line: each leg starts wherever the last one ended, and the rate limit guarantees the vehicle lags
+entering every corner. That is fine for authoring a manoeuvre where no line exists yet, and wrong for
+checking a road that has already been designed. For that, select the alignment and let the checks
+report against it — see rule 3 at the end.
+
 Measured: PV mode A, target 20 m away.
 
 | bearing clicked | 5° | 15° | 30° | 45° | 60° |

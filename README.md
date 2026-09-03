@@ -141,7 +141,13 @@ reconstruct today; it must never shrink.
    drawn as a faint dotted line while you aim, so the reshaping is visible as it happens.
 
    Rewinding never reaches back past the start of the leg in hand, or through a change of travel
-   direction, so an earlier decision cannot be undone behind your back.
+   direction, so an earlier decision cannot be undone behind your back. It also only happens when
+   the next point genuinely asks for less turn than the wheel is holding: halfway round a bend the
+   right answer is to keep turning, not to straighten and turn back in.
+
+   Clicking legs is for authoring a manoeuvre where no line exists yet. To check a road that has
+   already been designed, select its centreline and use `ExistingCurve` — the checks then report
+   against the line as drawn instead of against a route improvised towards it.
 
    `Finish` ends the route instead of continuing it: pick the direction to end up travelling in, and
    the vehicle eases onto exactly that heading with the wheel centred. Switch back with `Aim`.
