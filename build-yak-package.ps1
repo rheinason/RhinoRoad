@@ -87,8 +87,9 @@ authors:
 description: >
   Rigid-vehicle access screening for Rhino 8. Drive a vehicle along a path or follow an existing
   curve, and get swept and clearance envelopes, wheel tracks and feasibility checks against the
-  Danish Vejdirektoratet driving modes. Vehicle presets are certified against the official
-  koerekurver drawings; each preset records whether it is reference-validated.
+  Danish Vejdirektoratet driving modes. The PV preset is reference-validated against the official
+  koerekurver drawings; REN and BUS 12 are transcribed from the published source. Each preset
+  records its own validation status, and no result is presented as certified AutoTURN output.
 url: https://github.com/rheinason/RhinoRoad
 keywords:
 - rhinoroad
