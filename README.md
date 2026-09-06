@@ -1,8 +1,24 @@
 # RhinoRoad
 
 RhinoRoad is an internal Rhino 8 plugin for architect-friendly rigid-vehicle access screening.
-It analyzes a rear-axle midpoint route, creates swept and clearance envelopes, checks preliminary
-road geometry, and reports steering and grade feasibility.
+Drive a complete journey through a site, check it against selected boundaries and obstacles, and
+measure the space it needs. Consecutive bends retain the vehicle's steering state. Highway design,
+automatic route finding, and automatic layout resizing are outside the current product scope.
+
+## Commands
+
+| Command | Action |
+| --- | --- |
+| `RRRoad` | Create a road access journey; configure a selected saved road. |
+| `RREditRoad` | Edit points with a live sweep, or choose Settings, StartHeading, StartDirection, or Control. |
+| `RRUpdateRoad` | Save the recalculated sweep, rerun checks, and refresh linked sizing results. |
+| `RRInspectRoad` | Review the selected road's checks and measurements. |
+| `RRMeasureRoad` | Dimension a section through the required clearance footprint. |
+| `RRCombineRoads` | Combine the footprints of separate required movements. |
+
+`-RRRoad` provides command-line settings for macros. The previous `RR…VehicleAccess` command names still work
+as hidden compatibility commands. `RRReferenceCertify` and `RRVehicleAccessSample` are also hidden
+from autocomplete; developers can invoke them by typing their full names.
 
 ## Build and install
 
@@ -60,7 +76,7 @@ the repository, and it affects debugging only — never the build.
 For a quick visual check, open `samples\RhinoRoad-vehicle-access.3dm`. To regenerate it from the
 installed build, run `RRVehicleAccessSample` in an empty metric document and save the result.
 
-## Reference certification
+## Reference certification (developers)
 
 Run `RRReferenceCertify` in an empty metric document to repeat the official-DWG comparison matrix.
 It writes `reference\certification\reference-certification.json`; the checked-in report is covered by
@@ -114,10 +130,13 @@ reconstruction can be replayed against real drawing geometry in milliseconds, di
 regression-fenced by name. `CertificationFixtureTests` keeps a ratchet list of the cases that
 reconstruct today; it must never shrink.
 
-## Use `RRVehicleAccess`
+## Use `RRRoad`
 
-1. Select the rear-axle midpoint curve, if you already have one, and run `RRVehicleAccess`.
-2. In the dialog, set vehicle, mode, path source, clearance, road-edge widths, and optional checks.
+1. Run `RRRoad` to drive a journey through the site.
+2. Choose vehicle, mode, clearance, and optional site constraints. Interactive driving and a
+   clearance footprint are the defaults. Fixed-width corridors and output options are under
+   **Advanced geometry and output**. Existing-curve analysis still treats the selected curve as
+   the rear-axle path, not as an approximate instruction for a driver.
 3. Press `Continue`.
 4. For `ExistingCurve`, select the curve — skipped when exactly one curve was selected before the
    command started. Its parameter direction is the travel direction; choose `Reverse` when the
@@ -126,6 +145,13 @@ reconstruct today; it must never shrink.
    legs. Use `Reverse`, `Undo`, and Enter to finish. Requested turns beyond wheel lock are clamped.
    The prompt shows how much lock is currently on, and a dotted ray marks the heading each leg
    would end on.
+
+   While aiming, blue outlines show the body sweep and green outlines show the clearance footprint
+   of the complete proposed journey. The retained body boundary is darker; the discarded tail is
+   dotted. A steering-limit message means the driven leg cannot follow the requested aim exactly.
+   Preview uses the same polygon union and clearance offset as final output, caching retained
+   geometry. Its extra boundary simplification is regression-tested to stay within 4 mm of the
+   final sweep in the multi-turn REN scenario.
 
    Each click does two jobs. It says where to go next, and **the direction towards it says which
    way the vehicle should be travelling when it leaves the corner it is in**. That is what lets the
@@ -157,11 +183,14 @@ reconstruct today; it must never shrink.
    and changes direction.
 6. Obstacle curves and closed allowed-area boundaries are only asked for when their checks are
    ticked; both are off by default.
-7. The PASS/FAIL report is written to the command line and the result is baked. Tick
+7. The movement-fit report is written to the command line and the result is baked. With no site
+   references selected, it says **Sweep generated — site fit not checked**. A successful check
+   applies to the tested movement and selected constraints; a failed movement does not establish
+   that access is impossible. Tick
    *Preview and confirm before baking* to stop at a transient viewport preview first.
 
 A default run therefore asks for at most one thing after the dialog, and nothing at all when the
-path was pre-selected. `-RRVehicleAccess` keeps the option prompt for scripting, with a `Preview`
+path was pre-selected. `-Road` keeps the option prompt for scripting, with a `Preview`
 toggle matching the dialog's.
 
 ## Selecting a drawn curve
@@ -199,18 +228,84 @@ The numbers are small in practice. A 25 m radius needs 2.6 m of transition for P
 
 ### Editing a route
 
-An interactive run bakes its driven path as an ordinary curve on `RhinoRoad::Paths`. Edit it with any
-Rhino tool, select it, and run `RRVehicleAccess` again: it is analysed as a selected curve, and
-because it carries the id this run's output was tagged with, the re-run replaces the previous output
-rather than stacking another set beside it.
+An interactive run keeps the sparse clicks as an ordinary polyline on `RhinoRoad::Controls`. Use
+**Edit points** in the inspector, or select the control line and run `PointsOn` (`F10`). Drag its
+points to see a live replay of the path, body sweep, and clearance footprint. The affected path is
+teal; the previous path is dotted grey. The preview includes any reshaping of the preceding bend
+and warns when the steering limit prevents an aim from being followed exactly.
 
-Generated objects are grouped and placed below `RhinoRoad` layers. Metadata records the source
-GUID, analysis ID, vehicle/version, validation status, mode, clearance, and fixed widths. Re-running
-with `ReplaceExisting=Yes` replaces only RhinoRoad objects linked to the same existing source curve.
+Replay runs off the drawing thread. While it catches up with a moving cursor, the previous preview
+is faded and labelled as the previous position. Esc cancels the native point move; no preview
+changes are written to the drawing. After accepting the point move, the preview remains until
+Update. This live feedback applies to saved click-to-drive controls; existing-curve analysis still
+uses its original curve and explicit Update workflow.
+
+Select the control line (or any generated part of the analysis) and run `RRUpdateRoad` to
+save the result and rerun the site checks. Live editing previews geometry; the inspector's previous
+check results remain saved results until Update. Update replays the same rewind-aware driving logic
+with the saved vehicle, road, clearance, footprint, grade, obstacle, and boundary settings; it does
+not reopen the setup dialog. The control line keeps its object id and sits outside the generated
+output group.
+
+Run `RRRoad` against a saved source when you do want to change its setup. The dialog is
+preloaded from the source and the accepted settings are used for the rerun. Choose **Reselect
+obstacle and boundary curves** when the checks should use a different reference set. Existing
+user-supplied curves use the same workflow and remain the editable source geometry.
+
+Generated objects are grouped and placed below `RhinoRoad` layers. The source stores a versioned
+`RhinoRoad.AccessDefinition`; every related object carries the same stable source id and a role.
+Update creates and validates a complete replacement before removing the previous generated set. If
+a saved obstacle or boundary has been deleted, Update stops, identifies the missing object, and
+leaves the previous result in place so it can be repaired through Configure.
+
+### Inspecting an analysis
+
+Select any source, control, track, envelope, footprint, or warning marker and run
+`RRInspectRoad`. One modeless inspector is kept per document. It shows the overall status,
+checks, measurements, grouped problem station ranges, and profiles for steering angle, steering
+rate, clearance/road margin, and grade. Hover the profile to see the corresponding vehicle pose;
+click a failed check or problem area to zoom to it. Display toggles control temporary viewport
+overlays without changing the baked drawing. The control-intent overlay labels the initial travel
+direction, reversals, and Finish control so the non-positional intent is visible while reviewing.
+
+Editing the source or a referenced road/obstacle marks the inspector **Out of date**. Press Update
+when ready; nothing recomputes or rebakes automatically.
+
+### Editing driving intent
+
+Use **Driving intent** in the inspector or `RREditRoad` to change the starting heading,
+starting travel direction, or an individual control's direction or Aim/Finish intent. Pick near a
+numbered control to select it. Finish is available only on the last control. Changing the starting
+direction preserves the existing reversal pattern; changing a single control changes that leg.
+Accepted intent edits replay and update the journey. The command's **Points** option (also the
+Enter default) enables live point editing. Grip edits preview immediately and wait for Update to bake.
+
+### Measuring bends and junctions
+
+- `RRMeasureRoad`: select one or more saved journeys (or a combined footprint), then pick
+  a straight section across their clearance footprint. Both endpoints must be beyond the occupied
+  area. Each occupied interval gets an ordinary Rhino linear dimension using the document's current
+  dimension style. Gaps and islands remain unmeasured. Sections are evaluated in World XY.
+- `RRCombineRoads`: select at least two saved journeys to produce their combined clearance
+  footprint, including disconnected areas and holes. Use this for the required movements through a
+  T or crossroads. It represents separate journeys, not simultaneous passing. Each journey retains
+  its own fit result and vehicle validation status.
+- Select any part of a sizing result and run `RRInspectRoad` to read its status and individual
+  movement results in the command history. `RRUpdateRoad` refreshes the selected sizing result.
+
+Sizing objects live on `RhinoRoad::Sizing` and retain stable journey IDs and section geometry.
+Changed or missing dependencies mark their names **Out of date** and colour them orange. Updating a
+journey also refreshes its linked sizing results when all required journeys are current. If another
+journey is stale, update that journey first. A failed update retains the previous sizing output.
+Section endpoints can be grip-edited and refreshed through Update. Saved definitions persist in the
+Rhino document; existing journey definitions keep their original schema.
+
+The footprint and dimensions describe the space required by the tested journeys. They are not a
+search for the globally smallest possible bend or junction and do not propose kerb geometry.
 
 ## Meaning of the outputs
 
-- **Driven rear-axle path:** what an interactive run drove, kept editable and re-runnable.
+- **Vehicle access controls:** the sparse editable start/Aim/Finish intent for an interactive run.
 - **Rear/front axle tracks:** kinematic reference curves.
 - **Vehicle footprints:** the body outline stamped along the route at the `FootprintInterval`
   station spacing; set the interval to 0 to omit them.

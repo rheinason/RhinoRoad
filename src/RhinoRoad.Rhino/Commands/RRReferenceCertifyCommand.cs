@@ -6,7 +6,7 @@ using RhinoRoad.Rhino.Services;
 namespace RhinoRoad.Rhino.Commands;
 
 [Guid("55E12960-557A-4D9B-A7F1-A6F5D2963485")]
-[CommandStyle(Style.ScriptRunner)]
+[CommandStyle(Style.ScriptRunner | Style.Hidden)]
 public sealed class RRReferenceCertifyCommand : Command
 {
     public override string EnglishName => "RRReferenceCertify";

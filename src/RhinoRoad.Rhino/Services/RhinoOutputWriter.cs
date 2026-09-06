@@ -13,7 +13,6 @@ internal static class RhinoOutputWriter
     public static IReadOnlyList<Guid> Bake(
         RhinoDoc document,
         RhinoAnalysisGeometry geometry,
-        Curve? interactivePath,
         VehicleAccessResult result,
         IReadOnlyList<AnalysisViolation> allViolations,
         Guid sourceId,
@@ -23,62 +22,50 @@ internal static class RhinoOutputWriter
         double rightWidthMetres,
         bool replaceExisting)
     {
-        if (replaceExisting) DeleteMatching(document, sourceId);
         var ids = new List<Guid>();
-        if (interactivePath is not null)
+        try
         {
-            // The driven path, kept as an ordinary curve. Selecting it and running the command
-            // again analyses it as a selected line, and because it carries the id this run's
-            // output was tagged with, that re-run replaces rather than stacks.
-            ids.Add(AddCurve(document, interactivePath, "Paths", "Driven rear-axle path", Color.DodgerBlue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
-        }
-        ids.Add(AddCurve(document, geometry.RearAxleTrack, "Paths", "Rear axle track", Color.Blue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
-        ids.Add(AddCurve(document, geometry.FrontAxleTrack, "WheelTracks", "Front axle track", Color.CornflowerBlue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
-        if (geometry.BodyEnvelope is not null)
-        {
-            ids.Add(AddCurve(document, geometry.BodyEnvelope, "Swept", "Body swept envelope", Color.DarkOrange, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
-        }
-        if (geometry.ClearanceEnvelope is not null)
-        {
-            ids.Add(AddCurve(document, geometry.ClearanceEnvelope, "Clearance", "Clearance envelope", Color.OrangeRed, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
-        }
-        foreach (var hole in geometry.BodyEnvelopeHoles)
-        {
-            ids.Add(AddCurve(document, hole, "Swept", "Body swept envelope hole", Color.DarkOrange, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
-        }
-        foreach (var hole in geometry.ClearanceEnvelopeHoles)
-        {
-            ids.Add(AddCurve(document, hole, "Clearance", "Clearance envelope hole", Color.OrangeRed, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
-        }
-        foreach (var footprint in geometry.Footprints)
-        {
-            ids.Add(AddCurve(document, footprint, "Footprints", "Vehicle footprint", Color.SlateGray, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
-        }
-        foreach (var edge in geometry.FixedRoadEdges)
-        {
-            ids.Add(AddCurve(document, edge, "RoadEdges", "Fixed-width preliminary road edge", Color.ForestGreen, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
-        }
+            ids.Add(AddCurve(document, geometry.RearAxleTrack, "Paths", "Rear axle track", Color.Blue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
+            ids.Add(AddCurve(document, geometry.FrontAxleTrack, "WheelTracks", "Front axle track", Color.CornflowerBlue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
+            if (geometry.BodyEnvelope is not null)
+                ids.Add(AddCurve(document, geometry.BodyEnvelope, "Swept", "Body swept envelope", Color.DarkOrange, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
+            if (geometry.ClearanceEnvelope is not null)
+                ids.Add(AddCurve(document, geometry.ClearanceEnvelope, "Clearance", "Clearance envelope", Color.OrangeRed, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
+            foreach (var hole in geometry.BodyEnvelopeHoles)
+                ids.Add(AddCurve(document, hole, "Swept", "Body swept envelope hole", Color.DarkOrange, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
+            foreach (var hole in geometry.ClearanceEnvelopeHoles)
+                ids.Add(AddCurve(document, hole, "Clearance", "Clearance envelope hole", Color.OrangeRed, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
+            foreach (var footprint in geometry.Footprints)
+                ids.Add(AddCurve(document, footprint, "Footprints", "Vehicle footprint", Color.SlateGray, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
+            foreach (var edge in geometry.FixedRoadEdges)
+                ids.Add(AddCurve(document, edge, "RoadEdges", "Fixed-width preliminary road edge", Color.ForestGreen, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
 
-        var modelUnitsPerMetre = RhinoMath.UnitScale(UnitSystem.Meters, document.ModelUnitSystem);
-        foreach (var violation in allViolations)
-        {
-            var attributes = Attributes(document, "Warnings", violation.Kind.ToString(), Color.Red, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres);
-            attributes.SetUserString("RhinoRoad.Message", violation.Message);
-            var id = document.Objects.AddPoint(new Point3d(
-                violation.PositionMetres.X * modelUnitsPerMetre,
-                violation.PositionMetres.Y * modelUnitsPerMetre,
-                violation.PositionMetres.Z * modelUnitsPerMetre), attributes);
-            if (id != Guid.Empty) ids.Add(id);
-        }
+            var modelUnitsPerMetre = RhinoMath.UnitScale(UnitSystem.Meters, document.ModelUnitSystem);
+            foreach (var violation in allViolations)
+            {
+                var attributes = Attributes(document, "Warnings", violation.Kind.ToString(), Color.Red, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres);
+                attributes.SetUserString("RhinoRoad.Message", violation.Message);
+                var id = document.Objects.AddPoint(new Point3d(
+                    violation.PositionMetres.X * modelUnitsPerMetre,
+                    violation.PositionMetres.Y * modelUnitsPerMetre,
+                    violation.PositionMetres.Z * modelUnitsPerMetre), attributes);
+                if (id == Guid.Empty) throw new InvalidOperationException("Rhino could not create a warning marker.");
+                ids.Add(id);
+            }
 
-        var validIds = ids.Where(id => id != Guid.Empty).ToArray();
-        if (validIds.Length > 0)
-        {
+            var validIds = ids.Where(id => id != Guid.Empty).ToArray();
+            if (validIds.Length == 0) throw new InvalidOperationException("Rhino did not create any output objects.");
             var groupIndex = document.Groups.Add($"RhinoRoad {result.Vehicle.Id} {result.DrivingMode.Id} {analysisId[..8]}");
             document.Groups.AddToGroup(groupIndex, validIds);
+            if (replaceExisting) DeleteMatching(document, sourceId, analysisId);
+            document.Views.Redraw();
+            return validIds;
         }
-        document.Views.Redraw();
-        return validIds;
+        catch
+        {
+            foreach (var id in ids.Where(id => id != Guid.Empty)) document.Objects.Delete(id, quiet: true);
+            throw;
+        }
     }
 
     private static Guid AddCurve(
@@ -95,7 +82,9 @@ internal static class RhinoOutputWriter
         double rightWidth)
     {
         var attributes = Attributes(document, childLayer, name, color, result, sourceId, analysisId, clearance, leftWidth, rightWidth);
-        return document.Objects.AddCurve(curve, attributes);
+        var id = document.Objects.AddCurve(curve, attributes);
+        if (id == Guid.Empty) throw new InvalidOperationException($"Rhino could not create {name}.");
+        return id;
     }
 
     private static ObjectAttributes Attributes(
@@ -116,6 +105,7 @@ internal static class RhinoOutputWriter
         attributes.ColorSource = ObjectColorSource.ColorFromLayer;
         attributes.SetUserString("RhinoRoad.AnalysisId", analysisId);
         attributes.SetUserString("RhinoRoad.SourceId", sourceId.ToString("D"));
+        attributes.SetUserString(AccessDefinitionStore.RoleKey, AccessDefinitionStore.GeneratedRole);
         attributes.SetUserString("RhinoRoad.Vehicle", result.Vehicle.Id);
         attributes.SetUserString("RhinoRoad.VehicleVersion", result.Vehicle.Version);
         attributes.SetUserString("RhinoRoad.ValidationStatus", result.Vehicle.ValidationStatus.ToString());
@@ -141,11 +131,14 @@ internal static class RhinoOutputWriter
         return document.Layers.Add(new Layer { Name = childName, ParentLayerId = rootId, Color = color });
     }
 
-    private static void DeleteMatching(RhinoDoc document, Guid sourceId)
+    private static void DeleteMatching(RhinoDoc document, Guid sourceId, string keepAnalysisId)
     {
         var sourceText = sourceId.ToString("D");
         var matches = document.Objects.GetObjectList(ObjectType.AnyObject)
             .Where(obj => string.Equals(obj.Attributes.GetUserString("RhinoRoad.SourceId"), sourceText, StringComparison.OrdinalIgnoreCase))
+            .Where(obj => !string.Equals(obj.Attributes.GetUserString("RhinoRoad.AnalysisId"), keepAnalysisId, StringComparison.OrdinalIgnoreCase))
+            .Where(obj => !string.Equals(obj.Attributes.GetUserString(AccessDefinitionStore.RoleKey), AccessDefinitionStore.SourceControlRole, StringComparison.OrdinalIgnoreCase))
+            .Where(obj => !string.Equals(obj.Attributes.GetUserString(AccessDefinitionStore.RoleKey), AccessDefinitionStore.SourceCurveRole, StringComparison.OrdinalIgnoreCase))
             .Select(obj => obj.Id)
             .ToArray();
         foreach (var id in matches) document.Objects.Delete(id, quiet: true);

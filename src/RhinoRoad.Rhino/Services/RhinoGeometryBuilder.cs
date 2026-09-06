@@ -182,14 +182,16 @@ internal static class RhinoGeometryBuilder
         {
             var obstaclePoints = SampleCurve(obstacle, modelUnits, 0.10);
             minimum = Math.Min(minimum, Geometry2D.MinimumDistance(bodyPoints, obstaclePoints, true, obstacle.IsClosed));
-            if (IntersectsOrContains(clearanceEnvelope, obstacle, tolerance))
+            if (AccessFootprint.ConflictPoint(geometry.ClearanceRegion, obstaclePoints, obstacle.IsClosed) is { } conflict)
             {
-                var location = obstacle.PointAtStart;
+                var bodyConflict = AccessFootprint.ConflictPoint(geometry.BodyRegion, obstaclePoints, obstacle.IsClosed) is not null;
+                if (bodyConflict) minimum = 0.0;
                 violations.Add(new AnalysisViolation(
                     ViolationKind.ObstacleClearance,
                     0.0,
-                    new Point3(location.X * metresPerModelUnit, location.Y * metresPerModelUnit, location.Z * metresPerModelUnit),
-                    $"The {clearanceMetres:0.00} m clearance envelope intersects an obstacle."));
+                    new Point3(conflict.X, conflict.Y, bodyEnvelope.PointAtStart.Z * metresPerModelUnit),
+                    bodyConflict ? "The vehicle body sweep intersects an obstacle." :
+                        $"The body clears this obstacle, but the {clearanceMetres:0.00} m clearance allowance does not fit."));
             }
         }
 
@@ -200,7 +202,7 @@ internal static class RhinoGeometryBuilder
             minimum = Math.Min(minimum, Geometry2D.MinimumDistance(bodyPoints, boundaryPoints));
         }
         if (boundaryPolygons.Length > 0 &&
-            TryFindOutside(clearancePoints, point => boundaryPolygons.Any(polygon => Geometry2D.Contains(polygon, point)), out var outsidePoint))
+            AccessFootprint.Outside(geometry.ClearanceRegion, boundaryPolygons) is { } outsidePoint)
         {
             violations.Add(new AnalysisViolation(
                 ViolationKind.OutsideAllowedArea,
@@ -212,7 +214,7 @@ internal static class RhinoGeometryBuilder
         if (fixedRoadBoundary is not null)
         {
             var roadPolygon = geometry.RoadCorridorRegion?.OuterBoundary ?? SampleCurve(fixedRoadBoundary, modelUnits, 0.10);
-            if (TryFindOutside(clearancePoints, candidate => Geometry2D.Contains(roadPolygon, candidate), out var point))
+            if (AccessFootprint.Outside(geometry.ClearanceRegion, [roadPolygon]) is { } point)
             {
                 violations.Add(new AnalysisViolation(
                     ViolationKind.FixedWidthRoad,

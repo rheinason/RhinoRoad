@@ -7,7 +7,7 @@ using RhinoRoad.Core;
 namespace RhinoRoad.Rhino.UI;
 
 /// <summary>
-/// Configuration for <c>RRVehicleAccess</c>.
+/// Configuration for <c>Road</c>.
 /// </summary>
 /// <remarks>
 /// The command-line form asks thirteen questions on one line and answers none. The thing a designer
@@ -40,16 +40,17 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
     private readonly CheckBox _checkObstacles = new() { Text = "Obstacle curves" };
     private readonly CheckBox _checkAllowedArea = new() { Text = "Allowed-area boundaries" };
     private readonly CheckBox _checkGrade = new() { Text = "Maximum grade" };
+    private readonly CheckBox _reselectReferences = new() { Text = "Reselect obstacle and boundary curves" };
     private readonly CheckBox _replaceExisting = new() { Text = "Replace previous result for the same path" };
     private readonly CheckBox _previewBeforeBaking = new() { Text = "Preview and confirm before baking" };
 
     // Narrow is the whole point of the resize, so the width survives to the next run.
     private static Size? _lastClientSize;
 
-    private VehicleAccessDialog(VehicleCatalog catalog, VehicleAccessSettings settings)
+    private VehicleAccessDialog(VehicleCatalog catalog, VehicleAccessSettings settings, bool configuringSavedSource)
     {
         _catalog = catalog;
-        Title = "Vehicle Access";
+        Title = configuringSavedSource ? "Road settings" : "Road";
         Padding = 12;
         Resizable = true;
         this.UseRhinoStyle();
@@ -63,7 +64,7 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         _footprintMode.Items.Add(new ListItem { Text = "First and last only", Key = nameof(FootprintMode.EndsOnly) });
         _footprintMode.Items.Add(new ListItem { Text = "Every interval", Key = nameof(FootprintMode.AtInterval) });
 
-        _source.Items.Add(new ListItem { Text = "Select an existing curve", Key = nameof(PathSourceKind.ExistingCurve) });
+        _source.Items.Add(new ListItem { Text = "Existing rear-axle path (advanced)", Key = nameof(PathSourceKind.ExistingCurve) });
         _source.Items.Add(new ListItem { Text = "Drive the vehicle interactively", Key = nameof(PathSourceKind.Interactive) });
         _direction.Items.Add(new ListItem { Text = "Forward", Key = nameof(TravelDirection.Forward) });
         _direction.Items.Add(new ListItem { Text = "Reverse", Key = nameof(TravelDirection.Reverse) });
@@ -78,6 +79,9 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         _checkGrade.CheckedChanged += (_, _) => _maximumGrade.Enabled = _checkGrade.Checked == true;
         _footprintMode.SelectedKeyChanged += (_, _) =>
             _footprintInterval.Enabled = _footprintMode.SelectedKey == nameof(FootprintMode.AtInterval);
+        _checkObstacles.CheckedChanged += (_, _) => RefreshReferenceChoice();
+        _checkAllowedArea.CheckedChanged += (_, _) => RefreshReferenceChoice();
+        _reselectReferences.Visible = configuringSavedSource;
 
         DefaultButton = new Button { Text = "Continue" };
         DefaultButton.Click += (_, _) => Close(true);
@@ -87,6 +91,20 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         if (_lastClientSize is { } remembered) ClientSize = remembered;
         Closing += (_, _) => _lastClientSize = ClientSize;
 
+        var advanced = new StackLayout
+        {
+            Visible = false,
+            Spacing = 8,
+            Items =
+            {
+                Group("Fixed-width corridor", Fields(("Road edges", _edgeMethod),
+                    ("Left width (m)", _leftWidth), ("Right width (m)", _rightWidth))),
+                Group("Output", Stretched(Fields(("Vehicle footprints", _footprintMode),
+                    ("Interval (m)", _footprintInterval)), _previewBeforeBaking, _replaceExisting))
+            }
+        };
+        var showAdvanced = new CheckBox { Text = "Advanced geometry and output" };
+        showAdvanced.CheckedChanged += (_, _) => advanced.Visible = showAdvanced.Checked == true;
         var body = new StackLayout
         {
             Spacing = 10,
@@ -101,14 +119,11 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
                     Group("Path", Fields(
                         ("Source", _source),
                         ("Travel direction", _direction))),
-                    Group("Clearance and road", Fields(
-                        ("Clearance (m)", _clearance),
-                        ("Road edges", _edgeMethod),
-                        ("Left width (m)", _leftWidth),
-                        ("Right width (m)", _rightWidth))),
-                    Group("Checks", Stretched(
+                    Group("Clearance", Fields(("Allowance (m)", _clearance))),
+                    Group("Site constraints", Stretched(
                         _checkObstacles,
                         _checkAllowedArea,
+                        _reselectReferences,
                         new StackLayout
                         {
                             Orientation = Orientation.Horizontal,
@@ -116,12 +131,8 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
                             VerticalContentAlignment = VerticalAlignment.Center,
                             Items = { _checkGrade, new Label { Text = "max %" }, _maximumGrade }
                         })),
-                    Group("Output", Stretched(
-                        Fields(
-                            ("Vehicle footprints", _footprintMode),
-                            ("Interval (m)", _footprintInterval)),
-                        _previewBeforeBaking,
-                        _replaceExisting)),
+                    showAdvanced,
+                    advanced,
             }
         };
 
@@ -272,10 +283,12 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         _maximumGrade.Value = settings.MaximumGradePercent;
         _checkObstacles.Checked = settings.CheckObstacles;
         _checkAllowedArea.Checked = settings.CheckAllowedArea;
+        _reselectReferences.Checked = settings.ReselectReferences;
         _checkGrade.Checked = settings.CheckMaximumGrade;
         _replaceExisting.Checked = settings.ReplaceExisting;
         _previewBeforeBaking.Checked = settings.PreviewBeforeBaking;
         _maximumGrade.Enabled = settings.CheckMaximumGrade;
+        RefreshReferenceChoice();
     }
 
     private void Harvest(VehicleAccessSettings settings)
@@ -293,17 +306,25 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         settings.MaximumGradePercent = _maximumGrade.Value;
         settings.CheckObstacles = _checkObstacles.Checked == true;
         settings.CheckAllowedArea = _checkAllowedArea.Checked == true;
+        settings.ReselectReferences = _reselectReferences.Checked == true;
         settings.CheckMaximumGrade = _checkGrade.Checked == true;
         settings.ReplaceExisting = _replaceExisting.Checked == true;
         settings.PreviewBeforeBaking = _previewBeforeBaking.Checked == true;
     }
 
     /// <summary>Shows the dialog, writing the chosen values back into <paramref name="settings"/>.</summary>
-    public static bool Show(RhinoDoc document, VehicleCatalog catalog, VehicleAccessSettings settings)
+    public static bool Show(
+        RhinoDoc document,
+        VehicleCatalog catalog,
+        VehicleAccessSettings settings,
+        bool configuringSavedSource = false)
     {
-        var dialog = new VehicleAccessDialog(catalog, settings);
+        var dialog = new VehicleAccessDialog(catalog, settings, configuringSavedSource);
         if (!dialog.ShowModal(RhinoEtoApp.MainWindowForDocument(document))) return false;
         dialog.Harvest(settings);
         return true;
     }
+
+    private void RefreshReferenceChoice() =>
+        _reselectReferences.Enabled = _checkObstacles.Checked == true || _checkAllowedArea.Checked == true;
 }

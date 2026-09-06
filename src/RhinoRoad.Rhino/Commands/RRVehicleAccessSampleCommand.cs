@@ -8,6 +8,7 @@ using RhinoRoad.Rhino.Services;
 namespace RhinoRoad.Rhino.Commands;
 
 [Guid("E144A148-8DD4-4141-AB6A-885F9CD6C56B")]
+[CommandStyle(Style.Hidden)]
 public sealed class RRVehicleAccessSampleCommand : Command
 {
     public override string EnglishName => "RRVehicleAccessSample";
@@ -26,18 +27,37 @@ public sealed class RRVehicleAccessSampleCommand : Command
         var geometry = RhinoGeometryBuilder.Build(result, route, document, 0.30, 3.25, 3.25, createFixedEdges: true);
         var sourceId = Guid.NewGuid();
         var analysisId = Guid.NewGuid().ToString("N");
-        var baked = RhinoOutputWriter.Bake(
-            document,
-            geometry,
-            routeCurve,
-            result,
-            result.Violations,
+        var sourceObjectId = AccessDefinitionStore.AddSampleSource(document, routeCurve);
+        var source = document.Objects.FindId(sourceObjectId);
+        if (source is null) return Result.Failure;
+        var definition = new VehicleAccessDefinition(
+            VehicleAccessDefinition.CurrentSchemaVersion,
             sourceId,
-            analysisId,
+            sourceObjectId,
+            PathSourceKind.ExistingCurve,
+            vehicle.Id,
+            drivingMode.Id,
+            TravelDirection.Forward,
+            null,
             0.30,
+            RoadEdgeMethod.Both,
             3.25,
             3.25,
-            replaceExisting: false);
+            true,
+            8.0,
+            false,
+            false,
+            FootprintMode.None,
+            2.0,
+            false,
+            false,
+            [],
+            [],
+            new Dictionary<Guid, string>(),
+            AccessDefinitionStore.Fingerprint(source),
+            analysisId);
+        var prepared = new PreparedVehicleAccess(definition, source, route, result, geometry, result.Violations, [], []);
+        var baked = VehicleAccessRunService.Commit(document, prepared, replaceExisting: false);
         RhinoApp.WriteLine($"RhinoRoad sample created {baked.Count} objects using PV mode B.");
         return baked.Count > 0 ? Result.Success : Result.Failure;
     }

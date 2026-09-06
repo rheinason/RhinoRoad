@@ -2,42 +2,21 @@ using RhinoRoad.Core;
 
 namespace RhinoRoad.Rhino;
 
-internal enum PathSourceKind
-{
-    ExistingCurve,
-    Interactive
-}
-
-internal enum RoadEdgeMethod
-{
-    Both,
-    MinimumFootprint,
-    FixedWidth,
-    None
-}
-
 /// <summary>
-/// Everything <c>RRVehicleAccess</c> needs before it starts asking for geometry.
+/// Everything <c>Road</c> needs before it starts asking for geometry.
 /// </summary>
 /// <remarks>
 /// Held apart from both the dialog and the command-line prompt so the two entry points configure
-/// the same object. The command must stay scriptable — <c>-RRVehicleAccess</c> in a macro cannot
+/// the same object. The command must stay scriptable — <c>-Road</c> in a macro cannot
 /// raise a modal dialog — so the prompt is not legacy, it is the scripted interface.
 /// </remarks>
-internal enum FootprintMode
-{
-    None,
-    EndsOnly,
-    AtInterval
-}
-
 internal sealed class VehicleAccessSettings
 {
-    public PathSourceKind Source { get; set; } = PathSourceKind.ExistingCurve;
+    public PathSourceKind Source { get; set; } = PathSourceKind.Interactive;
     public string VehicleId { get; set; } = "PV";
     public string ModeId { get; set; } = "A";
     public TravelDirection Direction { get; set; } = TravelDirection.Forward;
-    public RoadEdgeMethod EdgeMethod { get; set; } = RoadEdgeMethod.Both;
+    public RoadEdgeMethod EdgeMethod { get; set; } = RoadEdgeMethod.MinimumFootprint;
     public double ClearanceMetres { get; set; } = 0.30;
     public double LeftWidthMetres { get; set; } = 3.25;
     public double RightWidthMetres { get; set; } = 3.25;
@@ -45,6 +24,7 @@ internal sealed class VehicleAccessSettings
     public double MaximumGradePercent { get; set; } = 8.0;
     public bool CheckObstacles { get; set; }
     public bool CheckAllowedArea { get; set; }
+    public bool ReselectReferences { get; set; }
     public bool ReplaceExisting { get; set; } = true;
 
     /// <summary>

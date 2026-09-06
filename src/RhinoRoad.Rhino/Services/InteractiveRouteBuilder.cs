@@ -27,43 +27,29 @@ namespace RhinoRoad.Rhino.Services;
 /// </remarks>
 internal static class InteractiveRouteBuilder
 {
-    /// <summary>Below this much lock the vehicle is straight enough that there is nothing to ease.</summary>
-    private const double StraightEnoughRadians = 1e-3;
-
-    /// <summary>
-    /// How much less lock the next point must ask for before the corner counts as being left.
-    /// </summary>
-    /// <remarks>
-    /// Measured against a 571 m test road of 25 m radius corners, 3 m wide, driven by clicking along
-    /// its centreline. Easing on every click instead put the worst case 27 m off the road; easing
-    /// only on a genuine exit brings the same case to 3 m, and PV to 1.3 m with nothing outside the
-    /// road at all. Below about 0.5 the exits are missed and the error grows again, so the useful
-    /// range is narrow and this sits in the middle of it.
-    /// </remarks>
-    private const double ExitingFraction = 0.85;
-
-    private sealed record HistoryEntry(VehicleState State, RouteSample[] Route, int LegStartIndex);
-
-    /// <summary>A leg as previewed: what it rewinds to, what it adds, and where it leaves the vehicle.</summary>
-    private sealed record PlannedLeg(
-        int FromIndex,
-        IReadOnlyList<RouteSample> Samples,
-        VehicleState EndState,
-        bool RequestedAngleExceeded);
+    private sealed record HistoryEntry(
+        VehicleState State,
+        RouteSample[] Route,
+        ManoeuvreControl[] Controls,
+        int LegStartIndex);
 
     public static Result TryBuild(
         RhinoDoc document,
         VehicleDefinition vehicle,
         DrivingModeDefinition mode,
+        TravelDirection initialDirection,
+        double clearanceMetres,
         out IReadOnlyList<RouteSample> samples,
-        out Curve? pathCurve)
+        out ManoeuvreDefinition? manoeuvre,
+        out Curve? controlCurve)
     {
         samples = [];
-        pathCurve = null;
+        manoeuvre = null;
+        controlCurve = null;
         var metresPerModelUnit = RhinoMath.UnitScale(document.ModelUnitSystem, UnitSystem.Meters);
 
         using var startGetter = new GetPoint();
-        startGetter.SetCommandPrompt("Rear-axle midpoint start");
+        startGetter.SetCommandPrompt("Place vehicle (rear axle centre)");
         if (startGetter.Get() != GetResult.Point) return Result.Cancel;
         var startModel = startGetter.Point();
 
@@ -83,9 +69,10 @@ internal static class InteractiveRouteBuilder
             new Point3(startModel.X * metresPerModelUnit, startModel.Y * metresPerModelUnit, startModel.Z * metresPerModelUnit),
             Math.Atan2(headingVector.Y, headingVector.X),
             0.0,
-            TravelDirection.Forward,
+            initialDirection,
             0.0);
         var route = new List<RouteSample> { StateSample(state, vehicle) };
+        var controls = new List<ManoeuvreControl>();
         var history = new Stack<HistoryEntry>();
 
         // How far back an ease-out may rewind: never past the start of the leg being driven, so the
@@ -98,7 +85,9 @@ internal static class InteractiveRouteBuilder
         var finishing = false;
         while (true)
         {
-            PlannedLeg? planned = null;
+            var sweepPreview = new JourneySweepPreview(route, vehicle, clearanceMetres, document.ModelUnitSystem);
+            PlannedManoeuvreLeg? planned = null;
+            Point3d? lastPreviewPoint = null;
             using var getter = new GetPoint();
             var wheelNow = state.SteeringAngleRadians * 180.0 / Math.PI;
             getter.SetCommandPrompt(finishing
@@ -111,7 +100,16 @@ internal static class InteractiveRouteBuilder
             getter.DynamicDraw += (_, args) =>
             {
                 var cursor = new Point2(args.CurrentPoint.X * metresPerModelUnit, args.CurrentPoint.Y * metresPerModelUnit);
-                planned = Plan(vehicle, mode, route, legStartIndex, state, cursor, finishing);
+                var control = new ManoeuvreControl(
+                    new Point3(cursor.X, cursor.Y, args.CurrentPoint.Z * metresPerModelUnit),
+                    state.Direction,
+                    finishing ? ManoeuvreControlKind.Finish : ManoeuvreControlKind.Aim);
+                if (planned is null || lastPreviewPoint != args.CurrentPoint)
+                {
+                    planned = ManoeuvreReplayService.PlanControl(vehicle, mode, route, legStartIndex, state, control);
+                    lastPreviewPoint = args.CurrentPoint;
+                }
+                sweepPreview.Draw(args.Display, planned);
 
                 // What the ease-out hands back, drawn faintly, so rewinding into the corner reads as
                 // the exit being reshaped rather than as geometry that silently disappeared.
@@ -149,6 +147,9 @@ internal static class InteractiveRouteBuilder
                 DrawVehicle(args.Display, vehicle, planned.EndState, document.ModelUnitSystem,
                     planned.RequestedAngleExceeded ? Color.OrangeRed : Color.DarkBlue);
                 DrawExitDirection(args.Display, planned.EndState, document.ModelUnitSystem);
+                if (planned.RequestedAngleExceeded)
+                    args.Display.Draw2dText("Steering limit reached — adjust your aim", Color.OrangeRed,
+                        new Point2d(24, 60), false, 16);
             };
 
             var getResult = getter.Get();
@@ -194,6 +195,8 @@ internal static class InteractiveRouteBuilder
                         legStartIndex = entry.LegStartIndex;
                         route.Clear();
                         route.AddRange(entry.Route);
+                        controls.Clear();
+                        controls.AddRange(entry.Controls);
                         committedPath = CommittedPolyline(route, document.ModelUnitSystem);
                         committedFootprints = CommittedFootprints(route, vehicle, document.ModelUnitSystem);
                     }
@@ -202,9 +205,19 @@ internal static class InteractiveRouteBuilder
                 continue;
             }
 
-            if (getResult != GetResult.Point || planned is null) continue;
+            if (getResult != GetResult.Point) continue;
 
-            history.Push(new HistoryEntry(state, route.ToArray(), legStartIndex));
+            // Re-plan from the committed Rhino point rather than trusting the last mouse-move
+            // callback. That makes the stored control and the baked samples an exact pair even if
+            // snapping adjusts the click after the final dynamic-draw event.
+            var picked = getter.Point();
+            var pickedControl = new ManoeuvreControl(
+                new Point3(picked.X * metresPerModelUnit, picked.Y * metresPerModelUnit, picked.Z * metresPerModelUnit),
+                state.Direction,
+                finishing ? ManoeuvreControlKind.Finish : ManoeuvreControlKind.Aim);
+            planned = ManoeuvreReplayService.PlanControl(vehicle, mode, route, legStartIndex, state, pickedControl);
+
+            history.Push(new HistoryEntry(state, route.ToArray(), controls.ToArray(), legStartIndex));
             if (planned.FromIndex < route.Count - 1)
             {
                 route.RemoveRange(planned.FromIndex + 1, route.Count - planned.FromIndex - 1);
@@ -213,6 +226,7 @@ internal static class InteractiveRouteBuilder
             legStartIndex = route.Count - 1;
             route.AddRange(planned.Samples.Skip(1));
             state = planned.EndState;
+            controls.Add(pickedControl);
             committedPath = CommittedPolyline(route, document.ModelUnitSystem);
             committedFootprints = CommittedFootprints(route, vehicle, document.ModelUnitSystem);
             if (planned.RequestedAngleExceeded)
@@ -222,69 +236,17 @@ internal static class InteractiveRouteBuilder
         }
 
         samples = route;
-        pathCurve = new PolylineCurve(route.Select(sample => ToModelPoint(sample.PositionMetres, document.ModelUnitSystem)));
+        manoeuvre = new ManoeuvreDefinition(
+            ManoeuvreDefinition.CurrentSchemaVersion,
+            new Point3(startModel.X * metresPerModelUnit, startModel.Y * metresPerModelUnit, startModel.Z * metresPerModelUnit),
+            Math.Atan2(headingVector.Y, headingVector.X),
+            initialDirection,
+            controls);
+        controlCurve = new PolylineCurve(
+            new[] { manoeuvre.StartPositionMetres }
+                .Concat(controls.Select(control => control.PositionMetres))
+                .Select(point => ToModelPoint(point, document.ModelUnitSystem)));
         return Result.Success;
-    }
-
-    /// <summary>
-    /// Works out the leg a click would drive: the exit from the corner the vehicle is in, then the
-    /// run to the point picked.
-    /// </summary>
-    /// <remarks>
-    /// The picked point does two jobs. It says where to go next, and the direction towards it says
-    /// which way the vehicle should be travelling by the time it gets there, which is what makes the
-    /// exit from the previous corner solvable rather than a correction after the fact. With the
-    /// wheel already straight there is no corner to leave and the click only aims.
-    /// </remarks>
-    private static PlannedLeg Plan(
-        VehicleDefinition vehicle,
-        DrivingModeDefinition mode,
-        IReadOnlyList<RouteSample> route,
-        int legStartIndex,
-        VehicleState state,
-        Point2 cursorMetres,
-        bool finishing)
-    {
-        var bearing = Math.Atan2(
-            cursorMetres.Y - state.RearAxleCentreMetres.Y,
-            cursorMetres.X - state.RearAxleCentreMetres.X);
-        var controls = RateLimitedTrajectoryGenerator.ControlsFromCursor(vehicle, mode, state, cursorMetres);
-
-        // Only ease when the next point actually asks for less turn than the wheel is already
-        // holding. Easing always ends with the wheel centred, so easing towards a point that still
-        // wants most of the current lock straightens the vehicle out in the middle of a bend and
-        // then turns it back in -- which reads as the exit being given back far too much. Halfway
-        // round a corner the right answer is to keep turning.
-        var turning = Math.Abs(state.SteeringAngleRadians) > StraightEnoughRadians;
-        var leavingTheCorner = Math.Abs(controls.TargetSteeringRadians)
-            < Math.Abs(state.SteeringAngleRadians) * ExitingFraction;
-
-        var fromIndex = route.Count - 1;
-        var samples = new List<RouteSample>();
-        var current = state;
-
-        if (turning && (finishing || leavingTheCorner))
-        {
-            var eased = HeadingLegGenerator.EaseOntoHeading(
-                vehicle, mode, route, legStartIndex, bearing, 0.10);
-            fromIndex = eased.FromIndex;
-            samples.AddRange(eased.Leg.Samples);
-            current = eased.Leg.EndState;
-        }
-        else
-        {
-            samples.Add(StateSample(state, vehicle));
-        }
-
-        if (finishing) return new PlannedLeg(fromIndex, samples, current, false);
-
-        // Then aim at the point. Where the exit was eased first, the vehicle is already pointing
-        // near it, so this adds almost none of the doubling an aimed arc otherwise would.
-        var aim = RateLimitedTrajectoryGenerator.ControlsFromCursor(vehicle, mode, current, cursorMetres);
-        var leg = new RateLimitedTrajectoryGenerator()
-            .GenerateLeg(vehicle, mode, current, aim.TargetSteeringRadians, aim.TravelDistanceMetres, 0.10);
-        samples.AddRange(leg.Samples.Skip(1));
-        return new PlannedLeg(fromIndex, samples, leg.EndState, aim.RequestedAngleExceeded);
     }
 
     /// <summary>
