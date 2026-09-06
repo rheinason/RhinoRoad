@@ -130,18 +130,73 @@ internal sealed class VehicleAccessReviewConduit : DisplayConduit
             e.Display.DrawLine(ToModel(samples[index].PositionMetres, scale), ToModel(samples[index + 1].PositionMetres, scale), Color.White, 10);
     }
 
+    /// <summary>
+    /// Marks the station the panel is pointing at. The vehicle outline alone was not enough to answer
+    /// "where on the road is this?" -- at a zoom that shows the whole route it is a thin white sliver
+    /// among the footprints. A marker on the route itself, with the reading beside it, is the part
+    /// that actually ties the graph to the geometry, so it is drawn whatever else is switched off.
+    /// </summary>
     private void DrawHighlightedPose(DrawEventArgs e)
     {
         if (_snapshot is null) return;
         var station = SelectedEvent?.WorstStationMetres ?? HoveredStation;
         if (!station.HasValue) return;
-        var pose = _snapshot.Run.Analysis.Poses.MinBy(item => Math.Abs(item.StationMetres - station.Value))!;
+        var review = _snapshot.Review;
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, ModelUnits);
+        var pose = _snapshot.Run.Analysis.Poses.MinBy(item => Math.Abs(item.StationMetres - station.Value))!;
         var points = pose.BodyOutlineWorldMetres.Select(point => new Point3d(
             point.X * scale, point.Y * scale, pose.RearAxleCentreMetres.Z * scale)).ToList();
         points.Add(points[0]);
         e.Display.DrawPolyline(new Polyline(points), Color.White, 4);
+
+        if (review.Samples.Count == 0) return;
+        var index = NearestSample(review, station.Value);
+        var sample = review.Samples[index];
+        var anchor = ToModel(sample.PositionMetres, scale);
+        var value = VehicleAccessMetricPalette.Value(Metric, sample);
+        // Offset the label across the route so the leader is readable rather than sitting on top of
+        // the swept band, and lift it clear of the footprints stacked at the same elevation.
+        var ahead = review.Samples[Math.Min(index + 1, review.Samples.Count - 1)];
+        var behind = review.Samples[Math.Max(index - 1, 0)];
+        var tangent = new Vector3d(
+            (ahead.PositionMetres.X - behind.PositionMetres.X) * scale,
+            (ahead.PositionMetres.Y - behind.PositionMetres.Y) * scale,
+            0.0);
+        if (!tangent.Unitize()) tangent = Vector3d.XAxis;
+        var offset = Math.Max(_snapshot.Run.Geometry.RearAxleTrack.GetBoundingBox(true).Diagonal.Length * 0.04,
+            RhinoMath.UnitScale(UnitSystem.Meters, ModelUnits) * 2.0);
+        var label = anchor + new Vector3d(-tangent.Y, tangent.X, 0.0) * offset;
+        e.Display.DrawLine(anchor, label, Color.White, 2);
+        e.Display.DrawPoint(anchor, PointStyle.RoundControlPoint, 11, Color.White);
+        e.Display.DrawDot(
+            label,
+            $"Sta {sample.StationMetres:0.0} m  {MetricLabel(Metric)} {value:0.##}",
+            VehicleAccessMetricPalette.For(Metric, value, review),
+            Color.White);
     }
+
+    private static int NearestSample(VehicleAccessReview review, double station)
+    {
+        var nearest = 0;
+        var best = double.MaxValue;
+        for (var index = 0; index < review.Samples.Count; index++)
+        {
+            var distance = Math.Abs(review.Samples[index].StationMetres - station);
+            if (distance >= best) continue;
+            best = distance;
+            nearest = index;
+        }
+        return nearest;
+    }
+
+    private static string MetricLabel(ReviewMetricKind kind) => kind switch
+    {
+        ReviewMetricKind.SteeringAngle => "wheel°",
+        ReviewMetricKind.SteeringRate => "°/s",
+        ReviewMetricKind.ClearanceOrRoadMargin => "margin m",
+        ReviewMetricKind.Grade => "grade %",
+        _ => string.Empty
+    };
 
     private static Point3d ToModel(Point3 point, double scale) => new(point.X * scale, point.Y * scale, point.Z * scale);
 }

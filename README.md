@@ -10,7 +10,7 @@ automatic route finding, and automatic layout resizing are outside the current p
 | Command | Action |
 | --- | --- |
 | `RRRoad` | Create a road access journey; configure a selected saved road. |
-| `RREditRoad` | Edit points with a live sweep, or choose Settings, StartHeading, StartDirection, or Control. |
+| `RREditRoad` | Open an edit session: drag the control points with a live sweep, and set driving intent. |
 | `RRUpdateRoad` | Save the recalculated sweep, rerun checks, and refresh linked sizing results. |
 | `RRInspectRoad` | Review the selected road's checks and measurements. |
 | `RRMeasureRoad` | Dimension a section through the required clearance footprint. |
@@ -171,6 +171,14 @@ reconstruct today; it must never shrink.
    the next point genuinely asks for less turn than the wheel is holding: halfway round a bend the
    right answer is to keep turning, not to straighten and turn back in.
 
+   Aiming works on points **ahead of the vehicle's beam**. A point behind the beam is brought round
+   to the beam — same distance, the hardest turn aiming can ask for — and the command says so, because
+   the arc that would really reach such a point is a loop the size of whatever circle passes through
+   the cursor: a REN in mode B would drive 10.7 km to reach a point 60 m astern. Reversing is what
+   puts you there without noticing, since it turns "behind the direction of travel" into the ground in
+   front of the nose. To turn further than the beam allows, hold `Ctrl`; to go backwards, use
+   `Reverse`.
+
    Clicking legs is for authoring a manoeuvre where no line exists yet. To check a road that has
    already been designed, select its centreline and use `ExistingCurve` — the checks then report
    against the line as drawn instead of against a route improvised towards it.
@@ -181,6 +189,43 @@ reconstruct today; it must never shrink.
    `Reverse` flips the travel direction for the next leg, so a three-point turn is drawn as forward
    legs, a reversing leg, then forward legs again — the cusp between them is where the vehicle stops
    and changes direction.
+
+   **Hold `Ctrl`, or use the `Turn` option, to turn at full lock.** Ordinary aiming will turn the
+   vehicle right round — click near abeam and it makes a U-turn — but only on whatever radius the
+   click implies: a PV in mode A clicked abeam at 40 m turns 175 degrees on a 20 m radius, against a
+   minimum of 4.82 m. The arc through a nearer point has to reach full lock out of its own length,
+   and at minimum radius there is not enough of it. Aiming can turn the vehicle round; only lock can
+   turn it round *tightly*. A locked turn asks for an *amount of heading* instead. The wheel goes to its lock and stays there
+   until the direction of travel has swung by twice the bearing of the cursor, so clicking abeam is
+   a true 180-degree U-turn, and clicking behind the vehicle asks for 270. How far away you click
+   makes no difference. The two dotted circles drawn while you aim are the tightest the rear axle
+   can trace, left and right.
+
+   Type a number instead of clicking to sweep exactly that many degrees — `180` for the turning
+   check — and it goes the way the cursor last pointed. The leg ends with the wheel still at lock,
+   because straightening is the next control's job: the control after it opens the turn out from
+   inside, the same way it would any other corner.
+
+   **Hold `Shift` to square the leg up.** Rhino's own ortho is switched off inside this command, on
+   purpose: ortho constrains the direction to the picked point, and the vehicle leaves on *twice*
+   that bearing, so an ortho band pointing north would leave the vehicle heading east. Shift here
+   constrains where the leg **ends up pointing** instead, to a multiple of your ortho angle measured
+   from the construction plane's X axis — so a site drawn on a rotated CPlane squares up to the site.
+   It works the same held with `Ctrl`, and it composes: every leg leaves on an axis, so a route drawn
+   with Shift held stays on the axes it started on however many corners it takes. Object snap still
+   applies and still sets how far away you clicked; Shift only takes the direction.
+
+   A squared leg *arrives* on its axis rather than merely aiming at it. The direction is stored on the
+   control, so the leg eases onto it and then runs straight to the click, landing within a thousandth
+   of a degree. It takes however much room the turn actually needs, which may be more than you clicked
+   for: a BUS 12 in mode A squared to a 90 degree departure needs about 30 m, and simply aiming at the
+   same snapped point would have reached only 55 degrees of it in 15 m. Locked turns arrive exactly
+   too, because they drive their sweep rather than aiming at it.
+
+   A locked turn either side of a `Reverse` is what a three-point turn is made of. Note that
+   shuffling only saves width in the slow mode: in mode A the wheel needs 12.5 m of travel to reach
+   lock and no leg of a shuffle is that long, so the vehicle never gets near its minimum radius and
+   the manoeuvre ends up wider than simply turning round.
 6. Obstacle curves and closed allowed-area boundaries are only asked for when their checks are
    ticked; both are off by default.
 7. The movement-fit report is written to the command line and the result is baked. With no site
@@ -228,17 +273,23 @@ The numbers are small in practice. A 25 m radius needs 2.6 m of transition for P
 
 ### Editing a route
 
-An interactive run keeps the sparse clicks as an ordinary polyline on `RhinoRoad::Controls`. Use
-**Edit points** in the inspector, or select the control line and run `PointsOn` (`F10`). Drag its
-points to see a live replay of the path, body sweep, and clearance footprint. The affected path is
-teal; the previous path is dotted grey. The preview includes any reshaping of the preceding bend
-and warns when the steering limit prevents an aim from being followed exactly.
+An interactive run keeps the sparse clicks as an ordinary polyline on `RhinoRoad::Controls`. Run
+`RREditRoad`, or press **Edit road** in the inspector, to open an edit session on it. The session
+turns the control points on, numbers them in the viewport, and opens the modeless **Edit Road**
+palette. Drag the points to see a live replay of the path, body sweep, and clearance footprint. The
+affected path is teal; the previous path is dotted grey. The preview includes any reshaping of the
+preceding bend and warns when the steering limit prevents an aim from being followed exactly.
+
+The live preview belongs to that session and to nothing else. Moving a stored control line outside
+an edit session changes no display: the baked result stays on screen and the inspector reports the
+road as out of date, as it does for any other edit.
 
 Replay runs off the drawing thread. While it catches up with a moving cursor, the previous preview
 is faded and labelled as the previous position. Esc cancels the native point move; no preview
-changes are written to the drawing. After accepting the point move, the preview remains until
-Update. This live feedback applies to saved click-to-drive controls; existing-curve analysis still
-uses its original curve and explicit Update workflow.
+changes are written to the drawing. **Save** in the palette keeps the edit, reruns the site checks,
+and refreshes any linked sizing results; **Discard** — and closing the palette — restores the
+control line as it was. This live feedback applies to saved click-to-drive controls; existing-curve
+analysis still uses its original curve and the explicit `RRUpdateRoad` workflow.
 
 Select the control line (or any generated part of the analysis) and run `RRUpdateRoad` to
 save the result and rerun the site checks. Live editing previews geometry; the inspector's previous
@@ -263,8 +314,10 @@ leaves the previous result in place so it can be repaired through Configure.
 Select any source, control, track, envelope, footprint, or warning marker and run
 `RRInspectRoad`. One modeless inspector is kept per document. It shows the overall status,
 checks, measurements, grouped problem station ranges, and profiles for steering angle, steering
-rate, clearance/road margin, and grade. Hover the profile to see the corresponding vehicle pose;
-click a failed check or problem area to zoom to it. Display toggles control temporary viewport
+rate, clearance/road margin, and grade. The profile sits at the top of the panel: hovering it marks
+that station on the road itself — a point on the route, a leader, and the station and reading in a
+label — draws the vehicle pose there, and prints the same reading under the graph. Click a failed
+check or problem area to zoom to it. Display toggles control temporary viewport
 overlays without changing the baked drawing. The control-intent overlay labels the initial travel
 direction, reversals, and Finish control so the non-positional intent is visible while reviewing.
 
@@ -273,12 +326,16 @@ when ready; nothing recomputes or rebakes automatically.
 
 ### Editing driving intent
 
-Use **Driving intent** in the inspector or `RREditRoad` to change the starting heading,
-starting travel direction, or an individual control's direction or Aim/Finish intent. Pick near a
-numbered control to select it. Finish is available only on the last control. Changing the starting
-direction preserves the existing reversal pattern; changing a single control changes that leg.
-Accepted intent edits replay and update the journey. The command's **Points** option (also the
-Enter default) enables live point editing. Grip edits preview immediately and wait for Update to bake.
+The **Edit Road** palette opened by `RREditRoad` carries the driving intent alongside the point
+editing, so both are changed in one session. Set the starting heading, the starting travel
+direction, or an individual control's direction and Aim/Turn/Finish intent; the rows are numbered to
+match the dots in the viewport, and hovering a row highlights its control. Finish is available only
+on the last control; Turn is available anywhere, and re-reads its point as a full-lock sweep. Changing the starting direction preserves the existing reversal pattern;
+changing a single control changes that leg. Intent changes take effect in the preview immediately
+and are kept, with the point positions, by **Save**.
+
+Scripted `-RREditRoad` cannot raise a palette. It turns the control points on and leaves
+`RRUpdateRoad` to commit, which is the behaviour macros already relied on.
 
 ### Measuring bends and junctions
 

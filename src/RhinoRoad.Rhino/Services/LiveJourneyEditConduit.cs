@@ -7,7 +7,13 @@ using RhinoRoad.Core;
 
 namespace RhinoRoad.Rhino.Services;
 
-/// <summary>Reads native grips on the UI thread; coalesces pure replay work off the drawing thread.</summary>
+/// <summary>
+/// The live sweep preview belongs to an explicit edit session, not to the document. Previewing
+/// whenever a stored control curve happened to move meant that nudging a curve for any other reason
+/// silently replaced the baked result on screen with a preview the user never asked for. A session
+/// is opened by <c>RREditRoad</c> and closed when the edit is saved or discarded; outside one this
+/// conduit is switched off entirely, so an idle document pays nothing for it either.
+/// </summary>
 internal sealed class LiveJourneyEditConduit : DisplayConduit
 {
     private sealed class Preview
@@ -30,6 +36,7 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
 
     private static readonly LiveJourneyEditConduit Instance = new();
     private static readonly Dictionary<uint, DocumentState> Documents = new();
+    private static readonly Dictionary<uint, Guid> Sessions = new();
     private static readonly VehicleCatalog Catalog = VehicleCatalog.LoadEmbedded();
     private static bool _initialized;
 
@@ -37,14 +44,39 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
     {
         if (_initialized) return;
         _initialized = true;
-        Instance.Enabled = true;
         RhinoDoc.AddRhinoObject += (_, e) => Dirty(e.TheObject.Document);
         RhinoDoc.DeleteRhinoObject += (_, e) => Dirty(e.TheObject.Document);
         RhinoDoc.ReplaceRhinoObject += (_, e) => Dirty(e.Document);
         RhinoDoc.ModifyObjectAttributes += (_, e) => Dirty(e.Document);
         RhinoDoc.EndOpenDocument += (_, e) => Dirty(e.Document);
-        RhinoDoc.CloseDocument += (_, e) => Documents.Remove(e.Document.RuntimeSerialNumber);
+        RhinoDoc.CloseDocument += (_, e) =>
+        {
+            // The document is going away, so drop the session without asking it to redraw.
+            Sessions.Remove(e.Document.RuntimeSerialNumber);
+            Documents.Remove(e.Document.RuntimeSerialNumber);
+            Instance.Enabled = Sessions.Count > 0;
+        };
     }
+
+    /// <summary>Starts previewing edits to one saved journey. Only one journey is edited at a time.</summary>
+    public static void Begin(RhinoDoc document, Guid stableSourceId)
+    {
+        Sessions[document.RuntimeSerialNumber] = stableSourceId;
+        Documents.Remove(document.RuntimeSerialNumber);
+        Instance.Enabled = true;
+        document.Views.Redraw();
+    }
+
+    public static void End(RhinoDoc document)
+    {
+        Sessions.Remove(document.RuntimeSerialNumber);
+        Documents.Remove(document.RuntimeSerialNumber);
+        Instance.Enabled = Sessions.Count > 0;
+        document.Views.Redraw();
+    }
+
+    public static bool IsEditing(RhinoDoc document, Guid stableSourceId) =>
+        Sessions.TryGetValue(document.RuntimeSerialNumber, out var editing) && editing == stableSourceId;
 
     private static void Dirty(RhinoDoc? document)
     {
@@ -57,7 +89,7 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
     protected override void PreDrawObjects(DrawEventArgs e)
     {
         var document = e.RhinoDoc;
-        if (document is null) return;
+        if (document is null || !Sessions.TryGetValue(document.RuntimeSerialNumber, out var editing)) return;
         if (!Documents.TryGetValue(document.RuntimeSerialNumber, out var state))
             Documents[document.RuntimeSerialNumber] = state = new DocumentState();
         if (state.Dirty)
@@ -73,7 +105,7 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
             var source = document.Objects.FindId(id);
             if (source is null || !source.Visible || source.Geometry is not Curve curve ||
                 !AccessDefinitionStore.TryRead(source, out var saved, out _) || saved?.Manoeuvre is null ||
-                saved.SourceKind != PathSourceKind.Interactive) continue;
+                saved.SourceKind != PathSourceKind.Interactive || saved.StableSourceId != editing) continue;
             try
             {
                 var vertices = Positions(source, curve, document.ModelUnitSystem);
@@ -176,7 +208,7 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
             var current = preview.ResultVertices?.SequenceEqual(preview.Vertices) == true && preview.Error is null;
             var message = preview.Error is not null ? $"Edit preview unavailable: {preview.Error}" : result is null ?
                 "Updating edit preview…" : !current ? "Updating preview — faded sweep is the previous position" :
-                "Live edit preview — Update saves the result; site checks have not been rerun";
+                "Live edit preview — Save in the Edit Road palette to keep it and rerun the checks";
             e.Display.Draw2dText(message, Color.DimGray, new Point2d(24, 35 + row++ * 24), false, 14);
             if (result is null) continue;
             if (!result.Body.IsSuccess || !result.Clearance.IsSuccess)

@@ -27,13 +27,20 @@ public enum FootprintMode
 public enum ManoeuvreControlKind
 {
     Aim,
-    Finish
+    Finish,
+
+    /// <summary>
+    /// Turn at the wheel's lock through the amount of heading the point asks for, and stop there
+    /// still turning. The tightest turn the vehicle can make, which aiming at a point cannot reach.
+    /// </summary>
+    Turn
 }
 
 public sealed record ManoeuvreControl(
     Point3 PositionMetres,
     TravelDirection Direction,
-    ManoeuvreControlKind Kind = ManoeuvreControlKind.Aim);
+    ManoeuvreControlKind Kind = ManoeuvreControlKind.Aim,
+    double? ExitHeadingRadians = null);
 
 public sealed record ManoeuvreDefinition(
     int SchemaVersion,

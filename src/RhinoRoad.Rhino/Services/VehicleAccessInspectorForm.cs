@@ -22,6 +22,7 @@ internal sealed class VehicleAccessInspectorForm : Form
     private readonly DropDown _metric = new();
     private readonly VehicleAccessProfileControl _profile = new();
     private readonly VehicleAccessReviewConduit _conduit = new();
+    private readonly Label _readout = new() { Text = "Move across the graph to locate it on the road." };
     private readonly UITimer _timer = new() { Interval = 0.5 };
     private RhinoObject? _source;
     private VehicleAccessDefinition? _definition;
@@ -34,10 +35,17 @@ internal sealed class VehicleAccessInspectorForm : Form
     {
         _document = document;
         Title = "Inspect Road";
-        ClientSize = new Size(430, 650);
+        ClientSize = new Size(430, 700);
         MinimumSize = new Size(350, 460);
         Padding = 12;
         Resizable = true;
+        Maximizable = false;
+        Minimizable = false;
+        ShowInTaskbar = false;
+        // An ownerless top-level window drops behind the Rhino frame the moment the viewport takes
+        // focus -- which is every time the inspector is actually used. Owning it to the document's
+        // main window keeps it above Rhino without making it topmost over everything else.
+        Owner = RhinoEtoApp.MainWindowForDocument(document);
         this.UseRhinoStyle();
         _conduit.ModelUnits = document.ModelUnitSystem;
 
@@ -55,6 +63,7 @@ internal sealed class VehicleAccessInspectorForm : Form
         _profile.HoverStationChanged += (_, station) =>
         {
             _conduit.HoveredStation = station;
+            _readout.Text = Readout(station);
             _document.Views.Redraw();
         };
 
@@ -65,10 +74,9 @@ internal sealed class VehicleAccessInspectorForm : Form
         configure.Click += (_, _) => Configure();
         var close = new Button { Text = "Close" };
         close.Click += (_, _) => Close();
-        var edit = new Button { Text = "Edit points" };
-        edit.Click += (_, _) => RunForSource("_RREditRoad _Points");
-        var intent = new Button { Text = "Driving intent" };
-        intent.Click += (_, _) => RunForSource("_RREditRoad");
+        var edit = new Button { Text = "Edit road" };
+        edit.ToolTip = "Open the edit session: drag the control points with a live sweep preview.";
+        edit.Click += (_, _) => RunForSource("_RREditRoad");
         var measure = new Button { Text = "Measure section" };
         measure.Click += (_, _) => RunForSource("_RRMeasureRoad");
 
@@ -93,11 +101,18 @@ internal sealed class VehicleAccessInspectorForm : Form
                     Items = { pick, new StackLayoutItem(_sourceName, true), _update, configure, close }
                 },
                 _status,
-                new StackLayout { Orientation = Orientation.Horizontal, Spacing = 6, Items = { edit, intent, measure } },
+                // The graph leads. It is the one part of this panel that is read continuously rather
+                // than glanced at, and scrubbing it is how the numbers below get their location.
+                Group("Driving detail", new StackLayout
+                {
+                    Spacing = 5,
+                    HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                    Items = { _metric, _profile, _readout }
+                }),
+                new StackLayout { Orientation = Orientation.Horizontal, Spacing = 6, Items = { edit, measure } },
                 Group("Problem areas", _events),
                 Group("Checks", _checks),
                 Group("Measurements", _measurements),
-                Group("Driving detail", new StackLayout { Spacing = 5, Items = { _metric, _profile } }),
                 Group("Display", new TableLayout
                 {
                     Spacing = new Size(10, 4),
@@ -111,9 +126,22 @@ internal sealed class VehicleAccessInspectorForm : Form
         };
         Content = new Scrollable { Border = BorderType.None, ExpandContentWidth = true, Content = body };
 
-        _conduit.Enabled = true;
         _timer.Elapsed += (_, _) => PollFreshness();
-        _timer.Start();
+        Shown += (_, _) =>
+        {
+            // The conduit touches Rhino's display pipeline, so it is switched on once the native
+            // window exists rather than from inside the picking command that opened this form.
+            try
+            {
+                _conduit.Enabled = true;
+                _timer.Start();
+                _document.Views.Redraw();
+            }
+            catch (Exception error)
+            {
+                RhinoApp.WriteLine($"RhinoRoad inspector overlay disabled: {error.Message}");
+            }
+        };
         Closed += (_, _) =>
         {
             _timer.Stop();
@@ -121,6 +149,14 @@ internal sealed class VehicleAccessInspectorForm : Form
             _document.Views.Redraw();
         };
         SetObject(objectId);
+    }
+
+    /// <summary>Opens against the right-hand edge of the active viewport rather than the screen centre.</summary>
+    public void PositionOverActiveView()
+    {
+        if (_document.Views.ActiveView is not { } view) return;
+        var rect = view.ScreenRectangle;
+        Location = new Eto.Drawing.Point(rect.Right - Width - 18, rect.Top + 12);
     }
 
     public void SetObject(Guid objectId)
@@ -162,6 +198,10 @@ internal sealed class VehicleAccessInspectorForm : Form
         _snapshot = snapshot;
         _conduit.SetSnapshot(snapshot);
         _profile.SetReview(snapshot?.Review);
+        _conduit.HoveredStation = null;
+        _readout.Text = snapshot is null
+            ? "No review data."
+            : "Move across the graph to locate it on the road.";
         RebuildChecks();
         RebuildMeasurements();
         RebuildEvents();
@@ -339,6 +379,20 @@ internal sealed class VehicleAccessInspectorForm : Form
             _document.Views.ActiveView?.ActiveViewport.ZoomBoundingBox(box);
         }
         _document.Views.Redraw();
+    }
+
+    /// <summary>Says in words what the viewport marker is pointing at, so the graph and the road agree.</summary>
+    private string Readout(double? station)
+    {
+        if (_snapshot is null) return "No review data.";
+        if (station is null) return "Move across the graph to locate it on the road.";
+        var review = _snapshot.Review;
+        var sample = review.Samples.MinBy(item => Math.Abs(item.StationMetres - station.Value));
+        if (sample is null) return "Move across the graph to locate it on the road.";
+        var direction = sample.Direction == TravelDirection.Reverse ? "reversing" : "forward";
+        if (!Enum.TryParse(_metric.SelectedKey, out ReviewMetricKind metric)) metric = ReviewMetricKind.SteeringAngle;
+        var value = VehicleAccessMetricPalette.Value(metric, sample);
+        return $"Station {sample.StationMetres:0.0} m · {MetricName(metric)} {value:0.##} · {direction}";
     }
 
     private CheckBox Toggle(string text, VehicleAccessOverlayParts part, bool initial)

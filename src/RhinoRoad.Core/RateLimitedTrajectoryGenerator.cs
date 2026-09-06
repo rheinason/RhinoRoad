@@ -83,12 +83,24 @@ public sealed class RateLimitedTrajectoryGenerator
     /// The arc from the rear axle through a picked point: the steering to hold, and how far to run.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Driven to its end this arc leaves the vehicle turned by twice the bearing of the point, an
-    /// inscribed-angle result. That is a real property of aiming rather than a fault: it is why a
-    /// leg aimed at the line you mean to leave along overshoots it, and why the wheel has to be run
-    /// back to centre deliberately rather than by aiming at another point.
+    /// inscribed-angle result. That is a real property of aiming rather than a fault: it is why a leg
+    /// aimed at the line you mean to leave along overshoots it, and why the wheel has to be run back
+    /// to centre deliberately rather than by aiming at another point.
+    /// </para>
+    /// <para>
+    /// The law's honest domain is the half-plane ahead of the beam, where the arc through the point is
+    /// at most a half turn and the leg is the scale of the click. A point behind the beam is brought
+    /// round to it — same range, hardest turn aiming can express — and reported, because the arc that
+    /// really reaches such a point is a loop the size of whatever circle passes through the cursor.
+    /// Turning further than that is what a locked turn is for.
     /// </remarks>
-    public static (double TargetSteeringRadians, double TravelDistanceMetres, bool RequestedAngleExceeded) ControlsFromCursor(
+    public static (
+        double TargetSteeringRadians,
+        double TravelDistanceMetres,
+        bool RequestedAngleExceeded,
+        bool AimedBehindTheBeam) ControlsFromCursor(
         VehicleDefinition vehicle,
         DrivingModeDefinition mode,
         VehicleState state,
@@ -101,15 +113,68 @@ public sealed class RateLimitedTrajectoryGenerator
         var localX = (delta.X * cosine) + (delta.Y * sine);
         var localY = (-delta.X * sine) + (delta.Y * cosine);
         var chord = Math.Max(Math.Sqrt((localX * localX) + (localY * localY)), 0.01);
+
+        // The law's domain is the half-plane ahead of the beam. Behind it the arc that really reaches
+        // the point is a loop the size of whatever circle happens to pass through the cursor — 358 m
+        // to reach a point 2 m astern, 10.7 km to reach one 60 m astern — because a circle through a
+        // point nearly dead astern is nearly straight, and half of a nearly straight circle is
+        // enormous. Reversing walks straight into this, since reversing puts "behind the direction of
+        // travel" directly in front of the nose.
+        //
+        // So the request is projected onto the boundary of the domain: same range, brought round to
+        // the beam, which asks for the hardest turn aiming has ever been able to express. Clamping
+        // the bearing rather than the swept angle is what keeps it bounded — curvature and distance
+        // then both follow from one consistent point, where clamping the angle alone still left the
+        // vehicle driving half of a kilometre-wide circle.
+        var behindTheBeam = localX < 0.0;
+        if (behindTheBeam)
+        {
+            localY = (localY < 0.0 ? -1.0 : 1.0) * chord;
+            localX = 0.0;
+        }
+
         var pathCurvature = 2.0 * localY / (chord * chord);
         var requestedSteering = Math.Atan(vehicle.WheelbaseMetres * pathCurvature / (double)state.Direction);
         var exceeded = Math.Abs(requestedSteering) > mode.MaximumWheelAngleRadians;
         var clamped = Math.Clamp(requestedSteering, -mode.MaximumWheelAngleRadians, mode.MaximumWheelAngleRadians);
-        var absoluteCurvature = Math.Abs(pathCurvature);
-        var distance = absoluteCurvature < 1e-6
-            ? chord
-            : Math.Abs(2.0 * Math.Asin(Math.Clamp(chord * absoluteCurvature * 0.5, -1.0, 1.0)) / absoluteCurvature);
-        return (clamped, Math.Max(distance, 0.05), exceeded);
+        // How far round the requested arc goes, measured the way the vehicle drives it: from where it
+        // stands, in the direction it is travelling, all the way round to the point. Reaching a point
+        // *behind* the vehicle on that circle takes a reflex arc, and this is the term that has to
+        // know it — `2·asin(chord·k/2)` cannot exceed half a turn, so it answered 90 degrees for an
+        // arc that is really 270 and the leg stopped at the mirror position instead, metres from the
+        // point with nothing to say it had missed.
+        //
+        // It also put a fold in the middle of the cursor's range. Swept angle peaked at half a turn
+        // when the point was abeam and fell away again behind, so the biggest turns lived on a knife
+        // edge across the beam; measured this way it grows all the way round, and a hard turn is a
+        // region of the viewport rather than a line through it.
+        var requestedCurvature = Math.Abs(pathCurvature);
+        var drivableCurvature = Math.Abs(Math.Tan(clamped)) / vehicle.WheelbaseMetres;
+        double distance;
+        if (requestedCurvature < 1e-6 || drivableCurvature < 1e-6)
+        {
+            distance = chord;
+        }
+        else
+        {
+            // Angle subtended at the arc's centre, which sits abeam at the requested radius. Having
+            // brought the request onto the beam this is at most a half turn, which is the most an arc
+            // through a point ahead of the beam ever needs — and is why an aimed leg is always the
+            // scale of the click that made it.
+            var radius = 1.0 / requestedCurvature;
+            var sweptRadians = Math.Atan2(localX, radius - Math.Abs(localY));
+            if (sweptRadians < 0.0) sweptRadians += 2.0 * Math.PI;
+
+            // Where the request is inside the wheel's lock this is exactly the arc through the point.
+            // Where it is not, it is the turn that was asked for driven on the tightest circle the
+            // vehicle can hold — the honest substitute. Running the *requested* curvature's arc
+            // length at the clamped lock instead made a tighter click turn less than a slacker one,
+            // so aiming further inside the turning circle opened the corner out rather than closing
+            // it.
+            distance = sweptRadians / drivableCurvature;
+        }
+
+        return (clamped, Math.Max(distance, 0.05), exceeded, behindTheBeam);
     }
 
     private static RouteSample ToRouteSample(VehicleState state, VehicleDefinition vehicle)

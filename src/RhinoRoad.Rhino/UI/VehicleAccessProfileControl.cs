@@ -86,8 +86,16 @@ internal sealed class VehicleAccessProfileControl : Drawable
             var sample = _review.Samples.MinBy(item => Math.Abs(item.StationMetres - _hoverStation.Value))!;
             var x = X(sample.StationMetres);
             graphics.DrawLine(Colors.White, x, Top, x, Top + PlotHeight);
+            var value = Value(sample);
+            if (double.IsFinite(value))
+            {
+                // A dot on the trace, not just a rule across the plot: it is the same marker the
+                // viewport draws on the road, so the two readings are visibly the same place.
+                var y = Y(value, minimum, maximum);
+                graphics.FillEllipse(Colors.White, x - 3.5f, y - 3.5f, 7f, 7f);
+            }
             graphics.DrawText(font, Colors.White, Math.Clamp(x - 38, Left, Left + PlotWidth - 76), Top + 4,
-                $"{sample.StationMetres:0.0} m  {Value(sample):0.##}");
+                $"{sample.StationMetres:0.0} m  {value:0.##}");
         }
     }
 

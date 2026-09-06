@@ -100,6 +100,149 @@ Measured: PV mode A, target 20 m away.
 | --- | --- | --- | --- | --- | --- |
 | heading on arrival | 10° | 30° | 60° | 90° | 120° |
 
+### The turn aiming cannot reach — **added**
+
+Aiming cannot produce the vehicle's tightest turn, and the reason is the same rate limit as
+everywhere else. Clicking abeam at one turning diameter does request full lock and does command the
+right arc; the arc is just too short to pay for its own lock-up. At PV's minimum radius the whole
+half-circle is 15.2 m and the wheel needs 12.5 m of it to reach lock.
+
+Measured, PV mode A, clicking abeam:
+
+| click abeam at | requested lock | leg run | heading turned |
+| --- | --- | --- | --- |
+| 9.64 m (one diameter) | 29.7° | 15.2 m | 102° |
+| 14.5 m | 20.8° | 22.7 m | 144° |
+| 19.3 m | 15.9° | 30.3 m | 160° |
+| 28.9 m | 10.8° | 45.4 m | 171° |
+| 80 m | 3.9° | 126 m | 179° |
+
+So an abeam click approaches a U-turn from below and never arrives: more turn is only ever available
+on a slacker radius. Since a maximum-lock 180 is the check every swept-path standard asks for, the
+model could not express its own headline case.
+
+**Except that half of this was a bug.** The arc length came from `2·asin(chord·k/2)`, which cannot
+exceed half a turn. A point *behind* the beam needs a reflex arc — 270 degrees for a point behind and
+to the left — and it was driven as 90, so the leg stopped at the mirror position, metres from the
+point, with nothing reporting a miss. Reversing walks into this constantly, because reversing is what
+leaves the vehicle pointing away from where the next leg is wanted: a forward leg after a reversing
+one finished 17.5 m from where it was clicked.
+
+Measured at the centre of the arc instead — `atan2(localX, R − |localY|)` — the inscribed-angle
+relation holds up to the beam. PV mode B, clicking 40 m out:
+
+| bearing | 10° | 30° | 60° | 90° |
+| --- | --- | --- | --- | --- |
+| heading turned | 20.0° | 59.7° | 119.0° | 178.7° |
+| miss | 0.03 m | 0.23 m | 0.68 m | 0.91 m |
+
+What remains is the rate limit's lag entering the arc, largest where the turn is hardest.
+
+**Driving the reflex arc behind the beam was tried, and it is a trap.** It is geometrically right —
+that is the arc which reaches the point — and unusable, because a circle through a point nearly dead
+astern is nearly straight and half of a nearly straight circle is enormous. Measured, REN mode B
+aiming astern:
+
+| point is | 2 m behind | 15 m behind | 60 m behind |
+| --- | --- | --- | --- |
+| leg driven | 358 m | 2685 m | 10 740 m |
+
+Capping the swept angle at half a turn does not fix it: half of a 1.7 km circle is still 5.4 km. What
+fixes it is clamping the *bearing* rather than the angle — projecting the request onto the boundary of
+the law's domain, same range, brought round to the beam — because then curvature and distance both
+follow from one consistent point. Every leg is then at most a half turn on either the circle through
+the point or the tightest circle the vehicle can hold, whichever is larger, so a leg is always the
+scale of the click that made it. The three figures above become 20.5 m, 23.6 m and 94.2 m.
+
+The domain of aiming is therefore the half-plane ahead of the beam, and the command says so when a
+click falls outside it. Reversing is what walks a designer into that half-plane without noticing,
+since reversing puts "behind the direction of travel" directly in front of the nose; turning further
+than the beam allows is what the locked turn is for, and it does it on the tightest radius available
+rather than on whatever huge circle happens to pass through the cursor.
+
+**The fold mattered as much as the miss.** Swept angle used to rise to half a turn as the point came
+abeam and fall away again behind it, so the hardest turns lived on a line across the beam and had to
+be hit exactly — the tool felt as though it did not want to turn, and being off by a few degrees of
+bearing gave back tens of degrees of turn. Measured correctly the angle grows monotonically all the
+way round, and a hard turn is a region of the viewport rather than a line through it. A single
+ordinary click now reaches a U-turn.
+
+That does not make the locked turn redundant, because it reaches 180 degrees on whatever radius the
+click implies: a PV in mode A clicked abeam at 40 m turns 175 degrees on a 20 m radius, against a
+minimum of 4.82 m. Aiming can turn the vehicle round; only lock can turn it round *tightly*.
+
+**It also gives ortho something to constrain.** Rhino's ortho snaps the direction to the picked
+point, which here is the wrong quantity: the vehicle leaves on twice that bearing, so an ortho band
+pointing north leaves it heading east, and the aid misleads rather than helps. Because the leg turns
+by exactly twice the bearing, though, constraining the departure heading is the same projection
+applied to the quantity the designer means — halve the wanted heading change back into a bearing and
+move the cursor onto it, keeping its range. One projection covers aimed legs and locked turns alike,
+nothing downstream knows ortho exists, and the stored control is the snapped one so a saved journey
+replays on its axes without a flag. Rhino's own ortho is switched off in the command; angles are
+counted from the construction plane, as Rhino counts them.
+
+Snapping the absolute departure heading rather than the size of the turn is what makes it compose:
+every leg leaves on an axis, so a route drawn with ortho held stays on the axes it started on however
+many corners it takes, instead of accumulating whatever each individual turn happened to be.
+
+**Moving the cursor is only half of it.** A snapped point still only *asks* for its direction, and the
+wheel takes metres to reach the lock the arc needs, so a BUS 12 in mode A squared to a 90 degree
+departure made 55 of them over 15 m and 88 over 60. The direction is therefore carried on the control
+itself: the leg eases onto it — the same manoeuvre `Finish` uses, exact to 0.01 degrees — and then runs
+straight to the click. It arrives on the axis and takes whatever room the turn needs, which is the
+honest cost rather than a shortfall. A locked turn needs none of this; it drives its sweep, so the
+moved cursor already lands it exactly, and it takes that instead.
+
+**What was wrong as well as missing.** Aiming *inside* the turning circle was worse than aiming on
+it. The leg's length was computed from the requested curvature while the steering was clamped to
+what the wheel could do, so an impossible request drove the short arc of a circle the vehicle could
+not hold: abeam at a fifth of a diameter turned 4°, where abeam at a full diameter turned 102°.
+Pulling the cursor in — the reflex when a corner comes out too wide — opened the corner further. The
+length is now the same *amount of turn* on the tightest circle available, which makes everything
+inside the circle a plateau at the tightest turn rather than a cliff.
+
+**The control that was added.** A locked turn is specified as an amount of heading rather than a
+place to reach: full lock, held, until the direction of travel has swung by the amount asked. The
+cursor names that amount as twice its bearing — the same inscribed-angle relationship aiming already
+has, so abeam still means a U-turn and the muscle memory carries over, and so that the whole circle
+is reachable with the ambiguous seam parked at dead astern rather than on the U-turn itself. Range
+is not read at all. The leg ends with the wheel still at lock, because straightening is the next
+control's job.
+
+**Barring the rewind was tried and reverted.** The argument was that a turn asked for at an exact
+size should keep that size, so a later ease-out was stopped at the locked turn's end. It leaves the
+exit to be corrected from the end of the turn rather than opened out of its middle, which is exactly
+the S this whole model exists to avoid, and it looked it: the same U-turn came back with a kinked,
+splayed exit where letting it rewind gives a clean parallel return. The size is what the leg is
+driven at; what a later control does with its tail is that control's business.
+
+Every preset lands on its requested sweep to within 0.01° across 30°, 90°, 180°, 270°, forwards and
+reversing, in both modes.
+
+**What the reverse case cost.** Progress has to be counted as *signed* heading. A turn that starts
+from the opposite lock — every leg of a three-point turn, where the wheel crosses centre at the cusp
+— goes on rotating the old way until the wheel passes straight, and counting the size of each step's
+rotation credits that wrong-way arc as progress. A PV asked for 55° on the reverse leg finished 3.6°
+the *other* way, and the manoeuvre came out 71° round instead of 180°. Every forward-only test
+passes with that fault present, because a leg starting from a centred wheel never turns the wrong
+way at all.
+
+**Three-point turns only pay in mode B.** Measured, width needed across the road, best split of
+three tried:
+
+| | driven U-turn | 120/30/30 shuffle |
+| --- | --- | --- |
+| REN mode A | 16.87 m | 27.34 m |
+| BUS12 mode A | 21.66 m | 28.25 m |
+| REN mode B | 13.19 m | **10.27 m** |
+| BUS12 mode B | 12.12 m | **10.09 m** |
+
+In mode A the wheel needs 12.5 m of travel to reach lock and no leg of a shuffle is that long, so
+every leg is driven far wider than the minimum radius and the manoeuvre sprawls — 1.2 to 2.3 times
+the width of simply turning round. Shuffling is a slow-mode manoeuvre, which is also what a driver
+would say. PV in mode B is the exception in the other direction: its U-turn is already within 0.2 m
+of the ideal turning diameter, so there is nothing for shuffling to recover.
+
 ## 2. Re-aiming every step (pursuit) — **abandoned**
 
 Same steering law, recomputed every 0.10 m instead of driven to the end of its arc, on the theory

@@ -43,7 +43,20 @@ internal static class VehicleAccessInspectorService
         var form = new VehicleAccessInspectorForm(document, target.Id);
         OpenForms[document.RuntimeSerialNumber] = form;
         form.Closed += (_, _) => OpenForms.Remove(document.RuntimeSerialNumber);
-        Application.Instance.AsyncInvoke(() => form.Show());
+        Application.Instance.AsyncInvoke(() =>
+        {
+            try
+            {
+                form.Show();
+                form.PositionOverActiveView();
+            }
+            catch (Exception error)
+            {
+                RhinoApp.WriteLine($"RhinoRoad could not open Inspect Road: {error.Message}");
+                OpenForms.Remove(document.RuntimeSerialNumber);
+                form.Close();
+            }
+        });
         return Result.Success;
     }
 

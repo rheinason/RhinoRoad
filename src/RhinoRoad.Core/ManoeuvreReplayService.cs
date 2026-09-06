@@ -1,10 +1,16 @@
 namespace RhinoRoad.Core;
 
+/// <param name="AimedBehindTheBeam">
+/// Whether the point was behind the vehicle's beam, where aiming saturates at a half turn and the leg
+/// does not reach it. Worth saying out loud: the leg is legal and drivable, it simply is not the one
+/// asked for, and reversing is what puts a designer there without their noticing.
+/// </param>
 public sealed record PlannedManoeuvreLeg(
     int FromIndex,
     IReadOnlyList<RouteSample> Samples,
     VehicleState EndState,
-    bool RequestedAngleExceeded);
+    bool RequestedAngleExceeded,
+    bool AimedBehindTheBeam = false);
 
 public sealed record ReplayedManoeuvre(
     IReadOnlyList<RouteSample> Samples,
@@ -43,13 +49,51 @@ public static class ManoeuvreReplayService
         var leavingTheCorner = Math.Abs(requested.TargetSteeringRadians)
             < Math.Abs(state.SteeringAngleRadians) * ExitingFraction;
 
+        // A locked turn is not aimed at anything: the point says how far round to go, the wheel goes
+        // to its lock, and the leg ends still turning. It never eases first, because easing is how
+        // the wheel comes back and this control exists to keep it out there.
+        //
+        // It is an ordinary leg afterwards, though. Barring the next control from rewinding into it
+        // — on the argument that a turn asked for at a size should keep that size — leaves the exit
+        // to be corrected from the end rather than opened out of the middle, which is the S this
+        // whole model exists to avoid, and it showed: the same U-turn came out with a kinked, splayed
+        // exit instead of a clean parallel return. The size is what the leg is driven at; what a
+        // later control does with its tail is that control's business.
+        if (control.Kind == ManoeuvreControlKind.Turn)
+        {
+            var sweep = LockedTurnGenerator.SweepFromCursor(state, target);
+            var turned = LockedTurnGenerator.Turn(vehicle, mode, state, sweep, StepMetres);
+            return new PlannedManoeuvreLeg(route.Count - 1, turned.Samples, turned.EndState, false);
+        }
+
         var fromIndex = route.Count - 1;
         var samples = new List<RouteSample>();
         var current = state;
+        if (control.ExitHeadingRadians is double exitHeading && control.Kind != ManoeuvreControlKind.Turn)
+        {
+            var alignment = turning && route[^1].Direction == state.Direction
+                ? HeadingLegGenerator.EaseOntoHeading(vehicle, mode, route, legStartIndex, exitHeading, StepMetres)
+                : (FromIndex: route.Count - 1,
+                    Leg: HeadingLegGenerator.ToHeading(vehicle, mode, state, exitHeading, StepMetres));
+            var aligned = alignment.Leg;
+            fromIndex = alignment.FromIndex;
+            var offset = target - aligned.EndState.RearAxleCentreMetres.XY;
+            var remaining = Math.Max(0.0, offset.X * Math.Cos(exitHeading) + offset.Y * Math.Sin(exitHeading));
+            if (finishing || remaining <= Geometry2D.Epsilon)
+                return new PlannedManoeuvreLeg(fromIndex, aligned.Samples, aligned.EndState, false);
+            var straight = new RateLimitedTrajectoryGenerator().GenerateLeg(
+                vehicle, mode, aligned.EndState, 0.0, remaining, StepMetres);
+            return new PlannedManoeuvreLeg(fromIndex,
+                aligned.Samples.Concat(straight.Samples.Skip(1)).ToArray(), straight.EndState, false);
+        }
         if (turning && (finishing || leavingTheCorner))
         {
-            var eased = HeadingLegGenerator.EaseOntoHeading(
-                vehicle, mode, route, legStartIndex, bearing, StepMetres);
+            // At a cusp the stored last sample still describes the arriving gear.
+            // Reconstructing from it would silently switch back to that gear.
+            var eased = route[^1].Direction == state.Direction
+                ? HeadingLegGenerator.EaseOntoHeading(vehicle, mode, route, legStartIndex, bearing, StepMetres)
+                : (FromIndex: route.Count - 1,
+                    Leg: HeadingLegGenerator.ToHeading(vehicle, mode, state, bearing, StepMetres));
             fromIndex = eased.FromIndex;
             samples.AddRange(eased.Leg.Samples);
             current = eased.Leg.EndState;
@@ -65,7 +109,8 @@ public static class ManoeuvreReplayService
         var leg = new RateLimitedTrajectoryGenerator()
             .GenerateLeg(vehicle, mode, current, aim.TargetSteeringRadians, aim.TravelDistanceMetres, StepMetres);
         samples.AddRange(leg.Samples.Skip(1));
-        return new PlannedManoeuvreLeg(fromIndex, samples, leg.EndState, aim.RequestedAngleExceeded);
+        return new PlannedManoeuvreLeg(
+            fromIndex, samples, leg.EndState, aim.RequestedAngleExceeded, aim.AimedBehindTheBeam);
     }
 
     public static ReplayedManoeuvre Replay(
