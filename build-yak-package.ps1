@@ -85,10 +85,15 @@ version: $version
 authors:
 - rheinason
 description: >
-  Rigid-vehicle access screening for Rhino 8. Drive a vehicle along a path or follow an existing
-  curve, and get swept and clearance envelopes, wheel tracks and feasibility checks against the
-  Danish Vejdirektoratet driving modes. The PV preset is reference-validated against the official
-  koerekurver drawings; REN and BUS 12 are transcribed from the published source. Each preset
+  Vehicle access screening for Rhino 8, rigid and articulated. Drive a vehicle along a path or
+  follow an existing curve, and get swept and clearance envelopes, wheel tracks and feasibility
+  checks against the Danish Vejdirektoratet driving modes. Eight type-vehicle presets: PV, REN,
+  LV 12, BUS 12, BUS 13,7, BUS 15, PVT and SVT. A trailer is placed from where the vehicle has
+  been rather than from where it is, so it stays folded into the straight after a corner and runs
+  away rather than settling in reverse. PV is reference-validated against the official koerekurver
+  drawings. REN, LV 12, BUS 12 and BUS 13,7 are transcribed and corroborated against the legacy
+  Vejdirektoratet curve library, which also corroborates the PVT lorry; neither trailer is
+  corroborated, because neither combination reaches a steady turn on those sheets. Each preset
   records its own validation status, and no result is presented as certified AutoTURN output.
 url: https://github.com/rheinason/RhinoRoad
 keywords:
