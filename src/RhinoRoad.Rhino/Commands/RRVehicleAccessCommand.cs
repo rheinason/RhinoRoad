@@ -356,6 +356,15 @@ public sealed class RRVehicleAccessCommand : Command
         RhinoApp.WriteLine($"Max wheel angle: {Degrees(analysis.MaximumSteeringAngleRadians):0.0}° / {mode.MaximumWheelAngleDegrees:0.0}°");
         RhinoApp.WriteLine($"Max steering rate: {Degrees(analysis.MaximumSteeringRateRadiansPerSecond):0.0}°/s / {Degrees(mode.MaximumSteeringRateRadiansPerSecond):0.0}°/s");
         RhinoApp.WriteLine(source == PathSourceKind.Interactive ? "Grade unavailable — planar journey" : $"Max absolute grade: {analysis.MaximumAbsoluteGrade * 100.0:0.00}%");
+        // No published limit exists to judge a fold against, so it is reported rather than checked.
+        // A combination approaching a right angle is jackknifing, and the reader is the one who
+        // knows whether the manoeuvre it happened in is one a driver would actually attempt.
+        for (var unit = 0; unit < analysis.MaximumArticulationAnglesRadians.Count; unit++)
+        {
+            RhinoApp.WriteLine(
+                $"Max fold at {analysis.Vehicle.TowedUnits[unit].Name}: " +
+                $"{Degrees(analysis.MaximumArticulationAnglesRadians[unit]):0.0}°");
+        }
         if (analysis.MinimumClearanceMetres.HasValue) RhinoApp.WriteLine($"Minimum obstacle clearance: {analysis.MinimumClearanceMetres.Value:0.00} m");
 
         // A selected alignment of arcs joined onto tangents asks the wheel to move instantly at

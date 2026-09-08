@@ -244,16 +244,29 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         _preview.Show(vehicle);
         if (!vehicle.DrivingModes.TryGetValue(_mode.SelectedKey ?? string.Empty, out var mode)) return;
 
-        var length = vehicle.BodyOutline.Max(point => point.X) - vehicle.BodyOutline.Min(point => point.X);
+        var articulation = vehicle.TowedUnits.Count switch
+        {
+            0 => string.Empty,
+            1 => " Articulated, one joint.",
+            var joints => $" Articulated, {joints} joints."
+        };
         _vehicleFacts.Text =
-            $"{length:0.00} m long, {vehicle.WidthMetres:0.00} m wide, {vehicle.WheelbaseMetres:0.00} m wheelbase. " +
+            $"{vehicle.OverallLengthMetres:0.00} m long, {vehicle.WidthMetres:0.00} m wide, " +
+            $"{vehicle.WheelbaseMetres:0.00} m wheelbase.{articulation} " +
             $"Preset {vehicle.Version}, {Describe(vehicle.ValidationStatus)}.";
 
         var turn = TurningGeometryCalculator.AtFullLock(vehicle, mode);
-        _turningFacts.Text =
-            $"Mode {mode.Id}: {mode.SpeedKilometresPerHour:0.#} km/h, {mode.MaximumWheelAngleDegrees:0.#}° wheel lock. " +
-            $"Tightest turn {turn.RearAxleRadiusMetres:0.00} m at the rear axle, sweeping {turn.SweptWidthMetres:0.00} m wide " +
-            $"between radii {turn.InnerRadiusMetres:0.00} m and {turn.OuterRadiusMetres:0.00} m.";
+        var lead = $"Mode {mode.Id}: {mode.SpeedKilometresPerHour:0.#} km/h, {mode.MaximumWheelAngleDegrees:0.#}° wheel lock. ";
+        // A combination can be asked for a lock its trailer cannot follow round. Quoting a swept
+        // width there would be quoting the width of a jackknife, so it says so instead.
+        _turningFacts.Text = turn.SteadyStateAttainable
+            ? lead +
+              $"Tightest turn {turn.RearAxleRadiusMetres:0.00} m at the rear axle, sweeping {turn.SweptWidthMetres:0.00} m wide " +
+              $"between radii {turn.InnerRadiusMetres:0.00} m and {turn.OuterRadiusMetres:0.00} m."
+            : lead +
+              $"Full lock puts the rear axle on {turn.RearAxleRadiusMetres:0.00} m, which this combination cannot hold — " +
+              $"it needs at least {turn.MinimumSustainableRearAxleRadiusMetres:0.00} m at the rear axle before the trailer " +
+              "stops folding. Drive it round a real corner to see the sweep.";
     }
 
     private static string Describe(ValidationStatus status) => status switch

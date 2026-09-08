@@ -3,8 +3,8 @@
 RhinoRoad is a Rhino 8 vehicle-access screening plugin for architects and early-stage site design.
 It is deliberately narrower than a general road-design or Civil 3D replacement.
 
-> Drive a complete rigid-vehicle journey, check it against the site, and measure the space required
-> through consecutive bends and junctions.
+> Drive a complete vehicle journey, rigid or articulated, check it against the site, and measure the
+> space required through consecutive bends and junctions.
 
 ## Implemented MVP workflow
 
@@ -13,7 +13,8 @@ The `Road` command supports:
 - an existing open or closed 3D Rhino curve, interpreted as the rear-axle midpoint path;
 - an interactive, rate-limited forward/reverse leg authoring mode with straightening, where each leg
   starts from the vehicle's actual state and is therefore drivable by construction;
-- Danish PV, REN, and BUS 12 source-transcribed vehicle definitions;
+- Danish PV, REN, LV 12, BUS 12, BUS 13,7, BUS 15, SVT and PVT source-transcribed vehicle
+  definitions, the last two articulated;
 - Vejregler driving modes A and B;
 - wheel-angle, steering-rate, tangent-discontinuity, and optional grade-limit checks;
 - swept body and 0.30 m default clearance envelopes;

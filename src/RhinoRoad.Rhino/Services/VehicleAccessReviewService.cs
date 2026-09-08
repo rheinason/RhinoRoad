@@ -205,7 +205,8 @@ internal static class VehicleAccessReviewService
         if (!run.Definition.CheckObstacles || run.Obstacles.Count == 0) return null;
         var obstaclePolylines = run.Obstacles.Select(curve => (Points: SampleCurve(curve, document.ModelUnitSystem), curve.IsClosed)).ToArray();
         return run.Analysis.Poses.Select(pose => (double?)obstaclePolylines.Min(obstacle =>
-            Geometry2D.MinimumDistance(pose.BodyOutlineWorldMetres, obstacle.Points, true, obstacle.IsClosed) - run.Definition.ClearanceMetres)).ToArray();
+            pose.OccupiedOutlinesWorldMetres.Min(outline =>
+                Geometry2D.MinimumDistance(outline, obstacle.Points, true, obstacle.IsClosed)) - run.Definition.ClearanceMetres)).ToArray();
     }
 
     private static IReadOnlyList<double?>? MarginsToAllowedArea(RhinoDoc document, PreparedVehicleAccess run)
@@ -214,8 +215,10 @@ internal static class VehicleAccessReviewService
         var polygons = run.AllowedBoundaries.Select(curve => SampleCurve(curve, document.ModelUnitSystem)).ToArray();
         return run.Analysis.Poses.Select(pose =>
         {
-            var inside = pose.BodyOutlineWorldMetres.All(point => polygons.Any(polygon => Geometry2D.Contains(polygon, point)));
-            var distance = polygons.Min(polygon => Geometry2D.MinimumDistance(pose.BodyOutlineWorldMetres, polygon));
+            var outlines = pose.OccupiedOutlinesWorldMetres;
+            var inside = outlines.All(outline =>
+                outline.All(point => polygons.Any(polygon => Geometry2D.Contains(polygon, point))));
+            var distance = outlines.Min(outline => polygons.Min(polygon => Geometry2D.MinimumDistance(outline, polygon)));
             return (double?)(inside ? distance - run.Definition.ClearanceMetres : -distance - run.Definition.ClearanceMetres);
         }).ToArray();
     }
@@ -226,8 +229,9 @@ internal static class VehicleAccessReviewService
         if (polygon is null) return null;
         return run.Analysis.Poses.Select(pose =>
         {
-            var inside = pose.BodyOutlineWorldMetres.All(point => Geometry2D.Contains(polygon, point));
-            var distance = Geometry2D.MinimumDistance(pose.BodyOutlineWorldMetres, polygon);
+            var outlines = pose.OccupiedOutlinesWorldMetres;
+            var inside = outlines.All(outline => outline.All(point => Geometry2D.Contains(polygon, point)));
+            var distance = outlines.Min(outline => Geometry2D.MinimumDistance(outline, polygon));
             return (double?)(inside ? distance - run.Definition.ClearanceMetres : -distance - run.Definition.ClearanceMetres);
         }).ToArray();
     }

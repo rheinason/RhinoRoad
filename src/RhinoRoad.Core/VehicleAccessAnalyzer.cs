@@ -22,16 +22,27 @@ public sealed class VehicleAccessAnalyzer
         var maximumGrade = 0.0;
         double? previousSteering = null;
 
-        for (var index = 0; index < samples.Count; index++)
+        // A towed unit is placed from route history, not from the current sample, so the walk is
+        // handed to ArticulationTrace, which carries the fold forward one interval at a time.
+        var towedTracks = vehicle.TowedUnits.Select(_ => new List<Point2>(samples.Count)).ToArray();
+        var maximumFolds = new double[vehicle.TowedUnits.Count];
+
+        var index = -1;
+        foreach (var (sample, vehicleHeading, chain) in ArticulationTrace.Follow(vehicle, samples))
         {
-            var sample = samples[index];
+            index++;
             var directionSign = (double)sample.Direction;
-            var vehicleHeading = Geometry2D.NormalizeAngle(
-                sample.PathHeadingRadians + (sample.Direction == TravelDirection.Reverse ? Math.PI : 0.0));
             var steering = Math.Atan(vehicle.WheelbaseMetres * sample.SignedCurvaturePerMetre / directionSign);
             var rear = sample.PositionMetres.XY;
             var front = Geometry2D.Transform(new Point2(vehicle.WheelbaseMetres, 0.0), rear, vehicleHeading);
             var footprint = vehicle.BodyOutline.Select(point => Geometry2D.Transform(point, rear, vehicleHeading)).ToArray();
+
+            var towedPoses = chain?.Poses(rear, vehicleHeading) ?? [];
+            for (var unit = 0; unit < towedPoses.Count; unit++)
+            {
+                towedTracks[unit].Add(towedPoses[unit].AxleCentreMetres);
+                maximumFolds[unit] = Math.Max(maximumFolds[unit], Math.Abs(towedPoses[unit].ArticulationAngleRadians));
+            }
 
             rearTrack.Add(rear);
             frontTrack.Add(front);
@@ -42,7 +53,10 @@ public sealed class VehicleAccessAnalyzer
                 vehicleHeading,
                 steering,
                 sample.Direction,
-                footprint));
+                footprint)
+            {
+                TowedUnits = towedPoses
+            });
 
             maximumSteering = Math.Max(maximumSteering, Math.Abs(steering));
             if (Math.Abs(steering) > mode.MaximumWheelAngleRadians + 1e-8)
@@ -109,7 +123,9 @@ public sealed class VehicleAccessAnalyzer
             Violations = CoalesceViolations(violations),
             MaximumSteeringAngleRadians = maximumSteering,
             MaximumSteeringRateRadiansPerSecond = maximumSteeringRate,
-            MaximumAbsoluteGrade = maximumGrade
+            MaximumAbsoluteGrade = maximumGrade,
+            TowedAxleTracksMetres = towedTracks.Select(track => (IReadOnlyList<Point2>)track).ToArray(),
+            MaximumArticulationAnglesRadians = maximumFolds
         };
     }
 

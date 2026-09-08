@@ -59,6 +59,7 @@ public sealed class VehicleCatalog
         public double TyreWidthMetres { get; init; }
         public List<double[]> BodyOutline { get; init; } = [];
         public Dictionary<string, ModeDto> DrivingModes { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+        public List<TowedUnitDto> TowedUnits { get; init; } = [];
         public VehicleSource Source { get; init; } = new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
         public ValidationStatus ValidationStatus { get; init; }
         public string ValidationNotes { get; init; } = string.Empty;
@@ -77,7 +78,32 @@ public sealed class VehicleCatalog
             DrivingModes.ToDictionary(pair => pair.Key, pair => pair.Value.ToDefinition(pair.Key), StringComparer.OrdinalIgnoreCase),
             Source,
             ValidationStatus,
-            ValidationNotes);
+            ValidationNotes)
+        {
+            TowedUnits = TowedUnits.Select(unit => unit.ToDefinition()).ToArray()
+        };
+    }
+
+    private sealed class TowedUnitDto
+    {
+        public string Id { get; init; } = string.Empty;
+        public string Name { get; init; } = string.Empty;
+        public double HitchOffsetMetres { get; init; }
+        public double WheelbaseMetres { get; init; }
+        public double WidthMetres { get; init; }
+        public double AxleTrackMetres { get; init; }
+        public double TyreWidthMetres { get; init; }
+        public List<double[]> BodyOutline { get; init; } = [];
+
+        public TowedUnitDefinition ToDefinition() => new(
+            Id,
+            Name,
+            HitchOffsetMetres,
+            WheelbaseMetres,
+            WidthMetres,
+            AxleTrackMetres,
+            TyreWidthMetres,
+            BodyOutline.Select(point => new Point2(point[0], point[1])).ToArray());
     }
 
     private sealed class ModeDto

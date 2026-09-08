@@ -144,10 +144,13 @@ internal sealed class VehicleAccessReviewConduit : DisplayConduit
         var review = _snapshot.Review;
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, ModelUnits);
         var pose = _snapshot.Run.Analysis.Poses.MinBy(item => Math.Abs(item.StationMetres - station.Value))!;
-        var points = pose.BodyOutlineWorldMetres.Select(point => new Point3d(
-            point.X * scale, point.Y * scale, pose.RearAxleCentreMetres.Z * scale)).ToList();
-        points.Add(points[0]);
-        e.Display.DrawPolyline(new Polyline(points), Color.White, 4);
+        foreach (var outline in pose.OccupiedOutlinesWorldMetres)
+        {
+            var points = outline.Select(point => new Point3d(
+                point.X * scale, point.Y * scale, pose.RearAxleCentreMetres.Z * scale)).ToList();
+            points.Add(points[0]);
+            e.Display.DrawPolyline(new Polyline(points), Color.White, 4);
+        }
 
         if (review.Samples.Count == 0) return;
         var index = NearestSample(review, station.Value);

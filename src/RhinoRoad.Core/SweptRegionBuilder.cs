@@ -67,7 +67,7 @@ public static class SweptRegionBuilder
     public static SweptRegionResult FromPoses(IReadOnlyList<VehiclePose> poses)
     {
         ArgumentNullException.ThrowIfNull(poses);
-        return FromOutlines(poses.Select(pose => pose.BodyOutlineWorldMetres).ToArray());
+        return FromOutlines(poses.SelectMany(pose => pose.OccupiedOutlinesWorldMetres).ToArray());
     }
 
     public static SweptRegionResult FromOutlines(IReadOnlyList<IReadOnlyList<Point2>> outlines)

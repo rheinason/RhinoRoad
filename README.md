@@ -1,9 +1,14 @@
 # RhinoRoad
 
-RhinoRoad is an internal Rhino 8 plugin for architect-friendly rigid-vehicle access screening.
+RhinoRoad is an internal Rhino 8 plugin for architect-friendly vehicle access screening.
 Drive a complete journey through a site, check it against selected boundaries and obstacles, and
 measure the space it needs. Consecutive bends retain the vehicle's steering state. Highway design,
 automatic route finding, and automatic layout resizing are outside the current product scope.
+
+Rigid and articulated presets are both supported. A towed unit is placed from where the vehicle has
+been rather than from where it is, so a trailer stays folded into the straight that follows a corner
+and runs away rather than settling when the combination reverses — see
+[Articulated vehicles](#articulated-vehicles).
 
 ## Commands
 
@@ -76,6 +81,128 @@ the repository, and it affects debugging only — never the build.
 For a quick visual check, open `samples\RhinoRoad-vehicle-access.3dm`. To regenerate it from the
 installed build, run `RRVehicleAccessSample` in an empty metric document and save the result.
 
+## Vehicle presets
+
+Eight of the Danish type vehicles ship in `vehicles.json`: **PV**, **REN**, **LV 12**, **BUS 12**,
+**BUS 13,7**, **BUS 15**, **PVT** and **SVT**. BUS 13,7 and BUS 15 carry a *medløbsaksel* — a
+self-steering trailing axle, which the published curves assume — so it carries no side force and the
+drive axle is the effective rear-axle reference, with the distance to the trailing axle folded into
+the rear overhang. The legacy curve library confirms that choice.
+
+Five type vehicles are deliberately absent:
+
+| Vehicle | Why not |
+| ------- | ------- |
+| AUT (autocamper) | The figure dimensions only overall length and width — no wheelbase or overhangs — and AUT has no row in Figure 6.7, so there is no mode-B wheel angle either. |
+| BUS 25 (flerleddet bus) | No row in Figure 6.7, and the source says the rear-axle steering is manufacturer-specific and computer-controlled, and "særligt bagakslens bevægelser kan være vanskelige at forudsige". |
+| T (traktor med anhænger og kost) | The drawbar hitch position is not dimensioned. |
+| MVT (modulvogntog) | Three units and two joints, which the articulation chain handles, but the unit split and the two hitch offsets need more source work than the figure gives directly. |
+| SK (specialkøretøj) | Figure 6.7 publishes three alternative locks rather than one, and the 30 m variant has force-steered axles the model does not represent. |
+
+MVT and SK are the two worth doing next: both are ordinary articulation chains, and SK is
+structurally identical to SVT (kingpin 0.6 m ahead of the drive axle, 14.0 m trailer wheelbase).
+
+## Articulated vehicles
+
+`SVT` (sættevogntog, 16,5 m) and `PVT` (påhængsvogntog, 18,75 m) are modelled as a lead unit towing a
+chain of units, each with a hitch offset from its tower's axle and its own wheelbase behind that
+hitch. A positive offset is a fifth wheel ahead of the drive axle; a negative one is a drawbar eye
+hanging behind it, and the two behave differently enough that the sign is part of the preset.
+
+SVT is one joint. PVT is two: its published plan view runs the drawbar from a coupling 0,15 m inside
+the lorry's rear face to the trailer's *front* axle, and that axle is the turntable the trailer body
+pivots on — so the drawbar and the body swing separately. The drawbar carries no body outline and
+sweeps nothing.
+
+Each unit's heading is integrated along the route rather than derived from the current sample, which
+is what makes the history matter. Everything downstream reads
+`VehiclePose.OccupiedOutlinesWorldMetres` rather than the lead body alone, so envelopes, clearance,
+containment and footprint stamps all cover the trailer.
+
+Two things this does not yet do:
+
+- **No fold limit.** The source publishes none, so the maximum fold at each joint is reported —
+  in the command summary and on `VehicleAccessResult` — rather than checked. A figure near 90° is
+  the combination jackknifing whether or not anything flags it.
+- **Only partial corroboration.** The official-DWG matrix reconstructs a *rigid* body from paired
+  wheel traces and has no articulated case, so both presets stay `SourceTranscribed` and are absent
+  from `certification-plan.json` rather than failing in it. What they are checked against instead is
+  the legacy curve library — see [Checking presets against the legacy curve library](#checking-presets-against-the-legacy-curve-library).
+  PVT's lorry matches it to 0.036 m; neither trailer is corroborated, because neither combination
+  ever reaches a steady turn on those sheets.
+
+At full lock a combination may have no steady state at all: the tractor holds the lock but the
+trailer folds without ever settling. `TurningGeometryCalculator` reports that as
+`SteadyStateAttainable = false` alongside the smallest rear-axle radius the combination can hold, and
+the dialog says so instead of quoting the width of a jackknife.
+
+## Checking presets against the legacy curve library
+
+`VejReferenceTemplateCatalog` parses the official Vejdirektoratet design envelopes embedded in the
+legacy plugin — every preset, both modes, 40–180 gon, no Rhino needed. `LegacyCurveCheck` and
+`LegacyCurveAgreementTests` use them to check the presets.
+
+**What is compared, and why it is not the whole envelope.** Reproducing a whole sheet needs the
+manoeuvre it was drawn to — where the wheel starts moving and how fast — and that convention is not
+published. Reconstructing it as "straight in, full lock, straight out" does not work: measured
+against PV, the one preset independently validated against the official DWGs to 0.052 m, that
+reconstruction disagrees by up to 1.2 m at 100 gon and 7 m at 180 gon. The disagreement is the
+assumed manoeuvre, not the preset. A comparison built on it would report every preset as broken, so
+there isn't one.
+
+What is compared is the **steady-turn annulus**. Where the vehicle is turning steadily the radius is
+fixed by wheelbase and wheel angle alone, whatever route led into it, so it can be predicted from the
+preset and measured off the sheet with nothing assumed in between. Two gates keep it honest: the
+sheet must pass `LegacyCurveCheck.Inspect`, and both its boundaries must resolve to arcs about a
+**common centre** — which is what distinguishes the sustained arc from a transition that merely looks
+circular over a short run.
+
+**The library is partly corrupt.** 19 of its 121 sheets are structurally unusable and are pinned by
+name in `TheBrokenSheetsInTheLegacyLibraryAreTheOnesWeKnowAbout`, so a comparison can never quietly
+run over one:
+
+| Sheets | Defect |
+| ------ | ------ |
+| all 8 of LV 12's mode-A sheets | three to five boundary chains instead of two |
+| 7 of BUS 12's 8 mode-A sheets | a stray third boundary chain |
+| REN A 180, REN B 120 | a stray third boundary chain |
+| SVT B 140, SVT B 160 | a boundary that crosses itself |
+
+Eight PV mode-B sheets store a vertex twice. That does not change the curve, so it is recorded as a
+blemish rather than treated as a defect.
+
+**What passes.** Every mode-B sheet that clears both gates agrees with its preset's own full-lock
+geometry, inside the 0.10 m tolerance the DWG certification uses. The measured quantity is the
+rear-axle radius, because both boundaries derive from it:
+
+| Case | Rear-axle radius | Outer radius |
+| ---- | ---------------- | ------------ |
+| REN 140/160/180 gon | 0.031–0.071 m | 0.024–0.055 m |
+| LV 12 120/140/160 gon | 0.001–0.082 m | 0.001–0.062 m |
+| BUS 12 160 gon | 0.042 m | 0.027 m |
+| BUS 13,7 140/160/180 gon | 0.003–0.021 m | 0.002–0.015 m |
+| PVT 140/160/180 gon (lorry only) | — | 0.036 m |
+
+BUS 15 produces no steady mode-B turn, so it is corroborated through its mode-A sheets only.
+
+Two findings came out of this and are pinned as tests rather than left as prose:
+
+- **The mode-A sheets for large vehicles are drawn at 30.0°, not 29.7°.** Converting the published
+  33 gon exactly gives 29.7°, which is what every preset holds; but REN, BUS 13,7 and BUS 15 mode-A
+  sheets all imply 29.9–30.1°, and the source says 30° itself in the caption to Figure 6.1
+  ("hjuldrejning på 30 grader (svarende til 33 gon)"). The 0.3° costs about 0.15 m on the inner
+  radius. It is **not applied**, because mode A is shared with PV, whose `ReferenceValidated` status
+  rests on a stored certification run computed at 29.7°; changing it needs a Rhino re-run so the
+  report and the preset stay in step. See `ModeASheetsForLargeVehiclesAreDrawnAtThirtyDegrees`.
+- **PV's mode-A sheets are not drawn at a steering lock at all.** They imply about 18°. The source
+  runs personbiler through junctions at 20 km/h against 15 for large vehicles, and at that speed the
+  curve is set by comfort, not by the lock. See `PvModeASheetsAreNotDrawnAtTheSteeringLock`.
+
+This is also what settled SVT's and PVT's mode-B lock as 38.7° — the exact conversion of the
+published 43 gon — rather than the 38 the same table prints beside it: at 38° the prediction misses
+the PVT sheet by 0.169 m, at 38.7° by 0.036 m. The same exact-gon convention gives LV 12 39.6°
+(44 gon), BUS 13,7 41.4° (46 gon) and BUS 15 53.1° (59 gon).
+
 ## Reference certification (developers)
 
 Run `RRReferenceCertify` in an empty metric document to repeat the official-DWG comparison matrix.
@@ -112,7 +239,8 @@ case — so completeness is judged per vehicle against the modes its own plan en
 To add one:
 
 1. Add a preset to `src\RhinoRoad.Core\Data\vehicles.json`, with its `source` and
-   `validationStatus: "SourceTranscribed"`.
+   `validationStatus: "SourceTranscribed"`. An articulated preset adds a `towedUnits` array and
+   stops here: the steps below reconstruct a rigid body from wheel traces and do not cover one yet.
 2. Add an entry to `certification-plan.json` with `"required": false`, naming each drawing and its
    block. Trial vehicles are measured without gating release.
 3. Run `RRReferenceCertify`. It writes a report row per case and a fixture per extractable case.
@@ -364,9 +492,11 @@ search for the globally smallest possible bend or junction and do not propose ke
 
 - **Vehicle access controls:** the sparse editable start/Aim/Finish intent for an interactive run.
 - **Rear/front axle tracks:** kinematic reference curves.
+- **Towed axle tracks:** the same for each towed unit of an articulated preset, nearest first.
 - **Vehicle footprints:** the body outline stamped along the route at the `FootprintInterval`
-  station spacing; set the interval to 0 to omit them.
-- **Body swept envelope:** theoretical occupied area from the sampled rigid-body poses, built as a
+  station spacing — one outline per rigid unit, so an articulated stamp reads as a tractor and its
+  trailer folded against each other; set the interval to 0 to omit them.
+- **Body swept envelope:** theoretical occupied area from the sampled poses, every unit included, built as a
   polygon union. Where a manoeuvre encircles ground it does not cover — a roundabout island, say —
   the envelope carries that as a hole rather than reporting the island as occupied.
 - **Clearance envelope / minimum access footprint:** body envelope plus the configured allowance;

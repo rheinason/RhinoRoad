@@ -17,6 +17,9 @@ internal sealed record RhinoAnalysisGeometry(
     /// <summary>Vehicle outlines stamped along the route; empty when the interval is off.</summary>
     public IReadOnlyList<Curve> Footprints { get; init; } = [];
 
+    /// <summary>Axle-centre track of each towed unit, nearest first. Empty for a rigid vehicle.</summary>
+    public IReadOnlyList<Curve> TowedAxleTracks { get; init; } = [];
+
     /// <summary>Enclosed holes in the body envelope, e.g. the island of a roundabout circulation.</summary>
     public IReadOnlyList<Curve> BodyEnvelopeHoles { get; init; } = [];
 
@@ -99,6 +102,10 @@ internal static class RhinoGeometryBuilder
 
         var rearTrack = TrackCurve(result.RearAxleTrackMetres, elevationModel, modelUnitsPerMetre);
         var frontTrack = TrackCurve(result.FrontAxleTrackMetres, elevationModel, modelUnitsPerMetre);
+        var towedTracks = result.TowedAxleTracksMetres
+            .Where(track => track.Count > 1)
+            .Select(track => TrackCurve(track, elevationModel, modelUnitsPerMetre))
+            .ToArray();
         // Envelope construction is a polygon union in Core: deterministic, tolerance independent,
         // and able to carry holes. Rhino only converts the resulting loops back into curves.
         var body = SweptRegionBuilder.FromPoses(result.Poses);
@@ -148,10 +155,11 @@ internal static class RhinoGeometryBuilder
             BodyRegion = body.Region,
             ClearanceRegion = clearance.Region,
             RoadCorridorRegion = corridor?.Region,
+            TowedAxleTracks = towedTracks,
             Footprints = (footprintEndsOnly
                     ? PoseSampler.EndsOnly(result.Poses)
                     : PoseSampler.AtStationInterval(result.Poses, footprintIntervalMetres))
-                .Select(pose => FootprintCurve(pose, elevationModel, modelUnitsPerMetre))
+                .SelectMany(pose => FootprintCurves(pose, elevationModel, modelUnitsPerMetre))
                 .ToArray()
         };
     }
@@ -230,15 +238,19 @@ internal static class RhinoGeometryBuilder
     private static Curve TrackCurve(IReadOnlyList<Point2> points, double elevationModel, double modelUnitsPerMetre) =>
         new PolylineCurve(points.Select(point => new Point3d(point.X * modelUnitsPerMetre, point.Y * modelUnitsPerMetre, elevationModel)));
 
-    /// <summary>Closed outline of one vehicle pose, in model units.</summary>
-    private static Curve FootprintCurve(VehiclePose pose, double elevationModel, double modelUnitsPerMetre)
-    {
-        var points = pose.BodyOutlineWorldMetres
-            .Select(point => new Point3d(point.X * modelUnitsPerMetre, point.Y * modelUnitsPerMetre, elevationModel))
-            .ToList();
-        points.Add(points[0]);
-        return new PolylineCurve(points);
-    }
+    /// <summary>
+    /// Closed outlines of one vehicle pose, in model units — one per rigid unit, so an articulated
+    /// stamp reads as a tractor and its trailer folded against each other rather than as a lorry.
+    /// </summary>
+    private static IReadOnlyList<Curve> FootprintCurves(VehiclePose pose, double elevationModel, double modelUnitsPerMetre) =>
+        pose.OccupiedOutlinesWorldMetres.Select(outline =>
+        {
+            var points = outline
+                .Select(point => new Point3d(point.X * modelUnitsPerMetre, point.Y * modelUnitsPerMetre, elevationModel))
+                .ToList();
+            points.Add(points[0]);
+            return (Curve)new PolylineCurve(points);
+        }).ToArray();
 
     /// <summary>Closed model-unit curve from a Core loop in metres.</summary>
     /// <summary>

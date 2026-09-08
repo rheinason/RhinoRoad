@@ -27,6 +27,8 @@ internal static class RhinoOutputWriter
         {
             ids.Add(AddCurve(document, geometry.RearAxleTrack, "Paths", "Rear axle track", Color.Blue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
             ids.Add(AddCurve(document, geometry.FrontAxleTrack, "WheelTracks", "Front axle track", Color.CornflowerBlue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
+            foreach (var track in geometry.TowedAxleTracks)
+                ids.Add(AddCurve(document, track, "WheelTracks", "Towed axle track", Color.SteelBlue, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
             if (geometry.BodyEnvelope is not null)
                 ids.Add(AddCurve(document, geometry.BodyEnvelope, "Swept", "Body swept envelope", Color.DarkOrange, result, sourceId, analysisId, clearanceMetres, leftWidthMetres, rightWidthMetres));
             if (geometry.ClearanceEnvelope is not null)

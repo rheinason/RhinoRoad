@@ -51,6 +51,165 @@
       "validationNotes": "Dimensions are source-transcribed. The 2026-09-01 official-DWG certification run passed 0 of 6 required cases; rear-track extraction also remains ambiguous for some cases."
     },
     {
+      "id": "BUS13",
+      "name": "BUS 13,7 - 13,7 m bus",
+      "version": "VD-GUT-2023.09",
+      "widthMetres": 2.55,
+      "wheelbaseMetres": 6.45,
+      "frontOverhangMetres": 2.61,
+      "rearOverhangMetres": 4.64,
+      "axleTrackMetres": 2.195,
+      "tyreWidthMetres": 0.254,
+      "bodyOutline": [[-4.64,-1.275],[9.06,-1.275],[9.06,1.275],[-4.64,1.275]],
+      "drivingModes": {
+        "A": { "name": "Køremåde A", "speedKilometresPerHour": 15.0, "maximumWheelAngleDegrees": 29.7, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 },
+        "B": { "name": "Køremåde B", "speedKilometresPerHour": 5.0, "maximumWheelAngleDegrees": 41.4, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 }
+      },
+      "source": {
+        "title": "Grundlag for udformning af trafikarealer",
+        "publicationDate": "2023-09 (corrected 2025-12-18)",
+        "url": "https://vejregler.dk/api/Portals(6a8179a8-e164-4fc9-a59b-191699ffa1ee)/Documents/Variant(Pdf)/Content/h/7e0fba84-06dd-483b-898a-c7b3e3affaa1/3deb992b9b50496684f2c807e0300a6e",
+        "figure": "Type vehicle diagram, PDF page 39; steering table Figure 6.7, PDF page 49",
+        "notes": "Dimension chain 2,61 + 6,45 + 1,49 + 3,15 = 13,7 m. The rearmost axle is a medløbsaksel -- a self-steering trailing axle, which the published curves assume -- so it carries no side force and the drive axle is the effective rear-axle reference; the 1,49 m to the trailing axle is therefore folded into the 4,64 m rear overhang. Body width excludes mirrors. Mode A uses 33 gon, represented as 29.7 degrees; mode B uses the published 46 gon converted exactly, 41.4 degrees, rather than the 41 the same table prints beside it. Axle track and tyre width are measured from the published plan-view figure at its own scale."
+      },
+      "validationStatus": "SourceTranscribed",
+      "validationNotes": "Dimensions are source-transcribed. BUS 13,7 is absent from certification-plan.json because no official DWG for it was collected, but it is corroborated against the legacy Vejdirektoratet curve library, which also confirms the effective rear-axle choice the medløbsaksel forces -- see LegacyCurveAgreementTests."
+    },
+    {
+      "id": "BUS15",
+      "name": "BUS 15 - 15 m bus",
+      "version": "VD-GUT-2023.09",
+      "widthMetres": 2.55,
+      "wheelbaseMetres": 7.29,
+      "frontOverhangMetres": 2.71,
+      "rearOverhangMetres": 5.0,
+      "axleTrackMetres": 2.195,
+      "tyreWidthMetres": 0.254,
+      "bodyOutline": [[-5.0,-1.275],[10.0,-1.275],[10.0,1.275],[-5.0,1.275]],
+      "drivingModes": {
+        "A": { "name": "Køremåde A", "speedKilometresPerHour": 15.0, "maximumWheelAngleDegrees": 29.7, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 },
+        "B": { "name": "Køremåde B", "speedKilometresPerHour": 5.0, "maximumWheelAngleDegrees": 53.1, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 }
+      },
+      "source": {
+        "title": "Grundlag for udformning af trafikarealer",
+        "publicationDate": "2023-09 (corrected 2025-12-18)",
+        "url": "https://vejregler.dk/api/Portals(6a8179a8-e164-4fc9-a59b-191699ffa1ee)/Documents/Variant(Pdf)/Content/h/7e0fba84-06dd-483b-898a-c7b3e3affaa1/3deb992b9b50496684f2c807e0300a6e",
+        "figure": "Type vehicle diagram, PDF page 39; steering table Figure 6.7, PDF page 49",
+        "notes": "Dimension chain 2,71 + 7,29 + 1,6 + 3,4 = 15 m. As for BUS 13,7 the rearmost axle is a medløbsaksel, so the drive axle is the effective rear-axle reference and the 1,6 m to the trailing axle is folded into the 5,00 m rear overhang. Body width excludes mirrors. Mode A uses 33 gon, represented as 29.7 degrees; mode B uses the published 59 gon converted exactly, 53.1 degrees, rather than the 53 the same table prints beside it. Axle track and tyre width are measured from the published plan-view figure at its own scale."
+      },
+      "validationStatus": "SourceTranscribed",
+      "validationNotes": "Dimensions are source-transcribed. BUS 15 is absent from certification-plan.json because no official DWG for it was collected, but it is corroborated against the legacy Vejdirektoratet curve library -- see LegacyCurveAgreementTests."
+    },
+    {
+      "id": "LV12",
+      "name": "LV 12 - Lastbil med længden 12 m",
+      "version": "VD-GUT-2023.09",
+      "widthMetres": 2.55,
+      "wheelbaseMetres": 6.8,
+      "frontOverhangMetres": 1.45,
+      "rearOverhangMetres": 3.75,
+      "axleTrackMetres": 2.195,
+      "tyreWidthMetres": 0.254,
+      "bodyOutline": [[-3.75,-1.275],[8.25,-1.275],[8.25,1.275],[-3.75,1.275]],
+      "drivingModes": {
+        "A": { "name": "Køremåde A", "speedKilometresPerHour": 15.0, "maximumWheelAngleDegrees": 29.7, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 },
+        "B": { "name": "Køremåde B", "speedKilometresPerHour": 5.0, "maximumWheelAngleDegrees": 39.6, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 }
+      },
+      "source": {
+        "title": "Grundlag for udformning af trafikarealer",
+        "publicationDate": "2023-09 (corrected 2025-12-18)",
+        "url": "https://vejregler.dk/api/Portals(6a8179a8-e164-4fc9-a59b-191699ffa1ee)/Documents/Variant(Pdf)/Content/h/7e0fba84-06dd-483b-898a-c7b3e3affaa1/3deb992b9b50496684f2c807e0300a6e",
+        "figure": "Type vehicle diagram, PDF page 42; steering table Figure 6.7, PDF page 49",
+        "notes": "Dimension chain 1,45 + 6,8 + 3,75 = 12 m. Body width excludes mirrors; refrigerated bodies may be 2,6 m. Mode A uses 33 gon, represented as 29.7 degrees; mode B uses the published 44 gon converted exactly, 39.6 degrees, rather than the 39 the same table prints beside it. Axle track and tyre width are measured from the published plan-view figure at its own scale, not from a DWG vehicle block as PV, REN and BUS 12 are, and carry about 0.01 m of measurement uncertainty; the same method reproduces the DWG-measured PV axle track to 0.001 m."
+      },
+      "validationStatus": "SourceTranscribed",
+      "validationNotes": "Dimensions are source-transcribed. LV 12 is absent from certification-plan.json because no official DWG for it was collected, but it is corroborated against the legacy Vejdirektoratet curve library: its mode-B sheets hold a sustained full-lock annulus matching this preset within the 0.10 m certification tolerance -- see LegacyCurveAgreementTests."
+    },
+    {
+      "id": "PVT",
+      "name": "PVT - Påhængsvogntog",
+      "version": "VD-GUT-2023.09",
+      "widthMetres": 2.55,
+      "wheelbaseMetres": 5.50,
+      "frontOverhangMetres": 1.40,
+      "rearOverhangMetres": 2.15,
+      "axleTrackMetres": 2.195,
+      "tyreWidthMetres": 0.254,
+      "bodyOutline": [[-2.15,-1.275],[6.90,-1.275],[6.90,1.275],[-2.15,1.275]],
+      "towedUnits": [
+        {
+          "id": "DRAWBAR",
+          "name": "Trækstang med drejekrans",
+          "hitchOffsetMetres": -2.00,
+          "wheelbaseMetres": 2.90,
+          "widthMetres": 2.55,
+          "axleTrackMetres": 2.195,
+          "tyreWidthMetres": 0.254,
+          "bodyOutline": []
+        },
+        {
+          "id": "TRAILER",
+          "name": "Påhængsvogn",
+          "hitchOffsetMetres": 0.00,
+          "wheelbaseMetres": 5.80,
+          "widthMetres": 2.55,
+          "axleTrackMetres": 2.195,
+          "tyreWidthMetres": 0.254,
+          "bodyOutline": [[-1.15,-1.275],[7.00,-1.275],[7.00,1.275],[-1.15,1.275]]
+        }
+      ],
+      "drivingModes": {
+        "A": { "name": "Køremåde A", "speedKilometresPerHour": 15.0, "maximumWheelAngleDegrees": 29.7, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 },
+        "B": { "name": "Køremåde B", "speedKilometresPerHour": 5.0, "maximumWheelAngleDegrees": 38.7, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 }
+      },
+      "source": {
+        "title": "Grundlag for udformning af trafikarealer",
+        "publicationDate": "2023-09 (corrected 2025-12-18)",
+        "url": "https://vejregler.dk/api/Portals(6a8179a8-e164-4fc9-a59b-191699ffa1ee)/Documents/Variant(Pdf)/Content/h/7e0fba84-06dd-483b-898a-c7b3e3affaa1/3deb992b9b50496684f2c807e0300a6e",
+        "figure": "Type vehicle diagram, PDF page 42; steering table Figure 6.7, PDF page 49",
+        "notes": "Dimension chains 1,4 + 5,5 + 2,15 for the lorry and 1,2 + 5,8 + 1,15 for the trailer, 18,75 m overall. The drawbar is drawn from a coupling dimensioned 0,15 m inside the lorry's rear face -- 2,00 m behind its rear axle -- to the trailer's front axle, 2,90 m further back. That front axle is the turntable the trailer body pivots on, so the combination is modelled as two joints, not one: drawbar about the coupling, body about the turntable. Body width excludes mirrors. Mode A uses 33 gon, represented as 29.7 degrees; mode B uses the published 43 gon converted exactly, 38.7 degrees, rather than the 38 the same table prints alongside it; the official PVT curve sheet holds an outer radius implying 38.9 degrees, which is what settled the choice for both combinations. Axle track and tyre width are measured from the published plan-view figure at its own scale, not from a DWG vehicle block as PV, REN and BUS 12 are, and carry about 0.01 m of measurement uncertainty."
+      },
+      "validationStatus": "SourceTranscribed",
+      "validationNotes": "Dimensions are source-transcribed. The official-DWG certification matrix reconstructs a rigid body from paired wheel traces and has no articulated case, so PVT is absent from certification-plan.json rather than failing in it. It is partly corroborated instead against the legacy Vejdirektoratet curve library: on the mode-B sheets at 140, 160 and 180 gon the lorry holds a sustained full-lock arc whose outer radius matches this preset to 0.036 m, which measures its wheelbase, front overhang, width and wheel angle together. The trailer is not corroborated -- the combination is still folding at 180 gon, the longest turn the library draws, so no sheet shows it in a steady turn. Unlike SVT, every body edge is dimensioned in the published plan view, so no overhang here is assumed. The drawbar carries no body of its own and sweeps nothing."
+    },
+    {
+      "id": "SVT",
+      "name": "SVT - Sættevogntog",
+      "version": "VD-GUT-2023.09",
+      "widthMetres": 2.55,
+      "wheelbaseMetres": 3.60,
+      "frontOverhangMetres": 1.40,
+      "rearOverhangMetres": 1.00,
+      "axleTrackMetres": 2.195,
+      "tyreWidthMetres": 0.254,
+      "bodyOutline": [[-1.00,-1.275],[5.00,-1.275],[5.00,1.275],[-1.00,1.275]],
+      "towedUnits": [
+        {
+          "id": "SEMITRAILER",
+          "name": "Sættevogn",
+          "hitchOffsetMetres": 0.60,
+          "wheelbaseMetres": 8.90,
+          "widthMetres": 2.55,
+          "axleTrackMetres": 2.195,
+          "tyreWidthMetres": 0.254,
+          "bodyOutline": [[-3.20,-1.275],[10.10,-1.275],[10.10,1.275],[-3.20,1.275]]
+        }
+      ],
+      "drivingModes": {
+        "A": { "name": "Køremåde A", "speedKilometresPerHour": 15.0, "maximumWheelAngleDegrees": 29.7, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 },
+        "B": { "name": "Køremåde B", "speedKilometresPerHour": 5.0, "maximumWheelAngleDegrees": 38.7, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 }
+      },
+      "source": {
+        "title": "Grundlag for udformning af trafikarealer",
+        "publicationDate": "2023-09 (corrected 2025-12-18)",
+        "url": "https://vejregler.dk/api/Portals(6a8179a8-e164-4fc9-a59b-191699ffa1ee)/Documents/Variant(Pdf)/Content/h/7e0fba84-06dd-483b-898a-c7b3e3affaa1/3deb992b9b50496684f2c807e0300a6e",
+        "figure": "Type vehicle diagram, PDF page 43; steering table Figure 6.7, PDF page 49",
+        "notes": "Dimension chain 1,4 + 3,6 + 8,3 + 3,2 = 16,5 m, with the kingpin dimensioned 0,6 m ahead of the tractor drive axle; the semitrailer wheelbase is therefore 0,6 + 8,3 = 8,9 m from kingpin to trailer axle. The trailer box front sits 3,2 m behind the bumper in the side view, which is 10,1 m ahead of the trailer axle. Body width excludes mirrors. Mode A uses 33 gon, represented as 29.7 degrees; mode B uses the published 43 gon converted exactly, 38.7 degrees, rather than the 38 the same table prints alongside it -- the official PVT curve sheet is drawn to an outer radius implying 38.9 degrees, so the exact conversion is the one the curves were made with and the rounded figure is 0.17 m out. Axle track and tyre width are measured from the published plan-view figure at its own scale, not from a DWG vehicle block as PV, REN and BUS 12 are, and carry about 0.01 m of measurement uncertainty; the same method reproduces the DWG-measured PV axle track to 0.001 m."
+      },
+      "validationStatus": "SourceTranscribed",
+      "validationNotes": "Dimensions are source-transcribed and not corroborated against any drawn reference. The official-DWG certification matrix reconstructs a rigid body from paired wheel traces and has no articulated case, so SVT is absent from certification-plan.json rather than failing in it; and the legacy curve library cannot corroborate it either, because a semitrailer on this tractor has no steady turn at any lock either mode allows, so no sheet holds an arc to measure. Its two tightest mode-B sheets are also structurally broken. Two figures are assumptions rather than transcriptions, because the published plan view draws the combination as one 16,5 m envelope and dimensions no split between tractor and trailer: the tractor rear overhang (1,00 m behind the drive axle) and, with it, where the tractor body ends under the trailer. Both sit inside the trailer footprint when the combination is straight and affect only the inside of a hard fold."
+    },
+    {
       "id": "BUS12",
       "name": "BUS 12 - 12 m bus",
       "version": "VD-GUT-2023.09",

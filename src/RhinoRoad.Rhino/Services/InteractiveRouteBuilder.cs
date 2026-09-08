@@ -234,7 +234,7 @@ internal static class InteractiveRouteBuilder
                 foreach (var stamp in committedFootprints)
                 {
                     if (stamp.SampleIndex > planned.FromIndex) break;
-                    args.Display.DrawPolyline(stamp.Outline, Color.LightSteelBlue, 1);
+                    foreach (var outline in stamp.Outlines) args.Display.DrawPolyline(outline, Color.LightSteelBlue, 1);
                 }
 
                 var colour = planned.RequestedAngleExceeded ? Color.OrangeRed : Color.CornflowerBlue;
@@ -247,7 +247,8 @@ internal static class InteractiveRouteBuilder
                 }
 
                 DrawVehicle(args.Display, vehicle, planned.EndState, document.ModelUnitSystem,
-                    planned.RequestedAngleExceeded ? Color.OrangeRed : Color.DarkBlue);
+                    planned.RequestedAngleExceeded ? Color.OrangeRed : Color.DarkBlue,
+                    ArticulationTrace.At(vehicle, route, planned));
                 DrawExitDirection(args.Display, planned.EndState, document.ModelUnitSystem);
                 if (planned.RequestedAngleExceeded)
                     args.Display.Draw2dText("Steering limit reached — adjust your aim", Color.OrangeRed,
@@ -578,7 +579,7 @@ internal static class InteractiveRouteBuilder
     /// Each stamp remembers which sample it was taken at, so a preview that rewinds part of the
     /// route can drop the stamps belonging to the part being given back.
     /// </remarks>
-    private static IReadOnlyList<(Polyline Outline, int SampleIndex)> CommittedFootprints(
+    private static IReadOnlyList<(IReadOnlyList<Polyline> Outlines, int SampleIndex)> CommittedFootprints(
         IReadOnlyList<RouteSample> route,
         VehicleDefinition vehicle,
         UnitSystem modelUnits)
@@ -590,8 +591,9 @@ internal static class InteractiveRouteBuilder
         var routeLength = route.Count == 0 ? 0.0 : route[^1].StationMetres;
         var intervalMetres = Math.Max(2.0, routeLength / maximumStamps);
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
-        var stamps = new List<(Polyline Outline, int SampleIndex)>();
+        var stamps = new List<(IReadOnlyList<Polyline> Outlines, int SampleIndex)>();
         var nextStation = 0.0;
+        var chain = ArticulationTrace.Along(vehicle, route);
         for (var index = 0; index < route.Count; index++)
         {
             var sample = route[index];
@@ -599,12 +601,21 @@ internal static class InteractiveRouteBuilder
             nextStation = sample.StationMetres + intervalMetres;
             var heading = Geometry2D.NormalizeAngle(
                 sample.PathHeadingRadians + (sample.Direction == TravelDirection.Reverse ? Math.PI : 0.0));
-            var points = vehicle.BodyOutline
-                .Select(point => Geometry2D.Transform(point, sample.PositionMetres.XY, heading))
-                .Select(point => new Point3d(point.X * scale, point.Y * scale, sample.PositionMetres.Z * scale))
-                .ToList();
-            points.Add(points[0]);
-            stamps.Add((new Polyline(points), index));
+            var outlines = new List<IReadOnlyList<Point2>> { vehicle.BodyOutline
+                .Select(point => Geometry2D.Transform(point, sample.PositionMetres.XY, heading)).ToArray() };
+            foreach (var towed in chain[index]?.Poses(sample.PositionMetres.XY, heading) ?? [])
+            {
+                if (towed.BodyOutlineWorldMetres.Count >= 3) outlines.Add(towed.BodyOutlineWorldMetres);
+            }
+
+            stamps.Add((outlines.Select(outline =>
+            {
+                var points = outline
+                    .Select(point => new Point3d(point.X * scale, point.Y * scale, sample.PositionMetres.Z * scale))
+                    .ToList();
+                points.Add(points[0]);
+                return new Polyline(points);
+            }).ToArray(), index));
         }
 
         return stamps;
@@ -623,15 +634,26 @@ internal static class InteractiveRouteBuilder
         VehicleDefinition vehicle,
         VehicleState state,
         UnitSystem modelUnits,
-        Color color)
+        Color color,
+        ArticulationChain? chain = null)
     {
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
-        var points = vehicle.BodyOutline
-            .Select(point => Geometry2D.Transform(point, state.RearAxleCentreMetres.XY, state.VehicleHeadingRadians))
-            .Select(point => new Point3d(point.X * scale, point.Y * scale, state.RearAxleCentreMetres.Z * scale))
-            .ToList();
-        points.Add(points[0]);
-        display.DrawPolyline(new Polyline(points), color, 2);
+        var origin = state.RearAxleCentreMetres.XY;
+        var outlines = new List<IReadOnlyList<Point2>> { vehicle.BodyOutline
+            .Select(point => Geometry2D.Transform(point, origin, state.VehicleHeadingRadians)).ToArray() };
+        foreach (var towed in chain?.Poses(origin, state.VehicleHeadingRadians) ?? [])
+        {
+            if (towed.BodyOutlineWorldMetres.Count >= 3) outlines.Add(towed.BodyOutlineWorldMetres);
+        }
+
+        foreach (var outline in outlines)
+        {
+            var points = outline
+                .Select(point => new Point3d(point.X * scale, point.Y * scale, state.RearAxleCentreMetres.Z * scale))
+                .ToList();
+            points.Add(points[0]);
+            display.DrawPolyline(new Polyline(points), color, 2);
+        }
     }
 
     private static Point3d ToModelPoint(Point3 pointMetres, UnitSystem modelUnits)

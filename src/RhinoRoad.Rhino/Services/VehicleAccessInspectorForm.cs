@@ -370,8 +370,8 @@ internal sealed class VehicleAccessInspectorForm : Form
         var poses = _snapshot.Run.Analysis.Poses.Where(pose =>
             pose.StationMetres >= item.StartStationMetres - 0.1 && pose.StationMetres <= item.EndStationMetres + 0.1).ToArray();
         if (poses.Length == 0) poses = [_snapshot.Run.Analysis.Poses.MinBy(pose => Math.Abs(pose.StationMetres - item.WorstStationMetres))!];
-        var points = poses.SelectMany(pose => pose.BodyOutlineWorldMetres.Select(point =>
-            new Point3d(point.X * scale, point.Y * scale, pose.RearAxleCentreMetres.Z * scale)));
+        var points = poses.SelectMany(pose => pose.OccupiedOutlinesWorldMetres.SelectMany(outline =>
+            outline.Select(point => new Point3d(point.X * scale, point.Y * scale, pose.RearAxleCentreMetres.Z * scale))));
         var box = new BoundingBox(points);
         if (box.IsValid)
         {
