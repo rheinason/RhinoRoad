@@ -79,6 +79,20 @@ public static class ArticulationTrace
     }
 
     /// <summary>
+    /// The fold a route ends in — the state a leg continuing it has to start from. Null for a rigid
+    /// vehicle, and for an empty route.
+    /// </summary>
+    public static ArticulationChain? AtEndOf(VehicleDefinition vehicle, IReadOnlyList<RouteSample> route)
+    {
+        ArgumentNullException.ThrowIfNull(vehicle);
+        ArgumentNullException.ThrowIfNull(route);
+        if (!vehicle.IsArticulated) return null;
+        ArticulationChain? chain = null;
+        foreach (var step in Follow(vehicle, route)) chain = step.Chain;
+        return chain;
+    }
+
+    /// <summary>
     /// State at the end of a planned leg: the route up to the sample the leg grows from, then the
     /// leg itself. The leg restates that sample, so it continues the route's fold rather than
     /// resetting it.

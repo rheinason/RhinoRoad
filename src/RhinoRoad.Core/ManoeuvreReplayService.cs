@@ -10,7 +10,8 @@ public sealed record PlannedManoeuvreLeg(
     IReadOnlyList<RouteSample> Samples,
     VehicleState EndState,
     bool RequestedAngleExceeded,
-    bool AimedBehindTheBeam = false);
+    bool AimedBehindTheBeam = false,
+    bool ExitHeadingUnavailable = false);
 
 public sealed record ReplayedManoeuvre(
     IReadOnlyList<RouteSample> Samples,
@@ -70,6 +71,35 @@ public static class ManoeuvreReplayService
             var sweep = LockedTurnGenerator.SweepFromCursor(state, target);
             var turned = LockedTurnGenerator.Turn(vehicle, mode, state, sweep, StepMetres, standstill);
             return new PlannedManoeuvreLeg(route.Count - 1, turned.Samples, turned.EndState, false);
+        }
+
+        // Reversing an articulated vehicle is a different manoeuvre, not a signed version of the
+        // same one. Aiming the tractor's rear axle at the point is what jackknifes it, so the point
+        // is taken to mean where the trailer should end up and the tractor is driven to put it
+        // there. The corner-easing and exit-heading work below is all about where the *tractor*
+        // leaves a bend, which is not the question being asked here.
+        if (vehicle.IsArticulated && control.Direction == TravelDirection.Reverse && !finishing)
+        {
+            var chain = ArticulationTrace.AtEndOf(vehicle, route)
+                ?? ArticulationChain.StartAligned(vehicle, state.VehicleHeadingRadians);
+            // With a heading asked for, the point is a dock rather than somewhere to end up near:
+            // the trailer has to arrive square to it, which is the approach line rather than the
+            // point that gets followed. Chains that cannot be docked are aimed at the point instead,
+            // and say that the heading was not honoured rather than quietly dropping it.
+            var docking = control.ExitHeadingRadians.HasValue && TrailerReverseGenerator.CanDock(vehicle);
+            var reversed = docking
+                ? TrailerReverseGenerator.DockTowedUnit(
+                    vehicle, mode, state, chain, target, control.ExitHeadingRadians!.Value, StepMetres,
+                    wheelSetAtStandstill: standstill)
+                : TrailerReverseGenerator.AimTowedUnit(
+                    vehicle, mode, state, chain, target, StepMetres, wheelSetAtStandstill: standstill);
+            return new PlannedManoeuvreLeg(
+                route.Count - 1,
+                reversed.Samples,
+                reversed.EndState,
+                !reversed.ReachedTarget,
+                AimedBehindTheBeam: false,
+                ExitHeadingUnavailable: control.ExitHeadingRadians.HasValue && !docking);
         }
 
         var fromIndex = route.Count - 1;
