@@ -2,6 +2,27 @@ namespace RhinoRoad.Core;
 
 public sealed class VehicleAccessAnalyzer
 {
+    /// <summary>
+    /// The fold past which the result stops describing a real vehicle.
+    /// </summary>
+    /// <remarks>
+    /// No per-vehicle jackknife limit is published, and it cannot be recovered from the presets
+    /// either: a semitrailer's body legitimately overlaps its tractor's in plan, because it sits on
+    /// top of it, so the angle at which they would actually collide is not a plan-geometry question.
+    /// A right angle is used instead, and it is a kinematic fact rather than a vehicle specification.
+    /// The towed unit's speed along its own axis is <c>v·cos y - w·h·sin y</c>; at a right angle the
+    /// first term is gone and the unit is no longer following the one towing it at all. Past that
+    /// the fold only runs further, and the footprints being unioned into an envelope are of a
+    /// configuration no driver reaches and no vehicle survives.
+    ///
+    /// <para>
+    /// Real jackknife happens earlier than this — contact typically comes somewhere past 60 degrees
+    /// — so this is a floor, not a threshold: clearing it does not mean the manoeuvre is drivable.
+    /// It exists so a folded run cannot be reported as feasible, which it was.
+    /// </para>
+    /// </remarks>
+    public const double JackknifeFoldRadians = Math.PI / 2.0;
+
     public VehicleAccessResult Analyze(
         VehicleDefinition vehicle,
         DrivingModeDefinition mode,
@@ -27,6 +48,11 @@ public sealed class VehicleAccessAnalyzer
         var towedTracks = vehicle.TowedUnits.Select(_ => new List<Point2>(samples.Count)).ToArray();
         var maximumFolds = new double[vehicle.TowedUnits.Count];
 
+        // Reported once per joint, where the fold first crosses. Past that the run is meaningless
+        // rather than progressively worse, and a marker every quarter metre of it says nothing the
+        // first one did not.
+        var jackknifed = new bool[vehicle.TowedUnits.Count];
+
         var index = -1;
         foreach (var (sample, vehicleHeading, chain) in ArticulationTrace.Follow(vehicle, samples))
         {
@@ -40,8 +66,20 @@ public sealed class VehicleAccessAnalyzer
             var towedPoses = chain?.Poses(rear, vehicleHeading) ?? [];
             for (var unit = 0; unit < towedPoses.Count; unit++)
             {
+                var fold = Math.Abs(towedPoses[unit].ArticulationAngleRadians);
                 towedTracks[unit].Add(towedPoses[unit].AxleCentreMetres);
-                maximumFolds[unit] = Math.Max(maximumFolds[unit], Math.Abs(towedPoses[unit].ArticulationAngleRadians));
+                maximumFolds[unit] = Math.Max(maximumFolds[unit], fold);
+                if (fold > JackknifeFoldRadians && !jackknifed[unit])
+                {
+                    jackknifed[unit] = true;
+                    violations.Add(new AnalysisViolation(
+                        ViolationKind.ArticulationAngle,
+                        sample.StationMetres,
+                        sample.PositionMetres,
+                        $"The {vehicle.TowedUnits[unit].Name} is folded {ToDegrees(fold):0.0}° against the unit " +
+                        "towing it. The combination has jackknifed, and the swept area past this point " +
+                        "is not a shape any driver reaches."));
+                }
             }
 
             rearTrack.Add(rear);

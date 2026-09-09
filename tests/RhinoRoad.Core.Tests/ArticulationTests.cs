@@ -135,6 +135,63 @@ public sealed class ArticulationTests
             9);
     }
 
+    /// <summary>
+    /// A folded run must not be reported as feasible. It was: a reversing SVT reached a 179.9°
+    /// fold — the trailer through the cab — and the analysis returned no violations at all, while
+    /// the swept envelope built from those footprints went on to be baked into the drawing as a
+    /// clearance envelope.
+    /// </summary>
+    [Fact]
+    public void AJackknifedRunIsNotReportedAsFeasible()
+    {
+        var vehicle = Catalog.Get("SVT");
+        var mode = vehicle.DrivingModes["B"];
+
+        var result = Analyzer.Analyze(vehicle, mode, Circle(25.0, 40.0 / 25.0, 0.05, TravelDirection.Reverse));
+
+        Assert.False(result.IsFeasible);
+        var violation = Assert.Single(result.Violations, item => item.Kind == ViolationKind.ArticulationAngle);
+        Assert.Contains("jackknifed", violation.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(result.MaximumArticulationAnglesRadians[0] > VehicleAccessAnalyzer.JackknifeFoldRadians);
+
+        // The station it is first reported at is where the fold crosses the limit, not the end.
+        Assert.InRange(violation.StationMetres, 10.0, 25.0);
+    }
+
+    /// <summary>
+    /// The limit must not fire on manoeuvres that are merely tight. Everything at or above the
+    /// radius the combination can sustain stays well inside it, forward.
+    /// </summary>
+    [Fact]
+    public void TurnsTheCombinationCanHoldRaiseNoJackknife()
+    {
+        foreach (var id in new[] { "SVT", "PVT" })
+        {
+            var vehicle = Catalog.Get(id);
+            var mode = vehicle.DrivingModes["B"];
+            foreach (var radius in new[] { 12.0, 20.0, 40.0 })
+            {
+                var result = Analyzer.Analyze(vehicle, mode, Circle(radius, 2.0 * Math.PI, 0.05));
+                Assert.DoesNotContain(result.Violations, item => item.Kind == ViolationKind.ArticulationAngle);
+            }
+        }
+    }
+
+    /// <summary>Reversing dead straight is the one reverse that holds: the fold has nothing to grow from.</summary>
+    [Fact]
+    public void ReversingInAStraightLineKeepsTheTrailerBehindTheVehicle()
+    {
+        var vehicle = Catalog.Get("SVT");
+        var samples = Straight(60.0, 0.1)
+            .Select(sample => sample with { Direction = TravelDirection.Reverse })
+            .ToArray();
+
+        var result = Analyzer.Analyze(vehicle, vehicle.DrivingModes["B"], samples);
+
+        Assert.Equal(0.0, result.MaximumArticulationAnglesRadians[0], 9);
+        Assert.DoesNotContain(result.Violations, item => item.Kind == ViolationKind.ArticulationAngle);
+    }
+
     [Fact]
     public void SweptRegionCoversTheTrailerAndNotJustTheTractor()
     {

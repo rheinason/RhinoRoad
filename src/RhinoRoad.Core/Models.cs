@@ -214,6 +214,7 @@ public enum ViolationKind
 {
     SteeringAngle,
     SteeringRate,
+    ArticulationAngle,
     TangentDiscontinuity,
     Grade,
     ObstacleClearance,
@@ -243,9 +244,9 @@ public sealed class VehicleAccessResult
     public IReadOnlyList<IReadOnlyList<Point2>> TowedAxleTracksMetres { get; init; } = [];
 
     /// <summary>
-    /// Largest fold reached at each articulation joint over the route. There is no published limit
-    /// to judge these against, so they are reported rather than checked — a value approaching a
-    /// right angle is the combination jackknifing whether or not anything says so.
+    /// Largest fold reached at each articulation joint over the route. The source publishes no
+    /// per-vehicle fold limit, so any value below
+    /// <see cref="VehicleAccessAnalyzer.JackknifeFoldRadians"/> is reported rather than judged.
     /// </summary>
     public IReadOnlyList<double> MaximumArticulationAnglesRadians { get; init; } = [];
     public double? MinimumClearanceMetres { get; set; }
