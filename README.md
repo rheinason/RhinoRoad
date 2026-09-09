@@ -6,9 +6,9 @@ measure the space it needs. Consecutive bends retain the vehicle's steering stat
 automatic route finding, and automatic layout resizing are outside the current product scope.
 
 Rigid and articulated presets are both supported. A towed unit is placed from where the vehicle has
-been rather than from where it is, so a trailer stays folded into the straight that follows a corner
-and runs away rather than settling when the combination reverses — see
-[Articulated vehicles](#articulated-vehicles).
+been rather than from where it is, so a trailer stays folded into the straight that follows a corner.
+Reversing steers the trailer rather than the tractor, and with an exit direction it backs square onto
+a dock — see [Articulated vehicles](#articulated-vehicles).
 
 ## Commands
 

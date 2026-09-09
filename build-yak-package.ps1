@@ -89,8 +89,10 @@ description: >
   follow an existing curve, and get swept and clearance envelopes, wheel tracks and feasibility
   checks against the Danish Vejdirektoratet driving modes. Eight type-vehicle presets: PV, REN,
   LV 12, BUS 12, BUS 13,7, BUS 15, PVT and SVT. A trailer is placed from where the vehicle has
-  been rather than from where it is, so it stays folded into the straight after a corner and runs
-  away rather than settling in reverse. PV is reference-validated against the official koerekurver
+  been rather than from where it is, so it stays folded into the straight after a corner. Reversing
+  steers the trailer rather than the tractor, and a semitrailer backs square onto a dock; the wheel
+  can be turned at a standstill, which is what makes a three-point turn narrower than a U-turn.
+  PV is reference-validated against the official koerekurver
   drawings. REN, LV 12, BUS 12 and BUS 13,7 are transcribed and corroborated against the legacy
   Vejdirektoratet curve library, which also corroborates the PVT lorry; neither trailer is
   corroborated, because neither combination reaches a steady turn on those sheets. Each preset

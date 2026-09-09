@@ -4,8 +4,8 @@
          both consume it. The pre-release suffix marks this as a beta on the package server, where
          it is only installed by someone who asks for pre-releases. FileVersion and AssemblyVersion
          must stay purely numeric, so they take the base version. -->
-    <RhinoRoadVersion>0.3.0-beta</RhinoRoadVersion>
-    <RhinoRoadAssemblyVersion>0.3.0</RhinoRoadAssemblyVersion>
+    <RhinoRoadVersion>0.4.0-beta</RhinoRoadVersion>
+    <RhinoRoadAssemblyVersion>0.4.0</RhinoRoadAssemblyVersion>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
