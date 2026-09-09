@@ -121,9 +121,16 @@ containment and footprint stamps all cover the trailer.
 
 Two things this does not yet do:
 
-- **No fold limit.** The source publishes none, so the maximum fold at each joint is reported —
-  in the command summary and on `VehicleAccessResult` — rather than checked. A figure near 90° is
-  the combination jackknifing whether or not anything flags it.
+- **No per-vehicle fold limit.** The source publishes none, and it cannot be recovered from the
+  presets either: a semitrailer's body legitimately overlaps its tractor's in plan, because it sits
+  on top of it, so the angle at which they would really collide is not a plan-geometry question. The
+  maximum fold at each joint is therefore reported — in the command summary and on
+  `VehicleAccessResult` — rather than judged against a number. A fold past a right angle *is*
+  rejected, as `ArticulationAngle`: at that point the towed unit is no longer following the one
+  towing it at all, so the footprints past it are of a configuration no driver reaches. That is a
+  floor, not a threshold — real jackknife happens earlier, typically past 60° — so clearing it does
+  not mean the manoeuvre is drivable.
+
 - **Only partial corroboration.** The official-DWG matrix reconstructs a *rigid* body from paired
   wheel traces and has no articulated case, so both presets stay `SourceTranscribed` and are absent
   from `certification-plan.json` rather than failing in it. What they are checked against instead is
@@ -136,6 +143,111 @@ trailer folds without ever settling. `TurningGeometryCalculator` reports that as
 `SteadyStateAttainable = false` alongside the smallest rear-axle radius the combination can hold, and
 the dialog says so instead of quoting the width of a jackknife.
 
+**Reversing steers the trailer, not the tractor.** A reversing combination is unstable by nature:
+the fold grows rather than settles, with an e-folding distance of about one trailer wheelbase. Aimed
+the way a forward leg is aimed — tractor's rear axle at the point you click — SVT passed a right
+angle after 13 m on a 15 m radius and PVT in half that, which is what a driver would manage if they
+never countersteered.
+
+So reversing an articulated vehicle, the point you click means **where the trailer should end up**,
+and `TrailerReverseGenerator` drives the tractor to put it there. The structure follows from one
+observation: for a unit hitched at its tower's axle, its curvature is `tan(fold) / wheelbase` — the
+fold *is* its steering angle, so the chain is a stack of bicycles each steered by the joint ahead of
+it. Pure pursuit on the trailer gives a curvature, that curvature asks for a fold, driving the fold
+asks for a curvature of the unit towing it, and the question is put again one joint further in until
+it comes out as a wheel angle and goes through the ordinary rate-limited step. Lock, slew rate and
+the kinematics stay in one place.
+
+Measured over eight targets from 18 to 40 m back and up to 14 m across, SVT reaches all eight within
+0.1 m and never folds past 36°. PVT — whose body hangs two joints out — reaches the moderate ones
+and stops short on shifts steeper than about 0.35 across per metre back, missing by around half a
+metre.
+
+A reverse the combination cannot make **stops where it stops being drivable** rather than folding on
+through it, which is what a driver does: stop, pull forward, start the reverse again on a better
+line. The leg you keep is the drivable part, and the viewport says the trailer could not be put
+there from here.
+
+**Docking: set an exit direction and the trailer arrives square to it.** Position and heading cannot
+both be had by aiming at a point — pursuit closes on a point from whatever direction it happens to
+approach from, which is how a trailer ends up across the face of a dock. So when a reversing leg
+carries an exit direction, what gets followed is the **approach line** — the line through the point
+along that direction — and the point becomes the place along it to stop. Two errors describe the
+trailer against that line, how far off it sits and how far off it points; running the arc length
+backwards flips the sign of both, which is why the forward law diverges here and the signs are
+derived rather than reused.
+
+Cross-track error commands an approach *angle* rather than a curvature directly. Commanding
+curvature is only valid near the line — eight metres off it asks for a radius no combination can
+hold — and the bounded form is what lets the approach start from well off the line.
+
+Squaring up costs distance: roughly the first fifteen metres go on establishing the fold and the last
+on taking it out again. With about 50 m of run-in or more, SVT arrives within 0.25 m and under a
+degree off square. Given less, it gets as close as it can — within about 0.6 m and 3° — and reports
+that it did not square rather than claiming a dock it did not make.
+
+**Docking is a single-joint capability**, enforced by `TrailerReverseGenerator.CanDock`. A two-joint
+chain does not hold: the heading loop has to be slower than the folds it commands, and the folds
+cannot be driven fast enough to leave room for it, so every pairing of the two gains measured on PVT
+either crawled, converged and then wandered off, or ran into the fold stop. It is the second joint
+that does it rather than the drawbar it hangs from — rebuilding PVT with its dolly on a fifth wheel,
+and again with the hitch on the axle, changed nothing. Aiming at a point is stable for both, so a
+chain that cannot be docked is aimed instead and the viewport says the heading was not honoured.
+
+One limit remains: a locked turn in reverse is still open-loop, so it will fold. It is flagged
+rather than prevented.
+
+## Turning the wheel at a standstill
+
+The steering rate is a rate per second and the leg generators spend it per metre, so moving the wheel
+always costs distance — **12.5 m from centre to full lock in mode A and 4.17 m in mode B**, the same
+for every preset, because the rate and the lock scale together. Standing still, that cost is zero.
+
+**A change of direction is a standstill and is treated as one automatically**, since the vehicle has
+to stop to make it. That single change is what makes three-point turns work: each leg of a shuffle
+now begins at the lock it was always meant to be driven on, instead of spending its whole length
+getting there. Every preset now needs less width to shuffle round than to turn round, where before
+only the heavy ones in mode B did:
+
+| | U-turn | Shuffle | Saved |
+| --- | --- | --- | --- |
+| PV, mode B | 7.76 m | 5.87 m | 1.89 m |
+| REN, mode A | 16.87 m | 12.85 m | 4.01 m |
+| BUS 12, mode A | 21.66 m | 16.40 m | 5.26 m |
+| BUS 15, mode A | 26.07 m | 19.68 m | 6.39 m |
+
+Away from a direction change the stop has to be asked for — the **Stop** option arms the next click,
+and it is spent on that click rather than latched, because a stop happens once. Inventing stops that
+did not happen shrinks the swept envelope, and an envelope smaller than the vehicle really needs is
+the unsafe direction to be wrong in, so it is never assumed.
+
+A sample that begins from a standstill records the fact, and the steering-rate check skips it. It
+has to: a wheel turned while stopped covers no distance, and measuring that movement against the
+distance to the next sample reads as an infinite steering rate.
+
+**This is not a third køremåde.** The source publishes two, and the only wording it has for tight
+turning areas sits inside køremåde B — *"på vendepladser fremføres det dimensionsgivende køretøj med
+meget lav hastighed og i visse tilfælde ved bakkemanøvrer"*. A mode C would mean inventing a speed, a
+lock and a clearance for every preset with nothing to check them against, sitting in the same table
+as two modes that *are* corroborated against the official curves. Turning the wheel at a standstill
+is a technique, not a vehicle property: you do it while driving køremåde B.
+
+## Saying exactly which way to leave
+
+**Shift** squares the exit onto an ortho step from the construction plane, which is what most
+junctions want. Some are not on a step — a skewed arm, a bay set at whatever angle the building is —
+and those need the direction said exactly.
+
+The **Direction** option arms the next click, and the pick then has two stages: the click places the
+point, and the pick continues with that point fixed while the cursor **swings the direction about
+it**. It is swung about the point just placed rather than pointed from the vehicle, because the exit
+direction is a property of where the leg *ends*.
+
+The whole leg is replanned and drawn on every move of that swing — swept band, path, and the vehicle
+ghosted at its finish with its trailer — so the direction is chosen against what it actually does
+rather than in the abstract and previewed afterwards. Shift still squares it while swinging, an angle
+can be typed instead (measured from the construction plane), and Escape abandons the click rather
+than committing a leg whose direction was never settled.
 ## Checking presets against the legacy curve library
 
 `VejReferenceTemplateCatalog` parses the official Vejdirektoratet design envelopes embedded in the
@@ -350,10 +462,17 @@ reconstruct today; it must never shrink.
    same snapped point would have reached only 55 degrees of it in 15 m. Locked turns arrive exactly
    too, because they drive their sweep rather than aiming at it.
 
-   A locked turn either side of a `Reverse` is what a three-point turn is made of. Note that
-   shuffling only saves width in the slow mode: in mode A the wheel needs 12.5 m of travel to reach
-   lock and no leg of a shuffle is that long, so the vehicle never gets near its minimum radius and
-   the manoeuvre ends up wider than simply turning round.
+   A locked turn either side of a `Reverse` is what a three-point turn is made of. The cusp between
+   the legs is a standstill, so the wheel arrives at each leg already at lock rather than spending
+   the leg getting there, and shuffling round now needs less width than turning round for every
+   preset in both modes — see [Turning the wheel at a standstill](#turning-the-wheel-at-a-standstill).
+
+   `Stop` arms a standstill on the next click, for a stop the route would not otherwise have had:
+   the vehicle is taken to a halt, the wheel is turned where it stands, and the leg is driven from
+   there. It is spent on that click rather than latched, because a stop happens once. `Direction`
+   arms an exact exit direction on the next click: the click places the point, and the pick then
+   continues with the point fixed while the cursor swings the direction about it, with the whole leg
+   replanned on every move — see [Saying exactly which way to leave](#saying-exactly-which-way-to-leave).
 6. Obstacle curves and closed allowed-area boundaries are only asked for when their checks are
    ticked; both are off by default.
 7. The movement-fit report is written to the command line and the result is baked. With no site
@@ -503,7 +622,8 @@ search for the globally smallest possible bend or junction and do not propose ke
   the Vejregler default is 0.30 m.
 - **Fixed-width road edges:** asymmetric offsets from the route. A failure means the clearance
   envelope does not fit between them.
-- **Warning points:** steering, steering-rate, tangent, grade, obstacle, boundary, or road-fit issues.
+- **Warning points:** steering, steering-rate, articulation, tangent, grade, obstacle, boundary, or
+  road-fit issues.
 
 These outputs are screening geometry, not construction-ready kerb design or certified AutoTURN
 results. See `plan.md` and `reference-validation.md` for scope and validation status.
