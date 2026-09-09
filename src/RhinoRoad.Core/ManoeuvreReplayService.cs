@@ -38,6 +38,12 @@ public static class ManoeuvreReplayService
         ArgumentNullException.ThrowIfNull(control);
         if (route.Count == 0) throw new ArgumentException("A route is required.", nameof(route));
 
+        // A direction change is a standstill by definition -- the vehicle cannot swap gear rolling --
+        // so the wheel is free there whether or not it was asked for. It is read from the route
+        // rather than from the state, because callers set the new direction on the state before
+        // planning, which would hide the cusp from here.
+        var standstill = control.FromStandstill
+            || (route.Count > 0 && route[^1].Direction != control.Direction);
         if (state.Direction != control.Direction) state = state with { Direction = control.Direction };
         var target = control.PositionMetres.XY;
         var bearing = Math.Atan2(
@@ -62,7 +68,7 @@ public static class ManoeuvreReplayService
         if (control.Kind == ManoeuvreControlKind.Turn)
         {
             var sweep = LockedTurnGenerator.SweepFromCursor(state, target);
-            var turned = LockedTurnGenerator.Turn(vehicle, mode, state, sweep, StepMetres);
+            var turned = LockedTurnGenerator.Turn(vehicle, mode, state, sweep, StepMetres, standstill);
             return new PlannedManoeuvreLeg(route.Count - 1, turned.Samples, turned.EndState, false);
         }
 
@@ -74,7 +80,7 @@ public static class ManoeuvreReplayService
             var alignment = turning && route[^1].Direction == state.Direction
                 ? HeadingLegGenerator.EaseOntoHeading(vehicle, mode, route, legStartIndex, exitHeading, StepMetres)
                 : (FromIndex: route.Count - 1,
-                    Leg: HeadingLegGenerator.ToHeading(vehicle, mode, state, exitHeading, StepMetres));
+                    Leg: HeadingLegGenerator.ToHeading(vehicle, mode, state, exitHeading, StepMetres, standstill));
             var aligned = alignment.Leg;
             fromIndex = alignment.FromIndex;
             var offset = target - aligned.EndState.RearAxleCentreMetres.XY;
@@ -86,14 +92,15 @@ public static class ManoeuvreReplayService
             return new PlannedManoeuvreLeg(fromIndex,
                 aligned.Samples.Concat(straight.Samples.Skip(1)).ToArray(), straight.EndState, false);
         }
-        if (turning && (finishing || leavingTheCorner))
+        var easedFirst = turning && (finishing || leavingTheCorner);
+        if (easedFirst)
         {
             // At a cusp the stored last sample still describes the arriving gear.
             // Reconstructing from it would silently switch back to that gear.
             var eased = route[^1].Direction == state.Direction
                 ? HeadingLegGenerator.EaseOntoHeading(vehicle, mode, route, legStartIndex, bearing, StepMetres)
                 : (FromIndex: route.Count - 1,
-                    Leg: HeadingLegGenerator.ToHeading(vehicle, mode, state, bearing, StepMetres));
+                    Leg: HeadingLegGenerator.ToHeading(vehicle, mode, state, bearing, StepMetres, standstill));
             fromIndex = eased.FromIndex;
             samples.AddRange(eased.Leg.Samples);
             current = eased.Leg.EndState;
@@ -106,8 +113,16 @@ public static class ManoeuvreReplayService
         if (finishing) return new PlannedManoeuvreLeg(fromIndex, samples, current, false);
 
         var aim = RateLimitedTrajectoryGenerator.ControlsFromCursor(vehicle, mode, current, target);
-        var leg = new RateLimitedTrajectoryGenerator()
-            .GenerateLeg(vehicle, mode, current, aim.TargetSteeringRadians, aim.TravelDistanceMetres, StepMetres);
+        var leg = new RateLimitedTrajectoryGenerator().GenerateLeg(
+            vehicle,
+            mode,
+            current,
+            aim.TargetSteeringRadians,
+            aim.TravelDistanceMetres,
+            StepMetres,
+            // Only where the leg actually begins at the stop. Where the corner was eased first the
+            // vehicle has already rolled, and the wheel is wherever that easing left it.
+            standstill && !easedFirst);
         samples.AddRange(leg.Samples.Skip(1));
         return new PlannedManoeuvreLeg(
             fromIndex, samples, leg.EndState, aim.RequestedAngleExceeded, aim.AimedBehindTheBeam);

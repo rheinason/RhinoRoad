@@ -83,18 +83,25 @@ public sealed class VehicleAccessAnalyzer
                 var distance = sample.PositionMetres.XY.DistanceTo(previous.PositionMetres.XY);
                 if (distance > Geometry2D.Epsilon)
                 {
-                    var elapsed = distance / mode.SpeedMetresPerSecond;
-                    var steeringRate = previousSteering.HasValue
-                        ? Math.Abs(Geometry2D.NormalizeAngle(steering - previousSteering.Value)) / elapsed
-                        : 0.0;
-                    maximumSteeringRate = Math.Max(maximumSteeringRate, steeringRate);
-                    if (steeringRate > mode.MaximumSteeringRateRadiansPerSecond + 1e-8)
+                    // A wheel turned at a standstill covers no distance, so measuring its movement
+                    // against the distance to the next sample says the wheel moved infinitely fast.
+                    // It did not: it moved while the vehicle was stopped, which the rate limit -- a
+                    // rate per second, spent here per metre -- has nothing to say about.
+                    if (!sample.StartsFromStandstill)
                     {
-                        violations.Add(new AnalysisViolation(
-                            ViolationKind.SteeringRate,
-                            sample.StationMetres,
-                            sample.PositionMetres,
-                            $"Steering rate {ToDegrees(steeringRate):0.0}°/s exceeds {ToDegrees(mode.MaximumSteeringRateRadiansPerSecond):0.0}°/s."));
+                        var elapsed = distance / mode.SpeedMetresPerSecond;
+                        var steeringRate = previousSteering.HasValue
+                            ? Math.Abs(Geometry2D.NormalizeAngle(steering - previousSteering.Value)) / elapsed
+                            : 0.0;
+                        maximumSteeringRate = Math.Max(maximumSteeringRate, steeringRate);
+                        if (steeringRate > mode.MaximumSteeringRateRadiansPerSecond + 1e-8)
+                        {
+                            violations.Add(new AnalysisViolation(
+                                ViolationKind.SteeringRate,
+                                sample.StationMetres,
+                                sample.PositionMetres,
+                                $"Steering rate {ToDegrees(steeringRate):0.0}°/s exceeds {ToDegrees(mode.MaximumSteeringRateRadiansPerSecond):0.0}°/s."));
+                        }
                     }
 
                     var grade = (sample.PositionMetres.Z - previous.PositionMetres.Z) / distance;

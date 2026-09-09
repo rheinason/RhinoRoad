@@ -36,11 +36,17 @@ public enum ManoeuvreControlKind
     Turn
 }
 
+/// <param name="FromStandstill">
+/// Whether the vehicle is taken to stop before this leg and turn the wheel where it stands. A change
+/// of direction is a standstill whether or not this is set, because the vehicle has to stop to make
+/// one; setting it asks for a stop that the route would not otherwise have had.
+/// </param>
 public sealed record ManoeuvreControl(
     Point3 PositionMetres,
     TravelDirection Direction,
     ManoeuvreControlKind Kind = ManoeuvreControlKind.Aim,
-    double? ExitHeadingRadians = null);
+    double? ExitHeadingRadians = null,
+    bool FromStandstill = false);
 
 public sealed record ManoeuvreDefinition(
     int SchemaVersion,

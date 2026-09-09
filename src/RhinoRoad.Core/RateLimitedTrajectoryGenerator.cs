@@ -8,7 +8,8 @@ public sealed class RateLimitedTrajectoryGenerator
         VehicleState start,
         double targetSteeringAngleRadians,
         double travelDistanceMetres,
-        double maximumStepMetres = 0.10)
+        double maximumStepMetres = 0.10,
+        bool wheelSetAtStandstill = false)
     {
         if (travelDistanceMetres <= 0.0) throw new ArgumentOutOfRangeException(nameof(travelDistanceMetres));
         if (maximumStepMetres <= 0.0) throw new ArgumentOutOfRangeException(nameof(maximumStepMetres));
@@ -28,7 +29,8 @@ public sealed class RateLimitedTrajectoryGenerator
 
         for (var index = 0; index < sampleCount; index++)
         {
-            var advanced = Advance(vehicle, mode, state, targetSteeringAngleRadians, step);
+            var advanced = Advance(
+                vehicle, mode, state, targetSteeringAngleRadians, step, wheelSetAtStandstill && index == 0);
             state = advanced.State;
             samples.Add(advanced.Sample);
         }
@@ -49,7 +51,8 @@ public sealed class RateLimitedTrajectoryGenerator
         DrivingModeDefinition mode,
         VehicleState state,
         double targetSteeringAngleRadians,
-        double stepMetres)
+        double stepMetres,
+        bool wheelSetAtStandstill = false)
     {
         targetSteeringAngleRadians = Math.Clamp(
             targetSteeringAngleRadians,
@@ -59,8 +62,16 @@ public sealed class RateLimitedTrajectoryGenerator
         var directionSign = (double)state.Direction;
         var elapsed = stepMetres / mode.SpeedMetresPerSecond;
         var steeringDeltaLimit = mode.MaximumSteeringRateRadiansPerSecond * elapsed;
-        var nextSteering = MoveTowards(state.SteeringAngleRadians, targetSteeringAngleRadians, steeringDeltaLimit);
-        var averageSteering = (state.SteeringAngleRadians + nextSteering) * 0.5;
+        // A wheel turned while the vehicle is standing still costs no distance, because the rate
+        // limit is a rate per unit of travel and there is no travel. The wheel is already where it is
+        // wanted when the step begins, so it is also the angle held across the whole step rather than
+        // the average of moving onto it.
+        var nextSteering = wheelSetAtStandstill
+            ? targetSteeringAngleRadians
+            : MoveTowards(state.SteeringAngleRadians, targetSteeringAngleRadians, steeringDeltaLimit);
+        var averageSteering = wheelSetAtStandstill
+            ? nextSteering
+            : (state.SteeringAngleRadians + nextSteering) * 0.5;
         var headingChange = directionSign * Math.Tan(averageSteering) * stepMetres / vehicle.WheelbaseMetres;
         var movementHeading = state.VehicleHeadingRadians + (state.Direction == TravelDirection.Reverse ? Math.PI : 0.0);
         var midpointMovementHeading = movementHeading + (headingChange * 0.5);
@@ -75,7 +86,14 @@ public sealed class RateLimitedTrajectoryGenerator
         var pathCurvature = directionSign * Math.Tan(nextSteering) / vehicle.WheelbaseMetres;
         return new AdvanceResult(
             new VehicleState(point, vehicleHeading, nextSteering, state.Direction, station),
-            new RouteSample(station, point, pathHeading, pathCurvature, state.Direction),
+            new RouteSample(
+                station,
+                point,
+                pathHeading,
+                pathCurvature,
+                state.Direction,
+                IsTangentDiscontinuous: false,
+                StartsFromStandstill: wheelSetAtStandstill),
             headingChange);
     }
 

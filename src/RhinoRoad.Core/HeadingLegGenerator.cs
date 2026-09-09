@@ -45,7 +45,8 @@ public static class HeadingLegGenerator
         DrivingModeDefinition mode,
         VehicleState start,
         double targetMovementHeadingRadians,
-        double maximumStepMetres = 0.10)
+        double maximumStepMetres = 0.10,
+        bool wheelSetAtStandstill = false)
     {
         ArgumentNullException.ThrowIfNull(vehicle);
         ArgumentNullException.ThrowIfNull(mode);
@@ -74,7 +75,8 @@ public static class HeadingLegGenerator
 
             var shortfall = Shortfall(vehicle, mode, state, targetMovementHeadingRadians);
             var command = Math.Sign(shortfall) * (double)state.Direction * mode.MaximumWheelAngleRadians;
-            var advanced = RateLimitedTrajectoryGenerator.Advance(vehicle, mode, state, command, maximumStepMetres);
+            var advanced = RateLimitedTrajectoryGenerator.Advance(
+                vehicle, mode, state, command, maximumStepMetres, wheelSetAtStandstill && samples.Count == 1);
 
             // The moment to stop turning in almost never falls on a step boundary, and stopping at
             // the next one instead overshoots by a whole step's worth of turn — most of a degree at

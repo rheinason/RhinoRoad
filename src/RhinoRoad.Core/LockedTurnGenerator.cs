@@ -55,7 +55,8 @@ public static class LockedTurnGenerator
         DrivingModeDefinition mode,
         VehicleState start,
         double sweepRadians,
-        double maximumStepMetres = 0.10)
+        double maximumStepMetres = 0.10,
+        bool wheelSetAtStandstill = false)
     {
         ArgumentNullException.ThrowIfNull(vehicle);
         ArgumentNullException.ThrowIfNull(mode);
@@ -82,7 +83,8 @@ public static class LockedTurnGenerator
 
         while (state.StationMetres - start.StationMetres < MaximumTravelMetres)
         {
-            var advanced = RateLimitedTrajectoryGenerator.Advance(vehicle, mode, state, command, maximumStepMetres);
+            var advanced = RateLimitedTrajectoryGenerator.Advance(
+                vehicle, mode, state, command, maximumStepMetres, wheelSetAtStandstill && samples.Count == 1);
             var reached = swept + advanced.HeadingChangeRadians;
             if (sign * reached >= sign * sweepRadians)
             {

@@ -294,33 +294,34 @@ public sealed class LockedTurnTests
     }
 
     /// <summary>
-    /// Shuffling is only worth doing in the slow mode. Records the measurement, because it is not
-    /// what a reader expects and it decides when the manoeuvre is worth offering at all.
+    /// Shuffling beats turning round, for every preset in both modes. Records the measurement,
+    /// because it decides when the manoeuvre is worth offering at all — and because it used to be
+    /// the other way about.
     /// </summary>
     /// <remarks>
     /// <para>
     /// A three-point turn saves width by trading it for length, but only if the wheel can reach its
-    /// lock inside a leg. In mode A it cannot: the wheel needs 12.5 m of travel to reach full lock
-    /// and no leg of a shuffle is that long, so every leg is driven on a radius far wider than the
-    /// minimum and the manoeuvre sprawls — 1.2 to 2.3 times the width of simply turning round. In
-    /// mode B, where lock-up costs 4.2 m, the heavy vehicles come in under the U-turn.
+    /// lock inside a leg. Until the wheel could be turned at a standstill it usually could not: the
+    /// wheel needs 12.5 m of travel to reach full lock in mode A and no leg of a shuffle is that
+    /// long, so every leg was driven on a radius far wider than the minimum and the manoeuvre
+    /// sprawled — 1.2 to 2.3 times the width of simply turning round. Only the heavy presets in mode
+    /// B, where lock-up costs 4.2 m, came in under the U-turn.
     /// </para>
     /// <para>
-    /// PV in mode B is the exception in the other direction: its U-turn is already within 0.2 m of
-    /// the ideal turning diameter, so there is nothing for shuffling to recover and it does not beat
-    /// it either. A three-point turn is for a vehicle whose turning circle does not fit, which is
-    /// what the heavy presets in mode B are.
+    /// A change of direction is a standstill, so the wheel now arrives at each leg already at lock
+    /// and the legs are driven on the minimum radius they were always meant to be. Every preset now
+    /// gains, from 1.9 m on PV in mode B to 6.4 m on BUS 15 in mode A.
     /// </para>
     /// </remarks>
     [Theory]
-    [InlineData("REN", "B", true)]
-    [InlineData("BUS12", "B", true)]
-    [InlineData("REN", "A", false)]
-    [InlineData("BUS12", "A", false)]
-    public void ShufflingBeatsAUTurnOnlyWhereTheWheelCanReachLockWithinALeg(
-        string id,
-        string modeId,
-        bool expectedNarrower)
+    [InlineData("PV", "A")]
+    [InlineData("PV", "B")]
+    [InlineData("REN", "A")]
+    [InlineData("REN", "B")]
+    [InlineData("BUS12", "A")]
+    [InlineData("BUS12", "B")]
+    [InlineData("BUS15", "A")]
+    public void ShufflingBeatsAUTurnBecauseTheWheelIsTurnedAtEachStop(string id, string modeId)
     {
         var (vehicle, mode) = Preset(id, modeId);
 
@@ -335,7 +336,8 @@ public sealed class LockedTurnTests
             vehicle,
             mode);
 
-        Assert.Equal(expectedNarrower, shuffle < uTurn);
+        Assert.True(shuffle < uTurn, $"shuffle {shuffle:0.00} m against a {uTurn:0.00} m U-turn");
+        Assert.True(uTurn - shuffle >= 1.5, $"only saved {uTurn - shuffle:0.00} m");
     }
 
     /// <summary>Width the manoeuvre needs across the road the vehicle started on.</summary>

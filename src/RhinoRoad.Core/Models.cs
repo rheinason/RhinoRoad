@@ -162,13 +162,19 @@ public sealed record VehicleDefinition(
     }
 }
 
+/// <param name="StartsFromStandstill">
+/// Whether the vehicle stood still before this sample and turned its wheel where it stood. The
+/// steering rate is a rate per second, so standing still buys wheel movement for no distance at all —
+/// which is legitimate, and would otherwise read as an impossible steering rate across the step.
+/// </param>
 public sealed record RouteSample(
     double StationMetres,
     Point3 PositionMetres,
     double PathHeadingRadians,
     double SignedCurvaturePerMetre,
     TravelDirection Direction,
-    bool IsTangentDiscontinuous = false);
+    bool IsTangentDiscontinuous = false,
+    bool StartsFromStandstill = false);
 
 /// <summary>Where one towed unit sits at a pose, and how far it is folded against its tower.</summary>
 public sealed record TowedUnitPose(
