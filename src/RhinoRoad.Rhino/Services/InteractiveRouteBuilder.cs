@@ -88,6 +88,17 @@ internal static class InteractiveRouteBuilder
         // a locked turn, and they are one flag so the two routes into it cannot disagree.
         var lockedTurn = false;
 
+        // Armed by the Stop option and spent on the next click, because a stop is a thing that
+        // happens once rather than a state to be in. A change of direction is a stop already and
+        // needs no arming -- this is for the standstill a route would not otherwise have had.
+        var stopFirst = false;
+
+        // Armed by the Direction option and spent on the next click. The direction is not picked
+        // separately: the click places the point, and the pick then continues with that point fixed
+        // while the cursor swings the direction about it, so the leg is previewed against the
+        // direction being chosen rather than chosen blind and previewed afterwards.
+        var pointExitNext = false;
+
         // Which way the last previewed turn swung, so a sweep typed on the command line — where
         // there is no cursor to read a side from — goes the way the cursor was last pointing.
         var lastSweepSign = 1.0;
@@ -113,7 +124,10 @@ internal static class InteractiveRouteBuilder
                 ? $"Finish: pick the direction to end up travelling in (wheel {wheelNow:0.#} deg); Enter to finish"
                 : lockedTurn
                     ? $"Turn at full lock: pick the side and heading to swing to, or type degrees ({state.Direction}); Enter to finish"
-                    : $"Pick next point ({state.Direction}, wheel {wheelNow:0.#} deg; Ctrl for full lock, Shift to square the exit); Enter to finish");
+                    : $"Pick next point ({state.Direction}, wheel {wheelNow:0.#} deg"
+                        + (stopFirst ? ", STOP first" : string.Empty)
+                        + (pointExitNext ? ", then swing the exit" : string.Empty)
+                        + "; Ctrl for full lock, Shift to square the exit); Enter to finish");
             getter.AcceptNothing(true);
 
             // Snapping, and ortho taken over. The base point is the vehicle, which is what a
@@ -139,6 +153,8 @@ internal static class InteractiveRouteBuilder
             var undoOption = getter.AddOption("Undo");
             var turnOption = getter.AddOption(lockedTurn ? "Aim" : "Turn");
             var finishOption = getter.AddOption(finishing ? "Aim" : "Finish");
+            var stopOption = getter.AddOption(stopFirst ? "Rolling" : "Stop");
+            var directionOption = getter.AddOption("Direction");
             getter.MouseMove += (_, args) =>
             {
                 controlKeyDown = args.ControlKeyDown;
@@ -251,8 +267,23 @@ internal static class InteractiveRouteBuilder
                     ArticulationTrace.At(vehicle, route, planned));
                 DrawExitDirection(args.Display, planned.EndState, document.ModelUnitSystem);
                 if (planned.RequestedAngleExceeded)
-                    args.Display.Draw2dText("Steering limit reached — adjust your aim", Color.OrangeRed,
+                {
+                    // Reversing a combination, the point means where the trailer should end up, so
+                    // "steering limit" is the wrong thing to say when it does not get there: the
+                    // wheel may be nowhere near its lock and the trailer still unable to be placed.
+                    var reversingTrailer = vehicle.IsArticulated
+                        && planned.EndState.Direction == TravelDirection.Reverse;
+                    args.Display.Draw2dText(
+                        reversingTrailer
+                            ? "The trailer cannot be reversed onto that point from here — pull forward and try a wider line"
+                            : "Steering limit reached — adjust your aim",
+                        Color.OrangeRed,
                         new Point2d(24, 60), false, 16);
+                }
+                if (planned.ExitHeadingUnavailable)
+                    args.Display.Draw2dText(
+                        "This combination cannot be squared onto an exit direction in reverse — the trailer is aimed at the point instead",
+                        Color.Goldenrod, new Point2d(24, 12), false, 16);
                 if (planned.AimedBehindTheBeam)
                     args.Display.Draw2dText(
                         "That point is behind the vehicle — aiming stops at a half turn. Reverse, or hold Ctrl to turn further.",
@@ -294,6 +325,20 @@ internal static class InteractiveRouteBuilder
                 {
                     lockedTurn = !lockedTurn;
                     if (lockedTurn) finishing = false;
+                }
+                else if (getter.OptionIndex() == stopOption)
+                {
+                    stopFirst = !stopFirst;
+                    RhinoApp.WriteLine(stopFirst
+                        ? "The next leg starts from a standstill: the wheel is turned before the vehicle moves."
+                        : "The next leg starts rolling.");
+                }
+                else if (getter.OptionIndex() == directionOption)
+                {
+                    pointExitNext = !pointExitNext;
+                    RhinoApp.WriteLine(pointExitNext
+                        ? "Place the point, then swing the direction to leave along."
+                        : "Exit direction released.");
                 }
                 else if (getter.OptionIndex() == undoOption)
                 {
@@ -357,16 +402,103 @@ internal static class InteractiveRouteBuilder
                 getter.View()?.ActiveViewport ?? document.Views.ActiveView?.ActiveViewport);
             var pickedCursor = Cursor(
                 picked, state, pickedSquared && pickedLocked, document.ModelUnitSystem, pickedReference);
+            var pickedTarget = new Point3(pickedCursor.X, pickedCursor.Y, picked.Z * metresPerModelUnit);
+            var pickedKind = pickedLocked ? ManoeuvreControlKind.Turn
+                : finishing ? ManoeuvreControlKind.Finish
+                : ManoeuvreControlKind.Aim;
+            var pickedExit = pickedSquared
+                ? SnappedExitHeading(picked, state, document.ModelUnitSystem, pickedReference)
+                : null;
+
+            // A locked turn ends still turning by definition, so there is no exit direction to swing.
+            if (pointExitNext && !pickedLocked)
+            {
+                if (!TrySwingExitDirection(pickedTarget, pickedKind, out var swung))
+                {
+                    pointExitNext = false;
+                    continue;
+                }
+
+                pickedExit = swung;
+                pointExitNext = false;
+            }
+
             Commit(new ManoeuvreControl(
-                new Point3(pickedCursor.X, pickedCursor.Y, picked.Z * metresPerModelUnit),
-                state.Direction,
-                pickedLocked ? ManoeuvreControlKind.Turn
-                    : finishing ? ManoeuvreControlKind.Finish
-                    : ManoeuvreControlKind.Aim,
-                pickedSquared
-                    ? SnappedExitHeading(picked, state, document.ModelUnitSystem, pickedReference)
-                    : null));
+                pickedTarget, state.Direction, pickedKind, pickedExit, FromStandstill: stopFirst));
+            stopFirst = false;
             continue;
+
+            // Second stage of the pick: the point is placed, and the direction swings about it.
+            // (A plain comment because XML docs on a local function are not emitted anywhere.)
+            //
+            // Shift squares the exit onto an ortho step, which suits most junctions. Some are not on
+            // a step -- a skewed arm, a bay set at whatever angle the building is -- and those need
+            // the direction said exactly. It is swung about the point just placed rather than picked
+            // from the vehicle, because the exit direction is a property of where the leg ends, and
+            // the whole leg is replanned and drawn on every move so the direction is chosen against
+            // what it does rather than in the abstract. Escape abandons the click rather than
+            // committing a leg whose direction was never settled.
+            bool TrySwingExitDirection(Point3 targetMetres, ManoeuvreControlKind kind, out double headingRadians)
+            {
+                headingRadians = 0.0;
+                var scale = RhinoMath.UnitScale(UnitSystem.Meters, document.ModelUnitSystem);
+                var pivot = new Point3d(targetMetres.X * scale, targetMetres.Y * scale, targetMetres.Z * scale);
+                var reference = ConstructionPlaneHeading(
+                    getter.View()?.ActiveViewport ?? document.Views.ActiveView?.ActiveViewport);
+
+                using var swing = new GetPoint();
+                swing.SetCommandPrompt(
+                    "Swing the direction to leave along, or type an angle from the CPlane; Shift squares it");
+                swing.SetBasePoint(pivot, true);
+                swing.DrawLineFromPoint(pivot, true);
+                swing.AcceptNumber(true, true);
+                swing.PermitOrthoSnap(false);
+                swing.PermitElevatorMode(0);
+
+                var swingShift = false;
+                swing.MouseMove += (_, moved) => swingShift = moved.ShiftKeyDown;
+                swing.DynamicDraw += (_, drawn) =>
+                {
+                    var heading = SwungHeading(pivot, drawn.CurrentPoint, swingShift, reference);
+                    if (heading is not double exit) return;
+                    var previewLeg = ManoeuvreReplayService.PlanControl(
+                        vehicle, mode, route, legStartIndex, state,
+                        new ManoeuvreControl(targetMetres, state.Direction, kind, exit, FromStandstill: stopFirst));
+                    sweepPreview.Draw(drawn.Display, previewLeg);
+                    if (previewLeg.Samples.Count > 1)
+                    {
+                        drawn.Display.DrawPolyline(
+                            new Polyline(previewLeg.Samples.Select(
+                                sample => ToModelPoint(sample.PositionMetres, document.ModelUnitSystem))),
+                            previewLeg.RequestedAngleExceeded ? Color.OrangeRed : Color.CornflowerBlue,
+                            3);
+                    }
+
+                    DrawVehicle(
+                        drawn.Display, vehicle, previewLeg.EndState, document.ModelUnitSystem,
+                        previewLeg.RequestedAngleExceeded ? Color.OrangeRed : Color.DarkBlue,
+                        ArticulationTrace.At(vehicle, route, previewLeg));
+                    DrawExitDirection(drawn.Display, previewLeg.EndState, document.ModelUnitSystem);
+                };
+
+                var swingResult = swing.Get();
+                if (swingResult == GetResult.Number)
+                {
+                    headingRadians = Geometry2D.NormalizeAngle(
+                        reference + (swing.Number() * Math.PI / 180.0));
+                    return true;
+                }
+
+                if (swingResult != GetResult.Point) return false;
+                if (SwungHeading(pivot, swing.Point(), swingShift, reference) is not double picked2)
+                {
+                    RhinoApp.WriteLine("That point is on top of the one just placed; swing further out.");
+                    return false;
+                }
+
+                headingRadians = picked2;
+                return true;
+            }
 
             void Commit(ManoeuvreControl pickedControl)
             {
@@ -523,6 +655,28 @@ internal static class InteractiveRouteBuilder
             new Point2(picked.X * scale, picked.Y * scale),
             OrthoStepDegrees() * Math.PI / 180.0,
             orthoReferenceRadians);
+    }
+
+    /// <summary>
+    /// Heading from the placed point to the cursor, squared onto an ortho step while Shift is held.
+    /// Null while the cursor is still on top of the point, where there is no direction yet.
+    /// </summary>
+    private static double? SwungHeading(
+        Point3d pivotModel,
+        Point3d cursorModel,
+        bool shiftKeyDown,
+        double referenceRadians)
+    {
+        var deltaX = cursorModel.X - pivotModel.X;
+        var deltaY = cursorModel.Y - pivotModel.Y;
+        if (Math.Sqrt((deltaX * deltaX) + (deltaY * deltaY)) <= RhinoMath.ZeroTolerance) return null;
+
+        var heading = Math.Atan2(deltaY, deltaX);
+        if (!OrthoInEffect(shiftKeyDown)) return Geometry2D.NormalizeAngle(heading);
+
+        var step = OrthoStepDegrees() * Math.PI / 180.0;
+        var fromReference = Geometry2D.NormalizeAngle(heading - referenceRadians);
+        return Geometry2D.NormalizeAngle(referenceRadians + (Math.Round(fromReference / step) * step));
     }
 
     private static double Degrees(double radians)
