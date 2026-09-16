@@ -124,7 +124,7 @@ internal static class InteractiveRouteBuilder
                 ? $"Finish: pick the direction to end up travelling in (wheel {wheelNow:0.#} deg); Enter to finish"
                 : lockedTurn
                     ? $"Turn at full lock: pick the side and heading to swing to, or type degrees ({state.Direction}); Enter to finish"
-                    : $"Pick next point ({state.Direction}, wheel {wheelNow:0.#} deg"
+                    : $"{(vehicle.IsArticulated && state.Direction == TravelDirection.Reverse ? "Pick trailer axle destination" : "Pick next point")} ({state.Direction}, wheel {wheelNow:0.#} deg"
                         + (stopFirst ? ", STOP first" : string.Empty)
                         + (pointExitNext ? ", then swing the exit" : string.Empty)
                         + "; Ctrl for full lock, Shift to square the exit); Enter to finish");
@@ -275,7 +275,7 @@ internal static class InteractiveRouteBuilder
                         && planned.EndState.Direction == TravelDirection.Reverse;
                     args.Display.Draw2dText(
                         reversingTrailer
-                            ? "The trailer cannot be reversed onto that point from here — pull forward and try a wider line"
+                            ? "Trailer cannot reach that point from here — pull farther forward or change the turn-away point"
                             : "Steering limit reached — adjust your aim",
                         Color.OrangeRed,
                         new Point2d(24, 60), false, 16);
@@ -315,6 +315,8 @@ internal static class InteractiveRouteBuilder
                     // A cusp. The ease-out must not reach back through it into the other direction.
                     legStartIndex = route.Count - 1;
                     RhinoApp.WriteLine($"Travel direction: {state.Direction}");
+                    if (vehicle.IsArticulated && state.Direction == TravelDirection.Reverse)
+                        RhinoApp.WriteLine("Pick where the trailer axle should stop. Use Direction to set the travel heading into the bay; the preview shows the full reverse sweep.");
                 }
                 else if (getter.OptionIndex() == finishOption)
                 {
@@ -337,7 +339,9 @@ internal static class InteractiveRouteBuilder
                 {
                     pointExitNext = !pointExitNext;
                     RhinoApp.WriteLine(pointExitNext
-                        ? "Place the point, then swing the direction to leave along."
+                        ? vehicle.IsArticulated && state.Direction == TravelDirection.Reverse
+                            ? "Place the trailer axle at the bay, then swing the trailer's reversing direction into it."
+                            : "Place the point, then swing the direction to leave along."
                         : "Exit direction released.");
                 }
                 else if (getter.OptionIndex() == undoOption)
@@ -517,7 +521,18 @@ internal static class InteractiveRouteBuilder
                 committedFootprints = CommittedFootprints(route, vehicle, document.ModelUnitSystem);
                 if (leg.RequestedAngleExceeded)
                 {
-                    RhinoApp.WriteLine("Requested turn exceeded wheel lock; the committed leg was clamped to the selected driving mode. Hold Ctrl to drive the tightest turn the mode allows.");
+                    if (vehicle.IsArticulated && pickedControl.Direction == TravelDirection.Reverse)
+                    {
+                        var finalTrailer = ArticulationTrace.AtEndOf(vehicle, route)?.Poses(
+                            state.RearAxleCentreMetres.XY, state.VehicleHeadingRadians)[^1];
+                        var miss = finalTrailer?.AxleCentreMetres.DistanceTo(pickedControl.PositionMetres.XY);
+                        var target = pickedControl.ExitHeadingRadians.HasValue ? "the bay" : "the picked point";
+                        RhinoApp.WriteLine($"Trailer stopped {miss:0.00} m from {target} (or not square to it); pull farther forward or move the turn-away point to improve the approach.");
+                    }
+                    else
+                    {
+                        RhinoApp.WriteLine("Requested turn exceeded wheel lock; the committed leg was clamped to the selected driving mode. Hold Ctrl to drive the tightest turn the mode allows.");
+                    }
                 }
 
                 if (leg.AimedBehindTheBeam)

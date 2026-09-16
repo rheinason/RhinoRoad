@@ -183,8 +183,10 @@ hold — and the bounded form is what lets the approach start from well off the 
 
 Squaring up costs distance: roughly the first fifteen metres go on establishing the fold and the last
 on taking it out again. With about 50 m of run-in or more, SVT arrives within 0.25 m and under a
-degree off square. Given less, it gets as close as it can — within about 0.6 m and 3° — and reports
-that it did not square rather than claiming a dock it did not make.
+degree off square. For a nearby bay, the planner also tries stronger approach corrections and keeps
+the best drivable arrival. A parallel approach followed by a turn away and a reverse into a bay 4 m
+to the side now finishes within 0.2 m and a degree of square in the regression case. When the available space still
+does not permit a square arrival, the preview says so rather than claiming a dock it did not make.
 
 **Docking is a single-joint capability**, enforced by `TrailerReverseGenerator.CanDock`. A two-joint
 chain does not hold: the heading loop has to be slower than the folds it commands, and the folds
@@ -425,6 +427,12 @@ reconstruct today; it must never shrink.
 
    `Finish` ends the route instead of continuing it: pick the direction to end up travelling in, and
    the vehicle eases onto exactly that heading with the wheel centred. Switch back with `Aim`.
+
+   For an articulated vehicle, `Reverse` makes the next point the **trailer axle's stopping place**.
+   To back square into a loading bay, choose `Direction`, place that point in the bay, then swing the
+   direction the trailer will **travel while reversing**. The preview shows the tractor and trailer
+   sweep before you commit. If the bay cannot be reached from that setup, pull farther forward or
+   change the turn-away point and preview it again.
 
    `Reverse` flips the travel direction for the next leg, so a three-point turn is drawn as forward
    legs, a reversing leg, then forward legs again — the cusp between them is where the vehicle stops

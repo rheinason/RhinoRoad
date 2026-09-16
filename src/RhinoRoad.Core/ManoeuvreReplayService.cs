@@ -88,7 +88,7 @@ public static class ManoeuvreReplayService
             // and say that the heading was not honoured rather than quietly dropping it.
             var docking = control.ExitHeadingRadians.HasValue && TrailerReverseGenerator.CanDock(vehicle);
             var reversed = docking
-                ? TrailerReverseGenerator.DockTowedUnit(
+                ? TrailerReverseGenerator.DockTowedUnitInAvailableSpace(
                     vehicle, mode, state, chain, target, control.ExitHeadingRadians!.Value, StepMetres,
                     wheelSetAtStandstill: standstill)
                 : TrailerReverseGenerator.AimTowedUnit(

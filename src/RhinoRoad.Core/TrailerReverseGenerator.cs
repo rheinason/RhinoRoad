@@ -182,6 +182,65 @@ public static class TrailerReverseGenerator
     }
 
     /// <summary>
+    /// Chooses a square reverse that fits the available run-in. The gentle line-following law is
+    /// best with room to settle, but can leave a trailer well outside a nearby parallel bay.
+    /// When it misses, stronger fold and heading responses are tried and the most accurate
+    /// drivable arrival is returned, so the preview and the saved manoeuvre use exactly the same choice.
+    /// </summary>
+    public static ReverseLeg DockTowedUnitInAvailableSpace(
+        VehicleDefinition vehicle,
+        DrivingModeDefinition mode,
+        VehicleState start,
+        ArticulationChain chain,
+        Point2 targetMetres,
+        double exitMovementHeadingRadians,
+        double maximumStepMetres = 0.10,
+        bool wheelSetAtStandstill = false)
+    {
+        var best = DockTowedUnit(vehicle, mode, start, chain, targetMetres,
+            exitMovementHeadingRadians, maximumStepMetres,
+            wheelSetAtStandstill: wheelSetAtStandstill);
+        // With room to settle the gentle law docks, and nothing is gained by planning it again on
+        // every preview redraw.
+        if (best.ReachedTarget) return best;
+
+        var bestError = DockError(best, targetMetres, exitMovementHeadingRadians);
+        foreach (var (foldGain, headingGain) in new[]
+            {
+                (FoldGainPerMetre, 0.28),
+                (FoldGainPerMetre, 0.35),
+                (0.25, 0.405)
+            })
+        {
+            var candidate = DockTowedUnit(vehicle, mode, start, chain, targetMetres,
+                exitMovementHeadingRadians, maximumStepMetres,
+                foldGainPerMetre: foldGain, headingGain: headingGain,
+                wheelSetAtStandstill: wheelSetAtStandstill);
+            var error = DockError(candidate, targetMetres, exitMovementHeadingRadians);
+            // A dock that arrives beats any that does not; among equals, the closer arrival wins.
+            if ((candidate.ReachedTarget && !best.ReachedTarget)
+                || (candidate.ReachedTarget == best.ReachedTarget && error < bestError))
+            {
+                best = candidate;
+                bestError = error;
+            }
+        }
+
+        return best;
+    }
+
+    private static double DockError(ReverseLeg leg, Point2 target, double exitHeading)
+    {
+        var pose = leg.EndChain.Poses(
+            leg.EndState.RearAxleCentreMetres.XY, leg.EndState.VehicleHeadingRadians)[^1];
+        var headingError = Math.Abs(Geometry2D.NormalizeAngle(
+            pose.HeadingRadians - exitHeading - Math.PI));
+        // A few degrees of yaw can be corrected in the last metres. Position is the primary
+        // failure in a tight bay, but a near point reached across the dock must not win.
+        return pose.AxleCentreMetres.DistanceTo(target) + (2.0 * headingError);
+    }
+
+    /// <summary>
     /// Reverses until the last towed unit is at <paramref name="targetMetres"/> <em>and</em> square
     /// to <paramref name="exitMovementHeadingRadians"/> — backing a trailer onto a dock rather than
     /// merely near it.

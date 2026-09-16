@@ -177,6 +177,55 @@ public sealed class TrailerReverseTests
             trailer.HeadingRadians - Geometry2D.NormalizeAngle((exitDegrees * Math.PI / 180.0) + Math.PI)))
         * 180.0 / Math.PI;
 
+    [Theory]
+    [InlineData(5.0, -4.0)]
+    [InlineData(-5.0, 4.0)]
+    public void ParallelBayReverseUsesTheShorterApproachWhenTheGentleDockMisses(
+        double turnAwayY, double bayY)
+    {
+        var vehicle = Catalog.Get("SVT");
+        var mode = vehicle.DrivingModes["B"];
+        var state = new VehicleState(new(0, 0, 0), 0.0, 0.0, TravelDirection.Forward, 0.0);
+        var route = new List<RouteSample> { ManoeuvreReplayService.StateSample(state, vehicle) };
+        var controls = new List<ManoeuvreControl>();
+        foreach (var point in new[] { new Point3(25, 0, 0), new Point3(35, turnAwayY, 0) })
+        {
+            var control = new ManoeuvreControl(point, TravelDirection.Forward);
+            var leg = ManoeuvreReplayService.PlanControl(vehicle, mode, route, route.Count - 1,
+                state, control);
+            if (leg.FromIndex < route.Count - 1)
+                route.RemoveRange(leg.FromIndex + 1, route.Count - leg.FromIndex - 1);
+            route.AddRange(leg.Samples.Skip(1));
+            state = leg.EndState;
+            controls.Add(control);
+        }
+
+        state = state with { Direction = TravelDirection.Reverse };
+        var chain = ArticulationTrace.AtEndOf(vehicle, route)!;
+        var bay = new Point2(10, bayY);
+        var gentle = TrailerReverseGenerator.DockTowedUnit(
+            vehicle, mode, state, chain, bay, Math.PI, wheelSetAtStandstill: true);
+        var dockControl = new ManoeuvreControl(new(bay.X, bay.Y, 0), TravelDirection.Reverse,
+            ManoeuvreControlKind.Aim, Math.PI);
+        var selected = ManoeuvreReplayService.PlanControl(vehicle, mode, route, route.Count - 1,
+            state, dockControl);
+        var analysis = Analyzer.Analyze(vehicle, mode, route.Concat(selected.Samples.Skip(1)).ToArray());
+        var trailer = analysis.Poses[^1].TowedUnits[^1];
+
+        Assert.False(selected.RequestedAngleExceeded);
+        Assert.True(trailer.AxleCentreMetres.DistanceTo(bay) < 0.2);
+        Assert.True(trailer.AxleCentreMetres.DistanceTo(bay)
+            < gentle.EndChain.Poses(gentle.EndState.RearAxleCentreMetres.XY,
+                gentle.EndState.VehicleHeadingRadians)[^1].AxleCentreMetres.DistanceTo(bay) - 0.8);
+        Assert.True(SquarenessDegrees(trailer, 180.0) < 1.0);
+        Assert.DoesNotContain(analysis.Violations, item => item.Kind == ViolationKind.ArticulationAngle);
+
+        controls.Add(dockControl);
+        var replay = ManoeuvreReplayService.Replay(vehicle, mode,
+            new ManoeuvreDefinition(1, new(0, 0, 0), 0, TravelDirection.Forward, controls));
+        Assert.Equal(route.Concat(selected.Samples.Skip(1)), replay.Samples);
+    }
+
     /// <summary>
     /// Given the run-in a dock approach normally has, the trailer arrives on the point and square to
     /// it. Aiming at a point cannot do this — pursuit closes from whatever direction it happens to
