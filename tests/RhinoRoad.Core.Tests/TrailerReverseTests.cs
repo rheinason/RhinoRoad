@@ -159,6 +159,107 @@ public sealed class TrailerReverseTests
         Assert.Equal(state, replay.EndState);
     }
 
+    [Fact]
+    public void PlannedPullUpAndReverseReplayAsOrdinaryControls()
+    {
+        var vehicle = Catalog.Get("SVT");
+        var mode = vehicle.DrivingModes["B"];
+        var start = new VehicleState(new(0, 0, 0), 0.0, 0.0, TravelDirection.Forward, 0.0);
+        var route = new List<RouteSample> { ManoeuvreReplayService.StateSample(start, vehicle) };
+        var turn = new ManoeuvreControl(new(24, 7, 0), TravelDirection.Forward);
+        var first = ManoeuvreReplayService.PlanControl(vehicle, mode, route, 0, start, turn);
+        route.AddRange(first.Samples.Skip(1));
+        var target = new Point3(5, -6, 0);
+        var direct = ManoeuvreReplayService.PlanControl(vehicle, mode, route, route.Count - 1,
+            first.EndState with { Direction = TravelDirection.Reverse },
+            new ManoeuvreControl(target, TravelDirection.Reverse, ManoeuvreControlKind.Aim, Math.PI));
+        var directChain = ArticulationTrace.At(vehicle, route, direct)!;
+        var directTrailer = directChain.Poses(direct.EndState.RearAxleCentreMetres.XY,
+            direct.EndState.VehicleHeadingRadians)[^1];
+
+        var proposal = TrailerReversePlanner.Find(vehicle, mode, route, 0,
+            first.EndState, target, Math.PI);
+        var complete = route.Take(proposal.Leg.FromIndex + 1)
+            .Concat(proposal.Leg.Samples.Skip(1)).ToArray();
+        var replay = ManoeuvreReplayService.Replay(vehicle, mode,
+            new ManoeuvreDefinition(1, start.RearAxleCentreMetres, 0.0,
+                TravelDirection.Forward, new[] { turn }.Concat(proposal.Controls).ToArray()));
+
+        Assert.Equal(complete, replay.Samples);
+        // A pull-up and reverse, plus one forward correction when that first reverse arrives outside
+        // the arrival tolerance (here it stops 2.5 degrees out of square).
+        Assert.True(proposal.Controls.Count is 2 or 4, $"planner chose {proposal.Controls.Count} control(s), miss {proposal.TrailerMissMetres:0.00} m");
+        Assert.True(proposal.ReachedTarget);
+        Assert.True(proposal.TrailerMissMetres < directTrailer.AxleCentreMetres.DistanceTo(target.XY));
+        Assert.Equal(TravelDirection.Reverse, replay.EndState.Direction);
+        Assert.True(proposal.MaximumFoldRadians < 65.0 * Math.PI / 180.0);
+        Assert.True(proposal.TrailerMissMetres < 2.0);
+    }
+
+    [Fact]
+    public void APlannedReverseReportedAsReachedIsWithinTheAreaSearchTolerance()
+    {
+        // Found live: this approach was reported as reaching the bay 2.49 degrees out of square,
+        // which the area search then refused to count as a passing journey.
+        var vehicle = Catalog.Get("SVT");
+        var mode = vehicle.DrivingModes["B"];
+        var start = new VehicleState(new(0, 0, 0), 0.0, 0.0, TravelDirection.Forward, 0.0);
+        var route = new List<RouteSample> { ManoeuvreReplayService.StateSample(start, vehicle) };
+        var first = ManoeuvreReplayService.PlanControl(vehicle, mode, route, 0, start,
+            new ManoeuvreControl(new(24, 7, 0), TravelDirection.Forward));
+        route.AddRange(first.Samples.Skip(1));
+
+        var proposal = TrailerReversePlanner.Find(vehicle, mode, route, 0,
+            first.EndState, new Point3(5, -6, 0), Math.PI);
+
+        if (proposal.ReachedTarget)
+        {
+            Assert.True(proposal.TrailerMissMetres <= TrailerReversePlanner.ArrivalToleranceMetres);
+            Assert.True(proposal.HeadingMissRadians!.Value * 180.0 / Math.PI
+                <= TrailerReversePlanner.ArrivalToleranceDegrees);
+        }
+    }
+
+    [Fact]
+    public void PlannerKeepsTheDirectReverseWhenTheTrailerIsAlreadyLinedUp()
+    {
+        var vehicle = Catalog.Get("SVT");
+        var mode = vehicle.DrivingModes["B"];
+        var state = new VehicleState(new(0, 0, 0), 0.0, 0.0, TravelDirection.Forward, 0.0);
+        var route = new[] { ManoeuvreReplayService.StateSample(state, vehicle) };
+        var target = new Point3(vehicle.StraightAxleOffsetsMetres[^1] - 30.0, 0.0, 0.0);
+
+        var proposal = TrailerReversePlanner.Find(vehicle, mode, route, 0, state, target, Math.PI);
+
+        Assert.Single(proposal.Controls);
+        Assert.True(proposal.ReachedTarget);
+        Assert.True(proposal.TrailerMissMetres < 0.25);
+    }
+
+    [Fact]
+    public void PlannerCanReplayAForwardCorrectionAfterAStoppedReverse()
+    {
+        var vehicle = Catalog.Get("SVT");
+        var mode = vehicle.DrivingModes["B"];
+        var start = new VehicleState(new(0, 0, 0), 0.0, 0.0, TravelDirection.Forward, 0.0);
+        var route = new[] { ManoeuvreReplayService.StateSample(start, vehicle) };
+        var targets = new[]
+        {
+            new Point3(-10, 15, 0), new Point3(-5, 12, 0), new Point3(0, 15, 0),
+            new Point3(-10, -15, 0), new Point3(-5, -12, 0), new Point3(0, -15, 0)
+        };
+        var proposals = targets.Select(target => TrailerReversePlanner.Find(
+            vehicle, mode, route, 0, start, target, Math.PI)).ToArray();
+        var corrected = proposals.FirstOrDefault(item => item.Controls.Count > 2);
+
+        Assert.True(corrected is not null,
+            string.Join(", ", proposals.Select(item => $"{item.Controls.Count}:{item.TrailerMissMetres:0.0}")));
+        var replay = ManoeuvreReplayService.Replay(vehicle, mode,
+            new ManoeuvreDefinition(1, start.RearAxleCentreMetres, 0.0,
+                TravelDirection.Forward, corrected.Controls));
+        Assert.Equal(corrected.Leg.Samples, replay.Samples);
+    }
+
     private static ReverseLeg DockAt(VehicleDefinition vehicle, Point2 target, double exitDegrees)
     {
         var start = new VehicleState(new(0, 0, 0), 0.0, 0.0, TravelDirection.Reverse, 0.0);

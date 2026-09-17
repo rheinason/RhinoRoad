@@ -26,7 +26,7 @@ For a repeatable SVT loading-bay check in a metric document:
 | Drive parallel | Pick `25,0` |
 | Turn away | Pick `35,5` |
 | Reverse | Select **Reverse** |
-| Set bay direction | Select **Direction**, place the trailer axle at `10,-4`, then swing/type `180` degrees |
+| Set bay direction | Select **Direction**, pick the trailer rear at `6.8,-4`, then point/type `180` degrees (the SVT trailer rear is 3.2 m behind its axle, so the stored axle is `10,-4`) |
 | Complete | Inspect the reverse preview and press Enter to finish |
 
 Coordinates may be typed into Rhino's active `GetPoint` prompt for a measured regression; also make at least one physical viewport pick when testing pointer usability and snapping. If automating the desktop, use the computer-use tool's native window actions for modal and pointer interaction. In the current Sky-based setup, send coordinate characters with individual `press_key` calls after focusing Rhino's prompt; `type_text` invokes Rhino Paste and is not a reliable coordinate entry method. The desktop may contain unrelated windows, so check the Rhino window title and prompt before clicking.

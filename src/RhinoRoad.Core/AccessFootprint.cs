@@ -10,6 +10,14 @@ public sealed record AccessSectionInterval(Point2 Start, Point2 End)
 /// <summary>Space required by separate journeys, including disconnected regions and islands.</summary>
 public static class AccessFootprint
 {
+    /// <summary>Area of the clearance footprint inside a planning region, respecting any holes.</summary>
+    public static double IntersectionArea(SweptRegion region, IReadOnlyList<Point2> planningRegion)
+    {
+        if (planningRegion.Count < 3) throw new ArgumentException("A closed planning region is required.", nameof(planningRegion));
+        var clipped = Clipper.Intersect(Paths(region), new PathsD { Path(planningRegion, true) }, FillRule.NonZero, 5);
+        return Math.Abs(clipped.Sum(Clipper.Area));
+    }
+
     public static Point2? Outside(SweptRegion region, IEnumerable<IReadOnlyList<Point2>> allowed)
     {
         var clip = new PathsD(allowed.Select(loop => Path(loop, true)));

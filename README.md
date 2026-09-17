@@ -247,9 +247,11 @@ direction is a property of where the leg *ends*.
 
 The whole leg is replanned and drawn on every move of that swing — swept band, path, and the vehicle
 ghosted at its finish with its trailer — so the direction is chosen against what it actually does
-rather than in the abstract and previewed afterwards. Shift still squares it while swinging, an angle
-can be typed instead (measured from the construction plane), and Escape abandons the click rather
-than committing a leg whose direction was never settled.
+rather than in the abstract and previewed afterwards. The swing is an ordinary Rhino pick from the
+placed point, so Rhino's own ortho (F8, or Shift to toggle it, at the ortho angle on the construction
+plane) and object snaps constrain it exactly as they would drawing a line. An angle can be typed
+instead (measured from the construction plane), and Escape abandons the click rather than committing
+a leg whose direction was never settled.
 ## Checking presets against the legacy curve library
 
 `VejReferenceTemplateCatalog` parses the official Vejdirektoratet design envelopes embedded in the
@@ -429,10 +431,23 @@ reconstruct today; it must never shrink.
    the vehicle eases onto exactly that heading with the wheel centred. Switch back with `Aim`.
 
    For an articulated vehicle, `Reverse` makes the next point the **trailer axle's stopping place**.
-   To back square into a loading bay, choose `Direction`, place that point in the bay, then swing the
-   direction the trailer will **travel while reversing**. The preview shows the tractor and trailer
+   To back square into a loading bay, choose `Direction`, pick the **rear of the trailer** in the bay,
+   then point the direction the trailer will **travel while reversing**; the docked trailer is drawn
+   while you point, and the axle position is derived from the rear. The preview shows the tractor and trailer
    sweep before you commit. If the bay cannot be reached from that setup, pull farther forward or
    change the turn-away point and preview it again.
+
+   For **SVT**, choose `PlanReverse` *before* switching to reverse, pick the **rear of the trailer** at
+   the bay, then point the way it reverses in (ortho and snaps apply, or type an angle). The planner
+   compares reversing immediately with forward pull-ups at several distances and side offsets. If the
+   best first reverse does not arrive within 0.25 m and 2° of the bay, it also tries one forward
+   correction and a second reverse. It proposes the most accurate drivable approach it finds. Review
+   the full forward and reverse sweep, then press Enter
+   to accept or Esc to choose another destination. The accepted proposal becomes ordinary forward and
+   reverse controls, so it can be replayed and edited. Blue marks forward travel and purple marks
+   reverse travel in the review. The search checks vehicle kinematics and fold;
+   use the displayed swept footprint to judge available site space. If the destination still cannot
+   be reached, the review prompt reports the remaining position and heading error.
 
    `Reverse` flips the travel direction for the next leg, so a three-point turn is drawn as forward
    legs, a reversing leg, then forward legs again — the cusp between them is where the vehicle stops
@@ -611,6 +626,37 @@ journey also refreshes its linked sizing results when all required journeys are 
 journey is stale, update that journey first. A failed update retains the previous sizing output.
 Section endpoints can be grip-edited and refreshed through Update. Saved definitions persist in the
 Rhino document; existing journey definitions keep their original schema.
+
+Each control row in the `RREditRoad` palette has a direction button showing the direction that
+control leaves along (or `Dir…` when it has none). Click it and point the new direction in the
+viewport — ortho and snaps apply, or type an angle — or press Enter to clear it. The final reverse into
+a bay turns about the trailer's rear, so the bay is re-angled without moving the rear.
+
+For a saved SVT journey that reverses into a bay, the palette's **SVT clear-area search** works in
+four steps:
+
+1. **Site.** **Pick yard…** takes one closed curve around the area the truck may use; **Pick
+   obstacles…** takes closed curves around buildings and storage (Enter with none selected clears
+   them). Both start from the references the road was saved with, and the picked curves are
+   highlighted green and red.
+2. **Trailer bay.** The palette states where the trailer's rear stops and at what angle, drawn as a
+   purple docked trailer. **Set trailer bay…** picks the rear, then the reversing direction.
+3. **Search.** Choose the control the search may move from — control 1 lets it redesign the whole
+   approach; a later one keeps the controls before it as drawn — then **Find less clear area…**. It
+   keeps the final trailer position and heading fixed, tries pull-ups and at most one forward
+   correction, and ranks passing routes by the clearance footprint's area in the yard. It runs for 30
+   seconds by default, with a 2-minute option.
+4. **Suggestions.** Up to three appear once the search finishes, and the best one is applied straight
+   away as the unsaved draft, so Save keeps it with no extra step. Choosing another entry switches the
+   draft to it, and **Current route (unchanged)** switches back; the viewport shows each suggestion's
+   clearance boundary, with an orange dot at its tightest location. If the controls were changed while
+   the search ran, nothing is applied until a suggestion is chosen. Drag its numbered controls or
+   change their directions to refine it; the
+   palette reports live clear area, bay error and yard/obstacle fit. Save stores the picked yard as the
+   allowed area and the picked curves as obstacles; Discard restores the original.
+
+Every step reports what it is waiting for, or why it cannot run, in the palette. The result is the
+smallest area found by this bounded search, not a proof of the global minimum.
 
 The footprint and dimensions describe the space required by the tested journeys. They are not a
 search for the globally smallest possible bend or junction and do not propose kerb geometry.

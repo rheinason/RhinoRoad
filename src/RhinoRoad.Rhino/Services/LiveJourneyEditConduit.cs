@@ -86,6 +86,21 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
     public static bool IsPreviewing(RhinoDoc document, Guid stableId) =>
         Documents.TryGetValue(document.RuntimeSerialNumber, out var state) && state.Previews.ContainsKey(stableId);
 
+    public static JourneyEditPreviewResult? CurrentResult(RhinoDoc document, Guid stableId) =>
+        Documents.TryGetValue(document.RuntimeSerialNumber, out var state) &&
+        state.Previews.TryGetValue(stableId, out var preview) &&
+        preview.ResultVertices?.SequenceEqual(preview.Vertices) == true
+            ? preview.Result : null;
+
+    private static readonly HashSet<Guid> ForcedDrafts = new();
+
+    public static void ForceDraft(RhinoDoc document, Guid stableId, bool enabled)
+    {
+        if (enabled) ForcedDrafts.Add(stableId);
+        else ForcedDrafts.Remove(stableId);
+        document.Views.Redraw();
+    }
+
     protected override void PreDrawObjects(DrawEventArgs e)
     {
         var document = e.RhinoDoc;
@@ -109,7 +124,8 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
             try
             {
                 var vertices = Positions(source, curve, document.ModelUnitSystem);
-                if (JourneyEditPreview.PositionsMatch(saved.Manoeuvre, vertices)) continue;
+                if (JourneyEditPreview.PositionsMatch(saved.Manoeuvre, vertices)
+                    && !ForcedDrafts.Contains(saved.StableSourceId)) continue;
                 active.Add(saved.StableSourceId);
                 if (!state.Previews.TryGetValue(saved.StableSourceId, out var preview) ||
                     AccessDefinitionSerializer.Serialize(preview.Saved) != AccessDefinitionSerializer.Serialize(saved))

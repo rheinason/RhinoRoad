@@ -98,6 +98,7 @@ internal static class InteractiveRouteBuilder
         // while the cursor swings the direction about it, so the leg is previewed against the
         // direction being chosen rather than chosen blind and previewed afterwards.
         var pointExitNext = false;
+        var planReverseNext = false;
 
         // Which way the last previewed turn swung, so a sweep typed on the command line — where
         // there is no cursor to read a side from — goes the way the cursor was last pointing.
@@ -120,7 +121,16 @@ internal static class InteractiveRouteBuilder
             var shiftKeyDown = false;
             using var getter = new GetPoint();
             var wheelNow = state.SteeringAngleRadians * 180.0 / Math.PI;
-            getter.SetCommandPrompt(finishing
+            // A bay is picked by the trailer's rear once a direction follows, because that is the
+            // point a site plan dimensions; without a direction there is no rear to speak of, and the
+            // pick stays the trailer axle.
+            var pickingTrailerRear = vehicle.IsArticulated
+                && (planReverseNext || (pointExitNext && state.Direction == TravelDirection.Reverse));
+            getter.SetCommandPrompt(planReverseNext
+                ? "Plan reverse: pick the rear of the trailer at the bay, then its reversing direction"
+                : pickingTrailerRear
+                ? $"Pick the rear of the trailer at the bay, then swing its reversing direction ({state.Direction}); Enter to finish"
+                : finishing
                 ? $"Finish: pick the direction to end up travelling in (wheel {wheelNow:0.#} deg); Enter to finish"
                 : lockedTurn
                     ? $"Turn at full lock: pick the side and heading to swing to, or type degrees ({state.Direction}); Enter to finish"
@@ -155,6 +165,9 @@ internal static class InteractiveRouteBuilder
             var finishOption = getter.AddOption(finishing ? "Aim" : "Finish");
             var stopOption = getter.AddOption(stopFirst ? "Rolling" : "Stop");
             var directionOption = getter.AddOption("Direction");
+            int? planReverseOption = vehicle.TowedUnits.Count == 1 && state.Direction == TravelDirection.Forward
+                ? getter.AddOption(planReverseNext ? "Manual" : "PlanReverse")
+                : null;
             getter.MouseMove += (_, args) =>
             {
                 controlKeyDown = args.ControlKeyDown;
@@ -187,6 +200,16 @@ internal static class InteractiveRouteBuilder
                         : finishing ? ManoeuvreControlKind.Finish
                         : ManoeuvreControlKind.Aim,
                     exitHeading);
+                if (pickingTrailerRear)
+                {
+                    // Where the trailer's rear stops says nothing yet about where the axle goes, so
+                    // no leg is planned until the direction has been swung.
+                    args.Display.Draw2dText(planReverseNext
+                            ? "Pick the rear of the trailer at the bay; its direction comes next, then the planner searches approaches"
+                            : "Pick the rear of the trailer at the bay; its reversing direction comes next",
+                        Color.DarkBlue, new Point2d(24, 60), false, 16);
+                    return;
+                }
                 if (planned is null
                     || lastPreviewPoint != args.CurrentPoint
                     || lastPreviewLocked != locked
@@ -307,6 +330,7 @@ internal static class InteractiveRouteBuilder
             {
                 if (getter.OptionIndex() == reverseOption)
                 {
+                    planReverseNext = false;
                     state = state with
                     {
                         Direction = state.Direction == TravelDirection.Forward ? TravelDirection.Reverse : TravelDirection.Forward
@@ -316,7 +340,7 @@ internal static class InteractiveRouteBuilder
                     legStartIndex = route.Count - 1;
                     RhinoApp.WriteLine($"Travel direction: {state.Direction}");
                     if (vehicle.IsArticulated && state.Direction == TravelDirection.Reverse)
-                        RhinoApp.WriteLine("Pick where the trailer axle should stop. Use Direction to set the travel heading into the bay; the preview shows the full reverse sweep.");
+                        RhinoApp.WriteLine("Pick where the trailer axle should stop, or choose Direction to pick the rear of the trailer at the bay and the way it reverses in; the preview shows the full reverse sweep.");
                 }
                 else if (getter.OptionIndex() == finishOption)
                 {
@@ -339,10 +363,20 @@ internal static class InteractiveRouteBuilder
                 {
                     pointExitNext = !pointExitNext;
                     RhinoApp.WriteLine(pointExitNext
-                        ? vehicle.IsArticulated && state.Direction == TravelDirection.Reverse
-                            ? "Place the trailer axle at the bay, then swing the trailer's reversing direction into it."
+                        ? vehicle.IsArticulated && (state.Direction == TravelDirection.Reverse || planReverseNext)
+                            ? "Pick the rear of the trailer at the bay, then point the way it reverses in."
                             : "Place the point, then swing the direction to leave along."
                         : "Exit direction released.");
+                }
+                else if (planReverseOption is not null && getter.OptionIndex() == planReverseOption)
+                {
+                    planReverseNext = !planReverseNext;
+                    if (planReverseNext)
+                    {
+                        lockedTurn = false;
+                        finishing = false;
+                        RhinoApp.WriteLine("Pick the rear of the trailer at the bay, then point the way it reverses in. The planner will try forward pull-ups and reverse approaches, then show its proposal before you accept it.");
+                    }
                 }
                 else if (getter.OptionIndex() == undoOption)
                 {
@@ -414,8 +448,24 @@ internal static class InteractiveRouteBuilder
                 ? SnappedExitHeading(picked, state, document.ModelUnitSystem, pickedReference)
                 : null;
 
+            if (pickingTrailerRear)
+            {
+                // The rear of the trailer at the bay, then the way it backs in; the journey stores
+                // the axle that puts the rear there. Plan reverse always needs the direction.
+                pickedLocked = false;
+                pickedKind = ManoeuvreControlKind.Aim;
+                if (!TrySwingExitDirection(pickedTarget, pickedKind, out var bayHeading, trailerRear: true))
+                {
+                    pointExitNext = false;
+                    continue;
+                }
+
+                pickedExit = bayHeading;
+                pickedTarget = TrailerBay.AxleFromRear(vehicle, pickedTarget, bayHeading);
+                pointExitNext = false;
+            }
             // A locked turn ends still turning by definition, so there is no exit direction to swing.
-            if (pointExitNext && !pickedLocked)
+            else if (pointExitNext && !pickedLocked)
             {
                 if (!TrySwingExitDirection(pickedTarget, pickedKind, out var swung))
                 {
@@ -427,6 +477,74 @@ internal static class InteractiveRouteBuilder
                 pointExitNext = false;
             }
 
+            if (planReverseNext)
+            {
+                TrailerReversePlanner.Proposal proposal;
+                try
+                {
+                    proposal = TrailerReversePlanner.Find(
+                        vehicle, mode, route, legStartIndex, state, pickedTarget, pickedExit);
+                }
+                catch (InvalidOperationException error)
+                {
+                    RhinoApp.WriteLine(error.Message);
+                    continue;
+                }
+
+                using var review = new GetPoint();
+                review.SetCommandPrompt(
+                    $"Forward travel {proposal.PullUpMetres:0.#} m; trailer miss {proposal.TrailerMissMetres:0.00} m"
+                    + (proposal.HeadingMissRadians is double miss
+                        ? $", heading miss {miss * 180.0 / Math.PI:0.#} deg" : string.Empty)
+                    + "; Enter to accept, Esc to choose another destination");
+                review.AcceptNothing(true);
+                review.PermitObjectSnap(false);
+                review.DynamicDraw += (_, args) =>
+                {
+                    sweepPreview.Draw(args.Display, proposal.Leg);
+                    var samplesToDraw = proposal.Leg.Samples;
+                    var startIndex = 0;
+                    var drawDirection = samplesToDraw[0].Direction;
+                    for (var index = 1; index <= samplesToDraw.Count; index++)
+                    {
+                        if (index < samplesToDraw.Count
+                            && samplesToDraw[index].Direction == drawDirection)
+                            continue;
+                        if (index - startIndex > 1)
+                            args.Display.DrawPolyline(
+                                new Polyline(samplesToDraw.Skip(startIndex).Take(index - startIndex)
+                                    .Select(sample => ToModelPoint(sample.PositionMetres, document.ModelUnitSystem))),
+                                drawDirection == TravelDirection.Forward
+                                    ? Color.CornflowerBlue : Color.MediumVioletRed, 3);
+                        if (index < samplesToDraw.Count)
+                        {
+                            startIndex = index - 1;
+                            drawDirection = samplesToDraw[index].Direction;
+                        }
+                    }
+                    DrawVehicle(args.Display, vehicle, proposal.Leg.EndState, document.ModelUnitSystem,
+                        Color.DarkBlue, ArticulationTrace.At(vehicle, route, proposal.Leg));
+                };
+                if (review.Get() == GetResult.Nothing)
+                {
+                    history.Push(new HistoryEntry(state, route.ToArray(), controls.ToArray(), legStartIndex));
+                    if (proposal.Leg.FromIndex < route.Count - 1)
+                        route.RemoveRange(proposal.Leg.FromIndex + 1, route.Count - proposal.Leg.FromIndex - 1);
+                    route.AddRange(proposal.Leg.Samples.Skip(1));
+                    state = proposal.Leg.EndState;
+                    controls.AddRange(proposal.Controls);
+                    legStartIndex = route.Count - 1;
+                    committedPath = CommittedPolyline(route, document.ModelUnitSystem);
+                    committedFootprints = CommittedFootprints(route, vehicle, document.ModelUnitSystem);
+                    RhinoApp.WriteLine(proposal.ReachedTarget
+                        ? "Planned forward pull-up and reverse committed."
+                        : "Closest drivable reverse committed; the trailer did not reach the requested position and heading.");
+                }
+                planReverseNext = false;
+                stopFirst = false;
+                continue;
+            }
+
             Commit(new ManoeuvreControl(
                 pickedTarget, state.Direction, pickedKind, pickedExit, FromStandstill: stopFirst));
             stopFirst = false;
@@ -435,14 +553,22 @@ internal static class InteractiveRouteBuilder
             // Second stage of the pick: the point is placed, and the direction swings about it.
             // (A plain comment because XML docs on a local function are not emitted anywhere.)
             //
-            // Shift squares the exit onto an ortho step, which suits most junctions. Some are not on
-            // a step -- a skewed arm, a bay set at whatever angle the building is -- and those need
-            // the direction said exactly. It is swung about the point just placed rather than picked
-            // from the vehicle, because the exit direction is a property of where the leg ends, and
-            // the whole leg is replanned and drawn on every move so the direction is chosen against
-            // what it does rather than in the abstract. Escape abandons the click rather than
-            // committing a leg whose direction was never settled.
-            bool TrySwingExitDirection(Point3 targetMetres, ManoeuvreControlKind kind, out double headingRadians)
+            // The direction is swung about the point just placed rather than picked from the vehicle,
+            // because it is a property of where the leg ends. The picked point is a real Rhino pick
+            // from that base point, so Rhino's own ortho (F8 or Shift, at its ortho angle and on the
+            // CPlane) and object snaps constrain it exactly as they would drawing a line, and the
+            // rubber band shows the direction that will be used. Some directions are on no step -- a
+            // skewed arm, a bay set at whatever angle the building is -- and those can be snapped to
+            // geometry or typed. Escape abandons the click rather than committing a leg whose
+            // direction was never settled.
+            //
+            // For a trailer bay the point placed is the trailer's rear, and the axle the journey
+            // stores follows from it and the direction. The planned reverse is not previewed while
+            // swinging: the planner tries dozens of approaches, and running it on every mouse move
+            // made the pick lag behind the cursor. The docked trailer is drawn instead, and the
+            // proposal is reviewed once the direction is picked.
+            bool TrySwingExitDirection(
+                Point3 targetMetres, ManoeuvreControlKind kind, out double headingRadians, bool trailerRear = false)
             {
                 headingRadians = 0.0;
                 var scale = RhinoMath.UnitScale(UnitSystem.Meters, document.ModelUnitSystem);
@@ -451,23 +577,39 @@ internal static class InteractiveRouteBuilder
                     getter.View()?.ActiveViewport ?? document.Views.ActiveView?.ActiveViewport);
 
                 using var swing = new GetPoint();
-                swing.SetCommandPrompt(
-                    "Swing the direction to leave along, or type an angle from the CPlane; Shift squares it");
+                swing.SetCommandPrompt(trailerRear
+                    ? "Point the way the trailer reverses into the bay (ortho and snaps apply), or type an angle from the CPlane"
+                    : "Swing the direction to leave along (ortho and snaps apply), or type an angle from the CPlane");
                 swing.SetBasePoint(pivot, true);
                 swing.DrawLineFromPoint(pivot, true);
                 swing.AcceptNumber(true, true);
-                swing.PermitOrthoSnap(false);
+                swing.PermitObjectSnap(true);
+                swing.PermitOrthoSnap(true);
                 swing.PermitElevatorMode(0);
 
-                var swingShift = false;
-                swing.MouseMove += (_, moved) => swingShift = moved.ShiftKeyDown;
                 swing.DynamicDraw += (_, drawn) =>
                 {
-                    var heading = SwungHeading(pivot, drawn.CurrentPoint, swingShift, reference);
+                    var heading = SwungHeading(pivot, drawn.CurrentPoint);
                     if (heading is not double exit) return;
+                    var axleMetres = trailerRear ? TrailerBay.AxleFromRear(vehicle, targetMetres, exit) : targetMetres;
+                    if (trailerRear)
+                    {
+                        var outline = TrailerBay.DockedOutline(vehicle, axleMetres, exit)
+                            .Select(point => new Point3d(point.X * scale, point.Y * scale, pivot.Z))
+                            .ToList();
+                        outline.Add(outline[0]);
+                        drawn.Display.DrawPolyline(new Polyline(outline), Color.MediumPurple, 2);
+                        drawn.Display.DrawPoint(ToModelPoint(axleMetres, document.ModelUnitSystem),
+                            global::Rhino.Display.PointStyle.X, 4, Color.MediumPurple);
+                        drawn.Display.Draw2dText(
+                            $"Trailer reverses in at {Degrees(exit - reference):0.#} deg from the CPlane; rear at the picked point",
+                            Color.MediumPurple, new Point2d(24, 60), false, 16);
+                        if (planReverseNext) return;
+                    }
+
                     var previewLeg = ManoeuvreReplayService.PlanControl(
                         vehicle, mode, route, legStartIndex, state,
-                        new ManoeuvreControl(targetMetres, state.Direction, kind, exit, FromStandstill: stopFirst));
+                        new ManoeuvreControl(axleMetres, state.Direction, kind, exit, FromStandstill: stopFirst));
                     sweepPreview.Draw(drawn.Display, previewLeg);
                     if (previewLeg.Samples.Count > 1)
                     {
@@ -494,7 +636,7 @@ internal static class InteractiveRouteBuilder
                 }
 
                 if (swingResult != GetResult.Point) return false;
-                if (SwungHeading(pivot, swing.Point(), swingShift, reference) is not double picked2)
+                if (SwungHeading(pivot, swing.Point()) is not double picked2)
                 {
                     RhinoApp.WriteLine("That point is on top of the one just placed; swing further out.");
                     return false;
@@ -673,25 +815,16 @@ internal static class InteractiveRouteBuilder
     }
 
     /// <summary>
-    /// Heading from the placed point to the cursor, squared onto an ortho step while Shift is held.
-    /// Null while the cursor is still on top of the point, where there is no direction yet.
+    /// Heading from the placed point to the cursor. Rhino has already applied ortho and object snaps
+    /// to the cursor, so this only measures it. Null while the cursor is still on top of the point,
+    /// where there is no direction yet.
     /// </summary>
-    private static double? SwungHeading(
-        Point3d pivotModel,
-        Point3d cursorModel,
-        bool shiftKeyDown,
-        double referenceRadians)
+    private static double? SwungHeading(Point3d pivotModel, Point3d cursorModel)
     {
         var deltaX = cursorModel.X - pivotModel.X;
         var deltaY = cursorModel.Y - pivotModel.Y;
         if (Math.Sqrt((deltaX * deltaX) + (deltaY * deltaY)) <= RhinoMath.ZeroTolerance) return null;
-
-        var heading = Math.Atan2(deltaY, deltaX);
-        if (!OrthoInEffect(shiftKeyDown)) return Geometry2D.NormalizeAngle(heading);
-
-        var step = OrthoStepDegrees() * Math.PI / 180.0;
-        var fromReference = Geometry2D.NormalizeAngle(heading - referenceRadians);
-        return Geometry2D.NormalizeAngle(referenceRadians + (Math.Round(fromReference / step) * step));
+        return Geometry2D.NormalizeAngle(Math.Atan2(deltaY, deltaX));
     }
 
     private static double Degrees(double radians)
