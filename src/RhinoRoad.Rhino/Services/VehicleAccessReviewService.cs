@@ -236,14 +236,7 @@ internal static class VehicleAccessReviewService
         }).ToArray();
     }
 
-    private static Point2[] SampleCurve(Curve curve, UnitSystem units)
-    {
-        var metres = RhinoMath.UnitScale(units, UnitSystem.Meters);
-        var count = Math.Max(4, (int)Math.Ceiling(curve.GetLength() * metres / 0.10));
-        var parameters = curve.DivideByCount(count, true) ?? [curve.Domain.T0, curve.Domain.T1];
-        return parameters.Select(parameter => curve.PointAt(parameter))
-            .Select(point => new Point2(point.X * metres, point.Y * metres)).ToArray();
-    }
+    private static Point2[] SampleCurve(Curve curve, UnitSystem units) => CurveOutline.Points(curve, units);
 
     private static double? Minimum(params double?[] values)
     {

@@ -305,15 +305,8 @@ internal static class RhinoGeometryBuilder
                obstacle.Contains(envelope.PointAtStart, plane, tolerance) != PointContainment.Outside;
     }
 
-    private static IReadOnlyList<Point2> SampleCurve(Curve curve, UnitSystem modelUnits, double spacingMetres)
-    {
-        var metresPerModelUnit = RhinoMath.UnitScale(modelUnits, UnitSystem.Meters);
-        var count = Math.Max(4, (int)Math.Ceiling(curve.GetLength() * metresPerModelUnit / spacingMetres));
-        var parameters = curve.DivideByCount(count, includeEnds: true) ?? [curve.Domain.T0, curve.Domain.T1];
-        return parameters.Select(parameter => curve.PointAt(parameter))
-            .Select(point => new Point2(point.X * metresPerModelUnit, point.Y * metresPerModelUnit))
-            .ToArray();
-    }
+    private static IReadOnlyList<Point2> SampleCurve(Curve curve, UnitSystem modelUnits, double spacingMetres) =>
+        CurveOutline.Points(curve, modelUnits);
 
     private static Point3d ToPoint3d(Point2 pointMetres, double elevationModel, UnitSystem modelUnits)
     {

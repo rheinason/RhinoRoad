@@ -65,7 +65,7 @@ internal static class RhinoOutputWriter
         }
         catch
         {
-            foreach (var id in ids.Where(id => id != Guid.Empty)) document.Objects.Delete(id, quiet: true);
+            foreach (var id in ids.Where(id => id != Guid.Empty)) DocumentObjects.Delete(document, id);
             throw;
         }
     }
@@ -136,13 +136,13 @@ internal static class RhinoOutputWriter
     private static void DeleteMatching(RhinoDoc document, Guid sourceId, string keepAnalysisId)
     {
         var sourceText = sourceId.ToString("D");
-        var matches = document.Objects.GetObjectList(ObjectType.AnyObject)
+        var matches = DocumentObjects.All(document)
             .Where(obj => string.Equals(obj.Attributes.GetUserString("RhinoRoad.SourceId"), sourceText, StringComparison.OrdinalIgnoreCase))
             .Where(obj => !string.Equals(obj.Attributes.GetUserString("RhinoRoad.AnalysisId"), keepAnalysisId, StringComparison.OrdinalIgnoreCase))
             .Where(obj => !string.Equals(obj.Attributes.GetUserString(AccessDefinitionStore.RoleKey), AccessDefinitionStore.SourceControlRole, StringComparison.OrdinalIgnoreCase))
             .Where(obj => !string.Equals(obj.Attributes.GetUserString(AccessDefinitionStore.RoleKey), AccessDefinitionStore.SourceCurveRole, StringComparison.OrdinalIgnoreCase))
             .Select(obj => obj.Id)
             .ToArray();
-        foreach (var id in matches) document.Objects.Delete(id, quiet: true);
+        foreach (var id in matches) DocumentObjects.Delete(document, id);
     }
 }

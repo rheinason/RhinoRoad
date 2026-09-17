@@ -171,7 +171,7 @@ internal static class AccessDerivedService
         }
         // Build all replacement objects before touching previous output or source metadata.
         var created = new List<Guid>();
-        var oldOutputs = document.Objects.GetObjectList(ObjectType.AnyObject).Where(o =>
+        var oldOutputs = DocumentObjects.All(document).Where(o =>
             o.Attributes.GetUserString(IdKey) == definition.Id.ToString("D") && o.Id != anchor?.Id).Select(o => o.Id).ToArray();
         if (anchor?.IsLocked == true || oldOutputs.Any(id => document.Objects.FindId(id)?.IsLocked == true))
             throw new InvalidOperationException("Unlock the sizing result before updating it.");
@@ -203,11 +203,11 @@ internal static class AccessDerivedService
                 if (!document.Objects.ModifyAttributes(anchor.Id, attributes, true))
                     throw new InvalidOperationException("Rhino could not update the sizing definition.");
             }
-            foreach (var id in oldOutputs) document.Objects.Delete(id, true);
+            foreach (var id in oldOutputs) DocumentObjects.Delete(document, id);
         }
         catch
         {
-            foreach (var id in created) document.Objects.Delete(id, true);
+            foreach (var id in created) DocumentObjects.Delete(document, id);
             if (anchor is not null && previousAttributes is not null)
                 document.Objects.ModifyAttributes(anchor.Id, previousAttributes, true);
             throw;
@@ -233,7 +233,7 @@ internal static class AccessDerivedService
         return attributes;
     }
 
-    private static IEnumerable<RhinoObject> Anchors(RhinoDoc document) => document.Objects.GetObjectList(ObjectType.AnyObject)
+    private static IEnumerable<RhinoObject> Anchors(RhinoDoc document) => DocumentObjects.All(document)
         .Where(o => o.Attributes.GetUserString(Key) is not null);
 
     private static AccessDerivedDefinition Read(RhinoObject anchor)
@@ -246,7 +246,7 @@ internal static class AccessDerivedService
         return definition;
     }
 
-    private static RhinoObject? FindSource(RhinoDoc document, Guid id) => document.Objects.GetObjectList(ObjectType.AnyObject)
+    private static RhinoObject? FindSource(RhinoDoc document, Guid id) => DocumentObjects.All(document)
         .FirstOrDefault(o => o.Attributes.GetUserString(AccessDefinitionStore.DefinitionKey) is not null &&
             o.Attributes.GetUserString(AccessDefinitionStore.SourceIdKey) == id.ToString("D"));
 
@@ -278,7 +278,7 @@ internal static class AccessDerivedService
                 var stale = sectionChanged || definition.Sources.Any(id => FindSource(document, id) is not { } source ||
                     !definition.Signatures.TryGetValue(id, out var saved) || saved != Signature(document, source));
                 if (!stale) continue;
-                foreach (var item in document.Objects.GetObjectList(ObjectType.AnyObject).Where(o =>
+                foreach (var item in DocumentObjects.All(document).Where(o =>
                              o.Attributes.GetUserString(IdKey) == definition.Id.ToString("D")).ToArray())
                 {
                     if (item.Attributes.GetUserString("RhinoRoad.SizingStatus") == "Out of date") continue;

@@ -25,7 +25,7 @@ internal static class AccessDefinitionStore
         if (selected.Attributes.GetUserString(DefinitionKey) is not null) return selected;
         var sourceId = selected.Attributes.GetUserString(SourceIdKey);
         if (string.IsNullOrWhiteSpace(sourceId)) return null;
-        return document.Objects.GetObjectList(ObjectType.AnyObject).FirstOrDefault(candidate =>
+        return DocumentObjects.All(document).FirstOrDefault(candidate =>
             candidate.Attributes.GetUserString(DefinitionKey) is not null &&
             string.Equals(candidate.Attributes.GetUserString(SourceIdKey), sourceId, StringComparison.OrdinalIgnoreCase));
     }
