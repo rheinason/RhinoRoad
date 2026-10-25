@@ -43,20 +43,20 @@ public static class TrailerReverseGenerator
     public const double FoldGainPerMetre = 0.35;
 
     /// <summary>
-    /// The largest fold the controller will ever ask for. Well inside the right angle past which the
-    /// model stops describing a real vehicle, because asking for a fold is asking to approach it and
-    /// the approach should not be the thing that jackknifes.
+    /// The largest fold the controller will ever ask for, as a share of the unit's fold limit: 55
+    /// degrees against the default 65. Asking for a fold is asking to approach it, and the approach
+    /// should not be the thing that reaches the limit, so the margin scales with whatever limit the
+    /// unit states.
     /// </summary>
-    private const double MaximumCommandedFoldRadians = 55.0 * Math.PI / 180.0;
+    private const double CommandedShareOfFoldLimit = 55.0 / 65.0;
 
-    /// <summary>
-    /// The fold at which the leg stops, short of the commanded maximum and well short of the right
-    /// angle that makes a run unusable. Reaching it means the target cannot be reversed to from here
-    /// — which is not a failure to report so much as the answer: a driver in that position stops,
-    /// pulls forward, and starts the reverse again from a better line. Ending the leg lets them do
-    /// exactly that, with the leg they have so far still drivable.
-    /// </summary>
-    private const double MaximumSafeFoldRadians = 65.0 * Math.PI / 180.0;
+    // The fold at which the leg stops is the unit's own fold limit
+    // (TowedUnitDefinition.MaximumArticulationDegrees), short of the right angle that makes a run
+    // unusable. Reaching it means the target cannot be reversed to from here -- which is not a
+    // failure to report so much as the answer: a driver in that position stops, pulls forward, and
+    // starts the reverse again from a better line. Ending the leg lets them do exactly that, with
+    // the leg they have so far still drivable. The step that would cross the limit is not taken, so
+    // the leg never contains a pose the analyzer would flag.
 
     /// <summary>Close enough to the target to stop, in metres of the aimed unit's axle.</summary>
     private const double ArrivalToleranceMetres = 0.05;
@@ -134,7 +134,7 @@ public static class TrailerReverseGenerator
 
             // The leg ends where it stops being drivable, rather than driving on into a shape no
             // vehicle holds.
-            if (poses.Any(pose => Math.Abs(pose.ArticulationAngleRadians) >= MaximumSafeFoldRadians)) break;
+            if (PastFoldLimit(vehicle, poses)) break;
 
             // Give up on a target the combination is circling rather than closing on, but only once
             // it has had room to establish the fold -- the first metres of any reverse open the range
@@ -147,10 +147,14 @@ public static class TrailerReverseGenerator
             var step = Math.Min(maximumStepMetres, Math.Max(range, ArrivalToleranceMetres));
             var advanced = RateLimitedTrajectoryGenerator.Advance(
                 vehicle, mode, state, steering, step, wheelSetAtStandstill && samples.Count == 1);
-            working.Advance(
+            var next = working.Clone();
+            next.Advance(
                 state.VehicleHeadingRadians,
                 advanced.HeadingChangeRadians,
                 step * (double)state.Direction);
+            if (PastFoldLimit(vehicle, next.Poses(
+                advanced.State.RearAxleCentreMetres.XY, advanced.State.VehicleHeadingRadians))) break;
+            working = next;
             state = advanced.State;
             samples.Add(advanced.Sample);
             travelled += step;
@@ -296,7 +300,7 @@ public static class TrailerReverseGenerator
         var tangent = new Point2(Math.Cos(facing), Math.Sin(facing));
         var normal = new Point2(-tangent.Y, tangent.X);
         var trailerWheelbase = vehicle.TowedUnits[^1].WheelbaseMetres;
-        var curvatureLimit = Math.Tan(MaximumCommandedFoldRadians) / trailerWheelbase;
+        var curvatureLimit = Math.Tan(CommandedFoldLimit(vehicle.TowedUnits[^1])) / trailerWheelbase;
 
         var state = start;
         var working = chain.Clone();
@@ -326,7 +330,7 @@ public static class TrailerReverseGenerator
                 break;
             }
 
-            if (poses.Any(pose => Math.Abs(pose.ArticulationAngleRadians) >= MaximumSafeFoldRadians)) break;
+            if (PastFoldLimit(vehicle, poses)) break;
 
             // Line-of-sight guidance. Cross-track error does not command a curvature directly --
             // that is only valid near the line, and eight metres off it asks for a radius no
@@ -348,10 +352,14 @@ public static class TrailerReverseGenerator
             var step = Math.Min(maximumStepMetres, Math.Max(along, ArrivalToleranceMetres));
             var advanced = RateLimitedTrajectoryGenerator.Advance(
                 vehicle, mode, state, steering, step, wheelSetAtStandstill && samples.Count == 1);
-            working.Advance(
+            var next = working.Clone();
+            next.Advance(
                 state.VehicleHeadingRadians,
                 advanced.HeadingChangeRadians,
                 step * (double)state.Direction);
+            if (PastFoldLimit(vehicle, next.Poses(
+                advanced.State.RearAxleCentreMetres.XY, advanced.State.VehicleHeadingRadians))) break;
+            working = next;
             state = advanced.State;
             samples.Add(advanced.Sample);
             travelled += step;
@@ -398,10 +406,11 @@ public static class TrailerReverseGenerator
         {
             var unit = vehicle.TowedUnits[index];
             var fold = chain.ArticulationAngleRadians(index, state.VehicleHeadingRadians);
+            var commandedLimit = CommandedFoldLimit(unit);
             var commandedFold = Math.Clamp(
                 Math.Atan(desired * unit.WheelbaseMetres),
-                -MaximumCommandedFoldRadians,
-                MaximumCommandedFoldRadians);
+                -commandedLimit,
+                commandedLimit);
 
             // The joint's own rate equation, solved for the tower's curvature:
             //     dfold/dlambda = sign * [ k_tower * (1 - h*cos/L) - sin/L ]
@@ -421,6 +430,21 @@ public static class TrailerReverseGenerator
             Math.Atan(vehicle.WheelbaseMetres * desired),
             -mode.MaximumWheelAngleRadians,
             mode.MaximumWheelAngleRadians);
+    }
+
+    private static double CommandedFoldLimit(TowedUnitDefinition unit) =>
+        unit.MaximumArticulationRadians * CommandedShareOfFoldLimit;
+
+    /// <summary>Whether any joint has reached its unit's fold limit.</summary>
+    private static bool PastFoldLimit(VehicleDefinition vehicle, IReadOnlyList<TowedUnitPose> poses)
+    {
+        for (var index = 0; index < poses.Count; index++)
+        {
+            if (Math.Abs(poses[index].ArticulationAngleRadians)
+                >= vehicle.TowedUnits[index].MaximumArticulationRadians) return true;
+        }
+
+        return false;
     }
 
     private static RouteSample Seed(VehicleState state, VehicleDefinition vehicle)

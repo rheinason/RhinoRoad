@@ -95,6 +95,12 @@ public sealed class VehicleCatalog
         public double TyreWidthMetres { get; init; }
         public List<double[]> BodyOutline { get; init; } = [];
 
+        /// <summary>
+        /// Optional, because no source publishes one: absent, the unit takes the RhinoRoad default
+        /// in <see cref="TowedUnitDefinition.DefaultMaximumArticulationDegrees"/>.
+        /// </summary>
+        public double? MaximumArticulationDegrees { get; init; }
+
         public TowedUnitDefinition ToDefinition() => new(
             Id,
             Name,
@@ -103,7 +109,11 @@ public sealed class VehicleCatalog
             WidthMetres,
             AxleTrackMetres,
             TyreWidthMetres,
-            BodyOutline.Select(point => new Point2(point[0], point[1])).ToArray());
+            BodyOutline.Select(point => new Point2(point[0], point[1])).ToArray())
+        {
+            MaximumArticulationDegrees = MaximumArticulationDegrees
+                ?? TowedUnitDefinition.DefaultMaximumArticulationDegrees
+        };
     }
 
     private sealed class ModeDto

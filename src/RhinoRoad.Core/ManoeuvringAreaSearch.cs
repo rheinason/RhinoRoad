@@ -2,7 +2,16 @@ using System.Diagnostics;
 
 namespace RhinoRoad.Core;
 
-/// <summary>Finds low-area, drivable SVT approaches within a selected planning yard.</summary>
+/// <summary>
+/// Finds low-area, drivable approaches into a fixed bay within a selected planning yard, for any
+/// vehicle that can be docked (see <see cref="ReverseCapabilities.CanSearchArea"/>).
+/// </summary>
+/// <remarks>
+/// Only this search runs against the clock: it is an explicit, interactive exploration whose
+/// suggestions become ordinary controls. Each candidate is planned and replayed with the
+/// deterministic machinery a saved journey uses, so a suggestion replays exactly however long the
+/// search that found it was allowed to run.
+/// </remarks>
 public static class ManoeuvringAreaSearch
 {
     public sealed record Candidate(
@@ -25,15 +34,20 @@ public static class ManoeuvringAreaSearch
         IReadOnlyList<Point2> yard, IReadOnlyList<IReadOnlyList<Point2>> fixedObstacles,
         double clearanceMetres, TimeSpan budget, CancellationToken cancellationToken = default)
     {
-        if (vehicle.Id != "SVT" || vehicle.TowedUnits.Count != 1)
-            throw new ArgumentException("Area search currently supports SVT.", nameof(vehicle));
+        ArgumentNullException.ThrowIfNull(vehicle);
+        ArgumentNullException.ThrowIfNull(mode);
+        ArgumentNullException.ThrowIfNull(saved);
+        if (!ReverseCapabilities.CanSearchArea(vehicle))
+            throw new ArgumentException(
+                "Area search needs a vehicle that can be reversed square into a bay; this one can only be aimed.",
+                nameof(vehicle));
         if (firstAdjustableControl < 0 || firstAdjustableControl >= saved.Controls.Count)
             throw new ArgumentOutOfRangeException(nameof(firstAdjustableControl));
         if (saved.Controls[firstAdjustableControl].Direction != TravelDirection.Forward)
             throw new ArgumentException("The first adjustable control must be forward.", nameof(firstAdjustableControl));
         if (saved.Controls[^1] is not { Direction: TravelDirection.Reverse,
             Kind: ManoeuvreControlKind.Aim, ExitHeadingRadians: not null })
-            throw new ArgumentException("The final control must reverse the trailer to a point and heading.", nameof(saved));
+            throw new ArgumentException("The final control must reverse into a bay: a point and a heading.", nameof(saved));
         if (yard.Count < 3) throw new ArgumentException("Select a closed yard boundary.", nameof(yard));
         if (budget <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(budget));
 
@@ -50,6 +64,9 @@ public static class ManoeuvringAreaSearch
         var target = saved.Controls[^1];
         var original = saved.Controls[firstAdjustableControl].PositionMetres;
         var heading = prefixState.VehicleHeadingRadians;
+        // The grid is laid out in the vehicle's own manoeuvre scale -- about 9 m for SVT, under 4 m
+        // for a car -- so a car's turn-away is not searched in steps longer than its turning circle.
+        var scale = ReversePlanner.ManoeuvreScaleMetres(vehicle, mode);
         var forward = new Point2(Math.Cos(heading), Math.Sin(heading));
         var left = new Point2(-forward.Y, forward.X);
         var watch = Stopwatch.StartNew();
@@ -64,18 +81,18 @@ public static class ManoeuvringAreaSearch
         // Coarse pass explores the turn-away point around its saved position. The reverse planner
         // tests direct backing, pull-ups, and one correction from each point. Refinement tests small
         // moves around the best areas, so a fixed grid does not dictate the final answer.
-        foreach (var x in new[] { -15.0, -10.0, -5.0, 0.0, 5.0, 10.0, 15.0 })
-        foreach (var y in new[] { -8.0, -4.0, 0.0, 4.0, 8.0 })
+        foreach (var x in new[] { -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5 })
+        foreach (var y in new[] { -0.9, -0.45, 0.0, 0.45, 0.9 })
         {
             if (Expired()) break;
-            SearchPoint(x, y);
+            SearchPoint(x * scale, y * scale);
         }
         foreach (var seed in candidates.OrderBy(item => item.Candidate.ClearAreaSquareMetres).Take(6).ToArray())
-        foreach (var dx in new[] { -2.5, 0.0, 2.5 })
-        foreach (var dy in new[] { -2.0, 0.0, 2.0 })
+        foreach (var dx in new[] { -0.28, 0.0, 0.28 })
+        foreach (var dy in new[] { -0.225, 0.0, 0.225 })
         {
             if (Expired()) break;
-            SearchPoint(seed.X + dx, seed.Y + dy);
+            SearchPoint(seed.X + (dx * scale), seed.Y + (dy * scale));
         }
 
         var suggestions = candidates.OrderBy(item => item.Candidate.ClearAreaSquareMetres)
@@ -87,7 +104,7 @@ public static class ManoeuvringAreaSearch
         {
             if (distinct.Any(previous =>
                 previous.Manoeuvre.Controls[firstAdjustableControl].PositionMetres.XY.DistanceTo(
-                    candidate.Manoeuvre.Controls[firstAdjustableControl].PositionMetres.XY) < 2.0
+                    candidate.Manoeuvre.Controls[firstAdjustableControl].PositionMetres.XY) < 0.225 * scale
                 && previous.Corrections == candidate.Corrections)) continue;
             distinct.Add(candidate);
             if (distinct.Count == 3) break;
@@ -122,7 +139,7 @@ public static class ManoeuvringAreaSearch
                 if (planned.FromIndex < turnRoute.Count - 1)
                     turnRoute.RemoveRange(planned.FromIndex + 1, turnRoute.Count - planned.FromIndex - 1);
                 turnRoute.AddRange(planned.Samples.Skip(1));
-                var reverse = TrailerReversePlanner.Find(vehicle, mode, turnRoute,
+                var reverse = ReversePlanner.Find(vehicle, mode, turnRoute,
                     prefixRoute.Length - 1, planned.EndState, target.PositionMetres,
                     target.ExitHeadingRadians);
                 var definition = saved with
@@ -154,15 +171,16 @@ public static class ManoeuvringAreaSearch
             var suffixStart = Math.Min(prefixRoute.Length - 1, analysis.Poses.Count - 1);
             var firstStation = replay.Samples[suffixStart].StationMetres;
             if (analysis.Violations.Any(item => item.StationMetres >= firstStation - 1e-6)) return null;
-            if (analysis.MaximumArticulationAnglesRadians.Any(fold => fold >= 65.0 * Math.PI / 180.0)) return null;
-            var chain = ArticulationTrace.AtEndOf(vehicle, replay.Samples)!;
-            var trailer = chain.Poses(replay.EndState.RearAxleCentreMetres.XY,
-                replay.EndState.VehicleHeadingRadians)[^1];
-            var positionError = trailer.AxleCentreMetres.DistanceTo(target.PositionMetres.XY);
-            var headingError = Math.Abs(Geometry2D.NormalizeAngle(
-                trailer.HeadingRadians - target.ExitHeadingRadians!.Value - Math.PI)) * 180.0 / Math.PI;
-            if (positionError > TrailerReversePlanner.ArrivalToleranceMetres
-                || headingError > TrailerReversePlanner.ArrivalToleranceDegrees) return null;
+            // A rigid vehicle has nothing to fold. The analyzer already reports a fold past the limit
+            // as a violation; this says the same thing in the search's own terms.
+            if (vehicle.IsArticulated && FoldLimit.IsReached(vehicle, analysis.MaximumArticulationAnglesRadians))
+                return null;
+            var miss = ReverseBay.Miss(vehicle, replay.Samples, replay.EndState,
+                target.PositionMetres.XY, target.ExitHeadingRadians);
+            var positionError = miss.PositionMetres;
+            var headingError = miss.HeadingRadians!.Value * 180.0 / Math.PI;
+            if (positionError > ReversePlanner.ArrivalToleranceMetres
+                || headingError > ReversePlanner.ArrivalToleranceDegrees) return null;
             var body = SweptRegionBuilder.FromPoses(analysis.Poses);
             if (!body.IsSuccess) return null;
             var clearance = SweptRegionBuilder.Inflate(body.Region!, clearanceMetres);

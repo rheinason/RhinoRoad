@@ -24,6 +24,11 @@ public sealed class DirectionConstraintRegressionTests
     /// only asks for it, and the wheel takes metres to reach the lock the arc needs, so a BUS 12 in
     /// mode A squared to a 90 degree departure makes 55 of them over 15 m. Carrying the heading on the
     /// control instead lets the leg ease onto it and then run straight, which arrives on the axis.
+    /// <para>
+    /// Reversing, an aimed point with a heading is a bay — the vehicle has to arrive on the point as
+    /// well as square to it, which RigidReverseTests pins — so the reverse case here is a Finish,
+    /// which keeps the meaning of ending up travelling along the direction.
+    /// </para>
     /// </remarks>
     [Theory]
     [InlineData(0.0, TravelDirection.Forward)]
@@ -36,7 +41,9 @@ public sealed class DirectionConstraintRegressionTests
             new Point3(0, 0, 0), startHeadingDegrees * Math.PI / 180.0, 0.0, direction, 0.0);
         var wanted = (startHeadingDegrees + 90.0) * Math.PI / 180.0;
 
-        var control = new ManoeuvreControl(new Point3(2, 2, 0), direction, ExitHeadingRadians: wanted);
+        var control = new ManoeuvreControl(new Point3(2, 2, 0), direction,
+            direction == TravelDirection.Reverse ? ManoeuvreControlKind.Finish : ManoeuvreControlKind.Aim,
+            ExitHeadingRadians: wanted);
         control = JsonSerializer.Deserialize<ManoeuvreControl>(JsonSerializer.Serialize(control))!;
 
         var leg = ManoeuvreReplayService.PlanControl(
