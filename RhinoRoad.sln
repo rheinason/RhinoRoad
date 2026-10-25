@@ -22,6 +22,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhinoRoad.Core", "src\Rhino
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhinoRoad.Core.Tests", "tests\RhinoRoad.Core.Tests\RhinoRoad.Core.Tests.csproj", "{F1B1460F-E36A-4613-A9B4-9C936EB5BB51}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RhinoRoad.Grasshopper", "src\RhinoRoad.Grasshopper\RhinoRoad.Grasshopper.csproj", "{703DC397-D46E-435D-8204-A95EC4DDFCB1}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -40,6 +42,10 @@ Global
 		{F1B1460F-E36A-4613-A9B4-9C936EB5BB51}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F1B1460F-E36A-4613-A9B4-9C936EB5BB51}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F1B1460F-E36A-4613-A9B4-9C936EB5BB51}.Release|Any CPU.Build.0 = Release|Any CPU
+		{703DC397-D46E-435D-8204-A95EC4DDFCB1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{703DC397-D46E-435D-8204-A95EC4DDFCB1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{703DC397-D46E-435D-8204-A95EC4DDFCB1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{703DC397-D46E-435D-8204-A95EC4DDFCB1}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -48,6 +54,7 @@ Global
 		{D73A8243-4445-4EE0-AD91-C0960AA89218} = {7C7B9B6A-1E4A-4C33-9E9B-3E1D5A2F0001}
 		{0B89983B-4E53-49A7-87E6-C2186C8C08A4} = {7C7B9B6A-1E4A-4C33-9E9B-3E1D5A2F0001}
 		{F1B1460F-E36A-4613-A9B4-9C936EB5BB51} = {7C7B9B6A-1E4A-4C33-9E9B-3E1D5A2F0002}
+		{703DC397-D46E-435D-8204-A95EC4DDFCB1} = {7C7B9B6A-1E4A-4C33-9E9B-3E1D5A2F0001}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {9A4E2F13-6C8B-4E7A-8C6B-2F1D9E4A7B30}

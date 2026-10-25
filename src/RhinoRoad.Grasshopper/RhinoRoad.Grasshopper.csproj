@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>RhinoRoad.GrasshopperPlugin</RootNamespace>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <TargetExt>.gha</TargetExt>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <!-- Loaded dynamically by Grasshopper rather than started as an app. -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <!-- Grasshopper loads the .gha directly, so NuGet assemblies (Clipper) must sit beside it. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <AssemblyTitle>RhinoRoad for Grasshopper</AssemblyTitle>
+    <Company>RhinoRoad</Company>
+    <Product>RhinoRoad</Product>
+    <Version>$(RhinoRoadVersion)</Version>
+    <FileVersion>$(RhinoRoadAssemblyVersion)</FileVersion>
+    <AssemblyVersion>$(RhinoRoadAssemblyVersion)</AssemblyVersion>
+    <InformationalVersion>$(RhinoRoadVersion)</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\RhinoRoad.Core\RhinoRoad.Core.csproj" />
+    <!-- Pinned to the same version as RhinoCommon. ExcludeAssets="runtime" keeps RhinoCommon.dll,
+         Grasshopper.dll and GH_IO.dll out of the output: the host supplies them, and a second copy
+         would load two different assemblies into one process. -->
+    <PackageReference Include="RhinoCommon" Version="8.19.25132.1001" ExcludeAssets="runtime" />
+    <PackageReference Include="Grasshopper" Version="8.19.25132.1001" ExcludeAssets="runtime" />
+  </ItemGroup>
+</Project>

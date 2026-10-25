@@ -71,12 +71,25 @@ foreach ($name in $required) {
     Copy-Item -Path $path -Destination $frameworkRoot -Force
 }
 
+# The Grasshopper components ship beside the plugin. Core and Clipper are already staged above and
+# are shared, so only the .gha and its own runtime metadata are added; Grasshopper.dll, GH_IO.dll
+# and RhinoCommon.dll come from Rhino and must never be staged.
+$grasshopperOutput = Join-Path $repoRoot "src\RhinoRoad.Grasshopper\bin\$Configuration"
+foreach ($name in @("RhinoRoad.Grasshopper.gha", "RhinoRoad.Grasshopper.deps.json", "RhinoRoad.Grasshopper.runtimeconfig.json")) {
+    $path = Join-Path $grasshopperOutput $name
+    if (-not (Test-Path $path)) { throw "Missing required package file '$path'. Build first." }
+    Copy-Item -Path $path -Destination $frameworkRoot -Force
+}
+
 if (Test-Path (Join-Path $repoRoot "LICENSES")) {
     Copy-Item -Path (Join-Path $repoRoot "LICENSES\*") -Destination $licenseRoot -Recurse -Force
 }
 
 $rhinoCommon = Join-Path $frameworkRoot "RhinoCommon.dll"
 if (Test-Path $rhinoCommon) { throw "RhinoCommon.dll must not ship inside the package." }
+foreach ($hostAssembly in @("Grasshopper.dll", "GH_IO.dll")) {
+    if (Test-Path (Join-Path $frameworkRoot $hostAssembly)) { throw "$hostAssembly must not ship inside the package." }
+}
 
 $manifest = @"
 ---
