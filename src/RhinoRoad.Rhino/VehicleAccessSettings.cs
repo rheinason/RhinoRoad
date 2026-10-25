@@ -44,6 +44,71 @@ internal sealed class VehicleAccessSettings
 
     public bool CreateFixedEdges => EdgeMethod is RoadEdgeMethod.Both or RoadEdgeMethod.FixedWidth;
 
+    /// <summary>
+    /// Loads the last-used values saved by <see cref="Save"/>. Unset keys keep the defaults, and
+    /// unknown ids are repaired by <see cref="Reconcile"/> afterwards.
+    /// </summary>
+    /// <remarks>ReselectReferences is deliberately not persisted: it is a one-run request.</remarks>
+    public void Load()
+    {
+        if (RhinoRoadPlugin.Instance?.Settings is not { } store) return;
+        try
+        {
+            Source = ParseEnum(store.GetString("Road.Source", Source.ToString()), Source);
+            VehicleId = store.GetString("Road.VehicleId", VehicleId);
+            ModeId = store.GetString("Road.ModeId", ModeId);
+            Direction = ParseEnum(store.GetString("Road.Direction", Direction.ToString()), Direction);
+            EdgeMethod = ParseEnum(store.GetString("Road.EdgeMethod", EdgeMethod.ToString()), EdgeMethod);
+            ClearanceMetres = store.GetDouble("Road.ClearanceMetres", ClearanceMetres);
+            LeftWidthMetres = store.GetDouble("Road.LeftWidthMetres", LeftWidthMetres);
+            RightWidthMetres = store.GetDouble("Road.RightWidthMetres", RightWidthMetres);
+            CheckMaximumGrade = store.GetBool("Road.CheckMaximumGrade", CheckMaximumGrade);
+            MaximumGradePercent = store.GetDouble("Road.MaximumGradePercent", MaximumGradePercent);
+            CheckObstacles = store.GetBool("Road.CheckObstacles", CheckObstacles);
+            CheckAllowedArea = store.GetBool("Road.CheckAllowedArea", CheckAllowedArea);
+            ReplaceExisting = store.GetBool("Road.ReplaceExisting", ReplaceExisting);
+            PreviewBeforeBaking = store.GetBool("Road.PreviewBeforeBaking", PreviewBeforeBaking);
+            Footprints = ParseEnum(store.GetString("Road.Footprints", Footprints.ToString()), Footprints);
+            FootprintIntervalMetres = store.GetDouble("Road.FootprintIntervalMetres", FootprintIntervalMetres);
+        }
+        catch (Exception)
+        {
+            // Remembered values are a convenience; a damaged settings file must not stop the command.
+        }
+    }
+
+    /// <summary>Remembers the current values for the next Rhino session.</summary>
+    public void Save()
+    {
+        if (RhinoRoadPlugin.Instance?.Settings is not { } store) return;
+        try
+        {
+            store.SetString("Road.Source", Source.ToString());
+            store.SetString("Road.VehicleId", VehicleId);
+            store.SetString("Road.ModeId", ModeId);
+            store.SetString("Road.Direction", Direction.ToString());
+            store.SetString("Road.EdgeMethod", EdgeMethod.ToString());
+            store.SetDouble("Road.ClearanceMetres", ClearanceMetres);
+            store.SetDouble("Road.LeftWidthMetres", LeftWidthMetres);
+            store.SetDouble("Road.RightWidthMetres", RightWidthMetres);
+            store.SetBool("Road.CheckMaximumGrade", CheckMaximumGrade);
+            store.SetDouble("Road.MaximumGradePercent", MaximumGradePercent);
+            store.SetBool("Road.CheckObstacles", CheckObstacles);
+            store.SetBool("Road.CheckAllowedArea", CheckAllowedArea);
+            store.SetBool("Road.ReplaceExisting", ReplaceExisting);
+            store.SetBool("Road.PreviewBeforeBaking", PreviewBeforeBaking);
+            store.SetString("Road.Footprints", Footprints.ToString());
+            store.SetDouble("Road.FootprintIntervalMetres", FootprintIntervalMetres);
+        }
+        catch (Exception)
+        {
+            // As for Load: failing to remember must not fail the run.
+        }
+    }
+
+    private static T ParseEnum<T>(string text, T fallback) where T : struct, Enum =>
+        Enum.TryParse<T>(text, out var value) && Enum.IsDefined(value) ? value : fallback;
+
     /// <summary>Keeps the selection valid when a preset is renamed or a mode is not published.</summary>
     public void Reconcile(VehicleCatalog catalog)
     {

@@ -51,8 +51,11 @@ public sealed class RRVehicleAccessCommand : Command
 
         // A saved source is the Configure-and-rerun path: the dialog starts from its complete setup,
         // and the accepted changes are replayed without asking for the path again.
-        if (storedSource is not null && storedDefinition is not null && settings.Source == storedDefinition.SourceKind)
+        // The dialog locks the source for a saved road, but the scripted prompt does not, so pin it
+        // here: changing the source means a new road, never a half-configured one.
+        if (storedSource is not null && storedDefinition is not null)
         {
+            settings.Source = storedDefinition.SourceKind;
             var configured = WithSettings(storedDefinition, settings);
             var obstacleReferencesNeedSelection = configured.ObstacleObjectIds.Count == 0 ||
                 configured.ObstacleObjectIds.Any(id => document.Objects.FindId(id) is null);
@@ -508,7 +511,15 @@ public sealed class RRVehicleAccessCommand : Command
         AccessDefinitionStore.Fingerprint(source),
         analysisId);
 
-    private static readonly VehicleAccessSettings _settings = new();
+    // Loaded once from the plugin's persistent settings; the dialog and prompt save after a successful run.
+    private static readonly VehicleAccessSettings _settings = LoadSettings();
+
+    private static VehicleAccessSettings LoadSettings()
+    {
+        var settings = new VehicleAccessSettings();
+        settings.Load();
+        return settings;
+    }
 
     /// <summary>
     /// The scripted interface. <c>-Road</c> in a macro or script cannot raise a modal
@@ -535,23 +546,35 @@ public sealed class RRVehicleAccessCommand : Command
             using var getter = new GetOption();
             getter.SetCommandPrompt("Road settings; Enter to continue");
             getter.AcceptNothing(true);
-            var sourceIndex = getter.AddOptionList("Source", ["ExistingCurve", "Interactive"], (int)settings.Source);
-            var vehicleIndex = getter.AddOptionList("Vehicle", vehicleIds, Math.Max(0, Array.IndexOf(vehicleIds, settings.VehicleId)));
-            var modeIndex = getter.AddOptionList("Mode", modeIds, Math.Max(0, Array.IndexOf(modeIds, settings.ModeId)));
-            var directionIndex = getter.AddOptionList("Direction", ["Forward", "Reverse"], settings.Direction == TravelDirection.Forward ? 0 : 1);
-            var edgeIndex = getter.AddOptionList("RoadEdges", Enum.GetNames<RoadEdgeMethod>(), (int)settings.EdgeMethod);
-            getter.AddOptionDouble("Clearance", ref clearance);
-            getter.AddOptionDouble("LeftWidth", ref leftWidth);
-            getter.AddOptionDouble("RightWidth", ref rightWidth);
-            getter.AddOptionToggle("Grade", ref gradeToggle);
-            getter.AddOptionDouble("MaxGradePercent", ref maximumGrade);
-            getter.AddOptionToggle("Obstacles", ref obstacleToggle);
-            getter.AddOptionToggle("AllowedArea", ref boundaryToggle);
-            getter.AddOptionToggle("ReselectReferences", ref reselectToggle);
-            getter.AddOptionToggle("ReplaceExisting", ref replaceToggle);
-            getter.AddOptionToggle("Preview", ref previewToggle);
-            getter.AddOptionDouble("FootprintInterval", ref footprintInterval);
+            string[] footprintNames = [nameof(FootprintMode.None), nameof(FootprintMode.EndsOnly), nameof(FootprintMode.AtInterval)];
+            int sourceIndex = 0, vehicleIndex = 0, modeIndex = 0, directionIndex = 0, edgeIndex = 0, footprintIndex = 0;
 
+            // Option lists are fixed once added, so a change of vehicle clears and re-adds the whole
+            // set: that is the only way Mode can list the new vehicle's modes.
+            void AddOptions()
+            {
+                getter.ClearCommandOptions();
+                modeIds = catalog.Get(settings.VehicleId).DrivingModes.Keys.OrderBy(key => key).ToArray();
+                sourceIndex = getter.AddOptionList("Source", ["ExistingCurve", "Interactive"], (int)settings.Source);
+                vehicleIndex = getter.AddOptionList("Vehicle", vehicleIds, Math.Max(0, Array.IndexOf(vehicleIds, settings.VehicleId)));
+                modeIndex = getter.AddOptionList("Mode", modeIds, Math.Max(0, Array.IndexOf(modeIds, settings.ModeId)));
+                directionIndex = getter.AddOptionList("Direction", ["Forward", "Reverse"], settings.Direction == TravelDirection.Forward ? 0 : 1);
+                edgeIndex = getter.AddOptionList("RoadEdges", Enum.GetNames<RoadEdgeMethod>(), (int)settings.EdgeMethod);
+                getter.AddOptionDouble("Clearance", ref clearance);
+                getter.AddOptionDouble("LeftWidth", ref leftWidth);
+                getter.AddOptionDouble("RightWidth", ref rightWidth);
+                getter.AddOptionToggle("Grade", ref gradeToggle);
+                getter.AddOptionDouble("MaxGradePercent", ref maximumGrade);
+                getter.AddOptionToggle("Obstacles", ref obstacleToggle);
+                getter.AddOptionToggle("AllowedArea", ref boundaryToggle);
+                getter.AddOptionToggle("ReselectReferences", ref reselectToggle);
+                getter.AddOptionToggle("ReplaceExisting", ref replaceToggle);
+                getter.AddOptionToggle("Preview", ref previewToggle);
+                footprintIndex = getter.AddOptionList("Footprints", footprintNames, Math.Max(0, Array.IndexOf(footprintNames, settings.Footprints.ToString())));
+                getter.AddOptionDouble("FootprintInterval", ref footprintInterval);
+            }
+
+            AddOptions();
             while (true)
             {
                 var result = getter.Get();
@@ -560,10 +583,17 @@ public sealed class RRVehicleAccessCommand : Command
                 if (result != GetResult.Option) continue;
                 var option = getter.Option();
                 if (option.Index == sourceIndex) settings.Source = (PathSourceKind)option.CurrentListOptionIndex;
-                else if (option.Index == vehicleIndex) settings.VehicleId = vehicleIds[option.CurrentListOptionIndex];
+                else if (option.Index == vehicleIndex)
+                {
+                    settings.VehicleId = vehicleIds[option.CurrentListOptionIndex];
+                    // Falls back to the new vehicle's first mode if the old one is not offered.
+                    settings.Reconcile(catalog);
+                    AddOptions();
+                }
                 else if (option.Index == modeIndex) settings.ModeId = modeIds[option.CurrentListOptionIndex];
                 else if (option.Index == directionIndex) settings.Direction = option.CurrentListOptionIndex == 0 ? TravelDirection.Forward : TravelDirection.Reverse;
                 else if (option.Index == edgeIndex) settings.EdgeMethod = (RoadEdgeMethod)option.CurrentListOptionIndex;
+                else if (option.Index == footprintIndex) settings.Footprints = Enum.Parse<FootprintMode>(footprintNames[option.CurrentListOptionIndex]);
             }
 
             settings.ClearanceMetres = clearance.CurrentValue;
@@ -578,6 +608,7 @@ public sealed class RRVehicleAccessCommand : Command
             settings.ReplaceExisting = replaceToggle.CurrentValue;
             settings.PreviewBeforeBaking = previewToggle.CurrentValue;
             settings.Reconcile(catalog);
+            settings.Save();
             return Result.Success;
         }
     }
