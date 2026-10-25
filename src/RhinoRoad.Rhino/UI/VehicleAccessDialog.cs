@@ -41,6 +41,7 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
     private readonly CheckBox _checkObstacles = new() { Text = "Obstacle curves" };
     private readonly CheckBox _checkAllowedArea = new() { Text = "Allowed-area boundaries" };
     private readonly CheckBox _checkGrade = new() { Text = "Maximum grade" };
+    private readonly CheckBox _drapeTerrain = new() { Text = "Drape onto terrain" };
     private readonly CheckBox _reselectReferences = new() { Text = "Reselect obstacle and boundary curves" };
     private readonly CheckBox _replaceExisting = new() { Text = "Replace previous result for the same path" };
     private readonly CheckBox _previewBeforeBaking = new() { Text = "Preview and confirm before baking" };
@@ -81,6 +82,7 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         _edgeMethod.Items.Add(new ListItem { Text = "Clearance footprint only", Key = nameof(RoadEdgeMethod.MinimumFootprint) });
         _edgeMethod.Items.Add(new ListItem { Text = "Clearance footprint + fixed-width road", Key = nameof(RoadEdgeMethod.Both) });
         _direction.ToolTip = "Starting direction for an interactive route, and the direction the vehicle faces along an existing curve.";
+        _drapeTerrain.ToolTip = "Takes the route's elevations from a surface, polysurface, SubD or mesh, so grade is checked on driven routes too.";
         if (configuringSavedSource)
         {
             _source.Enabled = false;
@@ -147,6 +149,7 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
                             VerticalContentAlignment = VerticalAlignment.Center,
                             Items = { _checkGrade, new Label { Text = "max %" }, _maximumGrade }
                         })),
+                    Group("Terrain", Stretched(_drapeTerrain)),
                     showAdvanced,
                     advanced,
             }
@@ -348,6 +351,7 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         _checkAllowedArea.Checked = settings.CheckAllowedArea;
         _reselectReferences.Checked = settings.ReselectReferences;
         _checkGrade.Checked = settings.CheckMaximumGrade;
+        _drapeTerrain.Checked = settings.DrapeTerrain;
         _replaceExisting.Checked = settings.ReplaceExisting;
         _previewBeforeBaking.Checked = settings.PreviewBeforeBaking;
         _maximumGrade.Enabled = settings.CheckMaximumGrade;
@@ -371,6 +375,7 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         settings.CheckAllowedArea = _checkAllowedArea.Checked == true;
         settings.ReselectReferences = _reselectReferences.Checked == true;
         settings.CheckMaximumGrade = _checkGrade.Checked == true;
+        settings.DrapeTerrain = _drapeTerrain.Checked == true;
         settings.ReplaceExisting = _replaceExisting.Checked == true;
         settings.PreviewBeforeBaking = _previewBeforeBaking.Checked == true;
     }
