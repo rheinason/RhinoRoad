@@ -5,6 +5,7 @@ using Rhino.Geometry;
 using Rhino.Input;
 using Rhino.Input.Custom;
 using RhinoRoad.Core;
+using static RhinoRoad.Rhino.Services.InteractiveRouteDrawing;
 
 namespace RhinoRoad.Rhino.Services;
 
@@ -24,14 +25,54 @@ namespace RhinoRoad.Rhino.Services;
 /// as one continuous ease-out, the way a driver opens the wheel through the second half of a bend
 /// rather than arriving at the exit still turning and having to unwind against it.
 /// </para>
+/// <para>
+/// The decisions between clicks -- armed modifiers, commit and undo -- belong to
+/// <see cref="InteractiveJourney"/>, and the drawing to <see cref="InteractiveRouteDrawing"/>; this
+/// runs the Rhino picks and connects the two.
+/// </para>
 /// </remarks>
-internal static class InteractiveRouteBuilder
+internal sealed class InteractiveRouteBuilder
 {
-    private sealed record HistoryEntry(
-        VehicleState State,
-        RouteSample[] Route,
-        ManoeuvreControl[] Controls,
-        int LegStartIndex);
+    private enum EscapeChoice
+    {
+        Keep,
+        Discard,
+        Continue
+    }
+
+    private readonly RhinoDoc _document;
+    private readonly VehicleDefinition _vehicle;
+    private readonly DrivingModeDefinition _mode;
+    private readonly double _clearanceMetres;
+    private readonly SiteConstraints _site;
+    private readonly UnitSystem _units;
+    private readonly double _metresPerModelUnit;
+    private readonly double _turnRangeMetres;
+    private readonly InteractiveJourney _journey;
+
+    private CommittedDrawing _committed;
+    private int _committedLegCount = -1;
+
+    private InteractiveRouteBuilder(
+        RhinoDoc document,
+        VehicleDefinition vehicle,
+        DrivingModeDefinition mode,
+        double clearanceMetres,
+        SiteConstraints site,
+        VehicleState start)
+    {
+        _document = document;
+        _vehicle = vehicle;
+        _mode = mode;
+        _clearanceMetres = clearanceMetres;
+        _site = site;
+        _units = document.ModelUnitSystem;
+        _metresPerModelUnit = RhinoMath.UnitScale(_units, UnitSystem.Meters);
+        _turnRangeMetres = Math.Max(
+            2.0 * TurningGeometryCalculator.AtFullLock(vehicle, mode).RearAxleRadiusMetres, 5.0);
+        _journey = new InteractiveJourney(vehicle, start);
+        _committed = InteractiveRouteDrawing.Committed(_journey.Route, vehicle, _units);
+    }
 
     public static Result TryBuild(
         RhinoDoc document,
@@ -39,6 +80,7 @@ internal static class InteractiveRouteBuilder
         DrivingModeDefinition mode,
         TravelDirection initialDirection,
         double clearanceMetres,
+        SiteConstraints site,
         out IReadOnlyList<RouteSample> samples,
         out ManoeuvreDefinition? manoeuvre,
         out Curve? controlCurve)
@@ -46,98 +88,53 @@ internal static class InteractiveRouteBuilder
         samples = [];
         manoeuvre = null;
         controlCurve = null;
-        var metresPerModelUnit = RhinoMath.UnitScale(document.ModelUnitSystem, UnitSystem.Meters);
 
-        using var startGetter = new GetPoint();
-        startGetter.SetCommandPrompt("Place vehicle (rear axle centre)");
-        if (startGetter.Get() != GetResult.Point) return Result.Cancel;
-        var startModel = startGetter.Point();
+        var start = InteractiveRouteStart.Pick(document, initialDirection, out var startResult);
+        if (start is null) return startResult;
 
-        using var headingGetter = new GetPoint();
-        headingGetter.SetCommandPrompt("Vehicle forward heading");
-        headingGetter.SetBasePoint(startModel, true);
-        headingGetter.DrawLineFromPoint(startModel, true);
-        if (headingGetter.Get() != GetResult.Point) return Result.Cancel;
-        var headingVector = headingGetter.Point() - startModel;
-        if (Math.Sqrt((headingVector.X * headingVector.X) + (headingVector.Y * headingVector.Y)) <= document.ModelAbsoluteTolerance)
+        // The modifiers are said once here rather than in every prompt, which they pushed past 200
+        // characters; the viewport legend repeats the keys for as long as the pick runs.
+        RhinoApp.WriteLine(
+            "Driving: hold Ctrl for a full-lock turn, Shift to square the exit to ortho. Stop starts the next "
+            + "leg from a standstill, Direction swings the exit after placing the point, Undo takes a leg back. "
+            + "Enter when done; Esc asks before discarding the legs driven.");
+
+        var builder = new InteractiveRouteBuilder(document, vehicle, mode, clearanceMetres, site, start);
+        var built = builder.Drive();
+        if (built != Result.Success) return built;
+
+        var journey = builder._journey;
+        samples = journey.Route.ToArray();
+        manoeuvre = journey.Definition();
+        controlCurve = new PolylineCurve(
+            new[] { manoeuvre.StartPositionMetres }
+                .Concat(manoeuvre.Controls.Select(control => control.PositionMetres))
+                .Select(point => ToModelPoint(point, document.ModelUnitSystem)));
+        return Result.Success;
+    }
+
+    /// <summary>The pick loop: one click, option or typed sweep per pass, until the journey is done.</summary>
+    private Result Drive()
+    {
+        while (!_journey.IsComplete)
         {
-            RhinoApp.WriteLine("Heading point is too close to the start point.");
-            return Result.Failure;
-        }
+            RefreshCommitted();
 
-        var state = new VehicleState(
-            new Point3(startModel.X * metresPerModelUnit, startModel.Y * metresPerModelUnit, startModel.Z * metresPerModelUnit),
-            Math.Atan2(headingVector.Y, headingVector.X),
-            0.0,
-            initialDirection,
-            0.0);
-        var route = new List<RouteSample> { StateSample(state, vehicle) };
-        var controls = new List<ManoeuvreControl>();
-        var history = new Stack<HistoryEntry>();
-
-        // How far back an ease-out may rewind: never past the start of the leg being driven, so the
-        // corner in hand can be reshaped but an earlier decision cannot be silently undone.
-        var legStartIndex = 0;
-
-        var committedPath = CommittedPolyline(route, document.ModelUnitSystem);
-        var committedFootprints = CommittedFootprints(route, vehicle, document.ModelUnitSystem);
-
-        var finishing = false;
-
-        // Latched by the Turn option; held momentarily by Ctrl. Either one puts the next click into
-        // a locked turn, and they are one flag so the two routes into it cannot disagree.
-        var lockedTurn = false;
-
-        // Armed by the Stop option and spent on the next click, because a stop is a thing that
-        // happens once rather than a state to be in. A change of direction is a stop already and
-        // needs no arming -- this is for the standstill a route would not otherwise have had.
-        var stopFirst = false;
-
-        // Armed by the Direction option and spent on the next click. The direction is not picked
-        // separately: the click places the point, and the pick then continues with that point fixed
-        // while the cursor swings the direction about it, so the leg is previewed against the
-        // direction being chosen rather than chosen blind and previewed afterwards.
-        var pointExitNext = false;
-        var planReverseNext = false;
-
-        // Which way the last previewed turn swung, so a sweep typed on the command line — where
-        // there is no cursor to read a side from — goes the way the cursor was last pointing.
-        var lastSweepSign = 1.0;
-        var turnRangeMetres = Math.Max(
-            2.0 * TurningGeometryCalculator.AtFullLock(vehicle, mode).RearAxleRadiusMetres, 5.0);
-
-        while (true)
-        {
-            var sweepPreview = new JourneySweepPreview(route, vehicle, clearanceMetres, document.ModelUnitSystem);
-            PlannedManoeuvreLeg? planned = null;
-            ManoeuvreControl? plannedControl = null;
-            Point3d? lastPreviewPoint = null;
-            var lastPreviewLocked = false;
-            var lastPreviewSquared = false;
+            // A snapshot, because a background plan may still be reading it after this pass's click
+            // has changed the journey.
+            var route = _journey.Route.ToArray();
+            var state = _journey.State;
+            var legStartIndex = _journey.LegStartIndex;
+            var sweepPreview = new JourneySweepPreview(route, _vehicle, _clearanceMetres, _units, _site);
+            LegPreview Plan(ManoeuvreControl control) => PlanPreview(route, legStartIndex, state, sweepPreview, control);
 
             // Ctrl held during the pick. Rhino normally spends Ctrl on elevator mode, which is
             // meaningless for a plan-view manoeuvre, so it is given up below and the key is free.
             var controlKeyDown = false;
             var shiftKeyDown = false;
             using var getter = new GetPoint();
-            var wheelNow = state.SteeringAngleRadians * 180.0 / Math.PI;
-            // A bay is picked by the trailer's rear once a direction follows, because that is the
-            // point a site plan dimensions; without a direction there is no rear to speak of, and the
-            // pick stays the trailer axle.
-            var pickingTrailerRear = vehicle.IsArticulated
-                && (planReverseNext || (pointExitNext && state.Direction == TravelDirection.Reverse));
-            getter.SetCommandPrompt(planReverseNext
-                ? "Plan reverse: pick the rear of the trailer at the bay, then its reversing direction"
-                : pickingTrailerRear
-                ? $"Pick the rear of the trailer at the bay, then swing its reversing direction ({state.Direction}); Enter to finish"
-                : finishing
-                ? $"Finish: pick the direction to end up travelling in (wheel {wheelNow:0.#} deg); Enter to finish"
-                : lockedTurn
-                    ? $"Turn at full lock: pick the side and heading to swing to, or type degrees ({state.Direction}); Enter to finish"
-                    : $"{(vehicle.IsArticulated && state.Direction == TravelDirection.Reverse ? "Pick trailer axle destination" : "Pick next point")} ({state.Direction}, wheel {wheelNow:0.#} deg"
-                        + (stopFirst ? ", STOP first" : string.Empty)
-                        + (pointExitNext ? ", then swing the exit" : string.Empty)
-                        + "; Ctrl for full lock, Shift to square the exit); Enter to finish");
+            using var preview = new LatestPreview<ManoeuvreControl, LegPreview>(_document, Plan);
+            getter.SetCommandPrompt(Prompt(state));
             getter.AcceptNothing(true);
 
             // Snapping, and ortho taken over. The base point is the vehicle, which is what a
@@ -148,12 +145,10 @@ internal static class InteractiveRouteBuilder
             // it toggles ortho rather than only enabling it — but the constraint it applies is
             // OrthoAimConstraint, which snaps where the leg ends up pointing. Object snap is left
             // alone and Alt stays Rhino's snap suppressor; only elevator mode is taken, freeing Ctrl.
-            var basePoint = ToModelPoint(state.RearAxleCentreMetres, document.ModelUnitSystem);
-            getter.SetBasePoint(basePoint, true);
+            getter.SetBasePoint(ToModelPoint(state.RearAxleCentreMetres, _units), true);
             getter.PermitObjectSnap(true);
             getter.PermitOrthoSnap(false);
             getter.PermitElevatorMode(0);
-
 
             // A sweep in degrees, for the check that has to land on a round number rather than near
             // one. Negative is accepted: it turns the other way.
@@ -161,12 +156,12 @@ internal static class InteractiveRouteBuilder
 
             var reverseOption = getter.AddOption("Reverse");
             var undoOption = getter.AddOption("Undo");
-            var turnOption = getter.AddOption(lockedTurn ? "Aim" : "Turn");
-            var finishOption = getter.AddOption(finishing ? "Aim" : "Finish");
-            var stopOption = getter.AddOption(stopFirst ? "Rolling" : "Stop");
+            var turnOption = getter.AddOption(_journey.LockedTurn ? "Aim" : "Turn");
+            var finishOption = getter.AddOption(_journey.Finishing ? "Aim" : "Finish");
+            var stopOption = getter.AddOption(_journey.StopFirst ? "Rolling" : "Stop");
             var directionOption = getter.AddOption("Direction");
-            int? planReverseOption = vehicle.TowedUnits.Count == 1 && state.Direction == TravelDirection.Forward
-                ? getter.AddOption(planReverseNext ? "Manual" : "PlanReverse")
+            int? planReverseOption = InteractiveCapabilities.PlanReverseAvailable(_vehicle, state)
+                ? getter.AddOption(_journey.PlanReverseNext ? "Manual" : "PlanReverse")
                 : null;
             getter.MouseMove += (_, args) =>
             {
@@ -180,144 +175,33 @@ internal static class InteractiveRouteBuilder
             };
             getter.DynamicDraw += (_, args) =>
             {
-                var locked = lockedTurn || controlKeyDown;
-                var squared = OrthoInEffect(shiftKeyDown);
-
-                // Ortho angles are counted from the construction plane's X axis, and the plane that
-                // matters is the one belonging to the viewport the cursor is actually in — not the
-                // active view, which is a different thing the moment a pick is made in a viewport
-                // without clicking into it first.
-                var orthoReference = ConstructionPlaneHeading(args.Viewport);
-                var cursor = Cursor(
-                    args.CurrentPoint, state, squared && locked, document.ModelUnitSystem, orthoReference);
-                var exitHeading = squared
-                    ? SnappedExitHeading(args.CurrentPoint, state, document.ModelUnitSystem, orthoReference)
-                    : null;
-                var control = new ManoeuvreControl(
-                    new Point3(cursor.X, cursor.Y, args.CurrentPoint.Z * metresPerModelUnit),
-                    state.Direction,
-                    locked ? ManoeuvreControlKind.Turn
-                        : finishing ? ManoeuvreControlKind.Finish
-                        : ManoeuvreControlKind.Aim,
-                    exitHeading);
-                if (pickingTrailerRear)
+                var messages = new ViewportMessages(args.Display);
+                try
                 {
-                    // Where the trailer's rear stops says nothing yet about where the axle goes, so
-                    // no leg is planned until the direction has been swung.
-                    args.Display.Draw2dText(planReverseNext
-                            ? "Pick the rear of the trailer at the bay; its direction comes next, then the planner searches approaches"
-                            : "Pick the rear of the trailer at the bay; its reversing direction comes next",
-                        Color.DarkBlue, new Point2d(24, 60), false, 16);
-                    return;
+                    DrawPick(args, messages, route, state, sweepPreview, preview, controlKeyDown, shiftKeyDown);
                 }
-                if (planned is null
-                    || lastPreviewPoint != args.CurrentPoint
-                    || lastPreviewLocked != locked
-                    || lastPreviewSquared != squared
-                    || plannedControl != control)
+                finally
                 {
-                    planned = ManoeuvreReplayService.PlanControl(vehicle, mode, route, legStartIndex, state, control);
-                    lastPreviewPoint = args.CurrentPoint;
-                    lastPreviewLocked = locked;
-                    lastPreviewSquared = squared;
-                    plannedControl = control;
+                    Legend(messages, showModifiers: true);
                 }
-
-                // The snapped aim, drawn from the vehicle, so it is visible that the pick has been
-                // squared up and to what. Rhino's own ortho band is off here and would have pointed
-                // the wrong way anyway.
-                if (squared)
-                {
-                    args.Display.DrawDottedLine(
-                        ToModelPoint(state.RearAxleCentreMetres, document.ModelUnitSystem),
-                        ToModelPoint(new Point3(cursor.X, cursor.Y, state.RearAxleCentreMetres.Z), document.ModelUnitSystem),
-                        Color.DarkSeaGreen);
-                    // What it snapped to as well as where it landed. Rhino shows the ortho angle
-                    // nowhere during a pick, and a construction plane rotated to suit a site — which
-                    // is exactly why ortho is counted from the plane and not the world — otherwise
-                    // looks like the constraint misbehaving rather than obeying the plane it is on.
-                    args.Display.Draw2dText(
-                        $"Ortho: leaving on {Degrees(exitHeading ?? 0.0):0.#} deg "
-                        + $"(every {OrthoStepDegrees():0.#} deg from CPlane {Degrees(orthoReference):0.#} deg)",
-                        Color.DarkSeaGreen, new Point2d(24, 108), false, 16);
-                }
-                if (locked)
-                {
-                    var sweep = LockedTurnGenerator.SweepFromCursor(state, cursor);
-                    if (Math.Abs(sweep) > 1e-9) lastSweepSign = Math.Sign(sweep);
-                    DrawLockCircles(args.Display, vehicle, mode, state, document.ModelUnitSystem);
-                    args.Display.Draw2dText(
-                        $"Turn {Math.Abs(sweep) * 180.0 / Math.PI:0.#} deg {(sweep >= 0.0 ? "left" : "right")} at full lock",
-                        Color.MediumVioletRed, new Point2d(24, 84), false, 16);
-                }
-                sweepPreview.Draw(args.Display, planned);
-
-                // What the ease-out hands back, drawn faintly, so rewinding into the corner reads as
-                // the exit being reshaped rather than as geometry that silently disappeared.
-                if (planned.FromIndex < route.Count - 1)
-                {
-                    var discarded = new Polyline(route.Skip(planned.FromIndex)
-                        .Select(sample => ToModelPoint(sample.PositionMetres, document.ModelUnitSystem)));
-                    if (discarded.Count > 1) args.Display.DrawDottedPolyline(discarded, Color.Gainsboro, false);
-                }
-
-                var kept = Math.Min(planned.FromIndex + 1, committedPath.Count);
-                if (kept > 1)
-                {
-                    args.Display.DrawPolyline(new Polyline(committedPath.Take(kept)), Color.RoyalBlue, 2);
-                }
-
-                // Only the stamps the ease-out keeps. Drawing all of them leaves the discarded
-                // tail's body outlines sitting in the viewport, so a corner whose overshoot has
-                // just been rewound away still looks as though it overshoots.
-                foreach (var stamp in committedFootprints)
-                {
-                    if (stamp.SampleIndex > planned.FromIndex) break;
-                    foreach (var outline in stamp.Outlines) args.Display.DrawPolyline(outline, Color.LightSteelBlue, 1);
-                }
-
-                var colour = planned.RequestedAngleExceeded ? Color.OrangeRed : Color.CornflowerBlue;
-                if (planned.Samples.Count > 1)
-                {
-                    args.Display.DrawPolyline(
-                        new Polyline(planned.Samples.Select(sample => ToModelPoint(sample.PositionMetres, document.ModelUnitSystem))),
-                        colour,
-                        3);
-                }
-
-                DrawVehicle(args.Display, vehicle, planned.EndState, document.ModelUnitSystem,
-                    planned.RequestedAngleExceeded ? Color.OrangeRed : Color.DarkBlue,
-                    ArticulationTrace.At(vehicle, route, planned));
-                DrawExitDirection(args.Display, planned.EndState, document.ModelUnitSystem);
-                if (planned.RequestedAngleExceeded)
-                {
-                    // Reversing a combination, the point means where the trailer should end up, so
-                    // "steering limit" is the wrong thing to say when it does not get there: the
-                    // wheel may be nowhere near its lock and the trailer still unable to be placed.
-                    var reversingTrailer = vehicle.IsArticulated
-                        && planned.EndState.Direction == TravelDirection.Reverse;
-                    args.Display.Draw2dText(
-                        reversingTrailer
-                            ? "Trailer cannot reach that point from here — pull farther forward or change the turn-away point"
-                            : "Steering limit reached — adjust your aim",
-                        Color.OrangeRed,
-                        new Point2d(24, 60), false, 16);
-                }
-                if (planned.ExitHeadingUnavailable)
-                    args.Display.Draw2dText(
-                        "This combination cannot be squared onto an exit direction in reverse — the trailer is aimed at the point instead",
-                        Color.Goldenrod, new Point2d(24, 12), false, 16);
-                if (planned.AimedBehindTheBeam)
-                    args.Display.Draw2dText(
-                        "That point is behind the vehicle — aiming stops at a half turn. Reverse, or hold Ctrl to turn further.",
-                        Color.OrangeRed, new Point2d(24, 36), false, 16);
             };
 
             var getResult = getter.Get();
-            if (getResult == GetResult.Cancel) return Result.Cancel;
+            if (getResult == GetResult.Cancel)
+            {
+                // One stray Esc after ten careful clicks used to throw the journey away.
+                if (_journey.LegCount == 0) return Result.Cancel;
+                var choice = AskOnEscape();
+                if (choice == EscapeChoice.Discard) return Result.Cancel;
+                if (choice == EscapeChoice.Continue) continue;
+                if (_journey.HasRoute) break;
+                RhinoApp.WriteLine("Create at least one trajectory leg.");
+                continue;
+            }
+
             if (getResult == GetResult.Nothing)
             {
-                if (route.Count < 2)
+                if (!_journey.HasRoute)
                 {
                     RhinoApp.WriteLine("Create at least one trajectory leg.");
                     continue;
@@ -328,76 +212,14 @@ internal static class InteractiveRouteBuilder
 
             if (getResult == GetResult.Option)
             {
-                if (getter.OptionIndex() == reverseOption)
-                {
-                    planReverseNext = false;
-                    state = state with
-                    {
-                        Direction = state.Direction == TravelDirection.Forward ? TravelDirection.Reverse : TravelDirection.Forward
-                    };
-
-                    // A cusp. The ease-out must not reach back through it into the other direction.
-                    legStartIndex = route.Count - 1;
-                    RhinoApp.WriteLine($"Travel direction: {state.Direction}");
-                    if (vehicle.IsArticulated && state.Direction == TravelDirection.Reverse)
-                        RhinoApp.WriteLine("Pick where the trailer axle should stop, or choose Direction to pick the rear of the trailer at the bay and the way it reverses in; the preview shows the full reverse sweep.");
-                }
-                else if (getter.OptionIndex() == finishOption)
-                {
-                    finishing = !finishing;
-                    if (finishing) lockedTurn = false;
-                }
-                else if (getter.OptionIndex() == turnOption)
-                {
-                    lockedTurn = !lockedTurn;
-                    if (lockedTurn) finishing = false;
-                }
-                else if (getter.OptionIndex() == stopOption)
-                {
-                    stopFirst = !stopFirst;
-                    RhinoApp.WriteLine(stopFirst
-                        ? "The next leg starts from a standstill: the wheel is turned before the vehicle moves."
-                        : "The next leg starts rolling.");
-                }
-                else if (getter.OptionIndex() == directionOption)
-                {
-                    pointExitNext = !pointExitNext;
-                    RhinoApp.WriteLine(pointExitNext
-                        ? vehicle.IsArticulated && (state.Direction == TravelDirection.Reverse || planReverseNext)
-                            ? "Pick the rear of the trailer at the bay, then point the way it reverses in."
-                            : "Place the point, then swing the direction to leave along."
-                        : "Exit direction released.");
-                }
-                else if (planReverseOption is not null && getter.OptionIndex() == planReverseOption)
-                {
-                    planReverseNext = !planReverseNext;
-                    if (planReverseNext)
-                    {
-                        lockedTurn = false;
-                        finishing = false;
-                        RhinoApp.WriteLine("Pick the rear of the trailer at the bay, then point the way it reverses in. The planner will try forward pull-ups and reverse approaches, then show its proposal before you accept it.");
-                    }
-                }
-                else if (getter.OptionIndex() == undoOption)
-                {
-                    if (history.Count == 0)
-                    {
-                        RhinoApp.WriteLine("Nothing to undo.");
-                    }
-                    else
-                    {
-                        var entry = history.Pop();
-                        state = entry.State;
-                        legStartIndex = entry.LegStartIndex;
-                        route.Clear();
-                        route.AddRange(entry.Route);
-                        controls.Clear();
-                        controls.AddRange(entry.Controls);
-                        committedPath = CommittedPolyline(route, document.ModelUnitSystem);
-                        committedFootprints = CommittedFootprints(route, vehicle, document.ModelUnitSystem);
-                    }
-                }
-
+                var option = getter.OptionIndex();
+                if (option == reverseOption) ToggleDirection();
+                else if (option == finishOption) _journey.ToggleFinish();
+                else if (option == turnOption) _journey.ToggleTurn();
+                else if (option == stopOption) ToggleStop();
+                else if (option == directionOption) TogglePointExit();
+                else if (planReverseOption is not null && option == planReverseOption) TogglePlanReverse();
+                else if (option == undoOption && !_journey.Undo()) RhinoApp.WriteLine("Nothing to undo.");
                 continue;
             }
 
@@ -406,7 +228,7 @@ internal static class InteractiveRouteBuilder
             // replay through one path.
             if (getResult == GetResult.Number)
             {
-                if (!lockedTurn && !controlKeyDown)
+                if (!_journey.LockedTurn && !controlKeyDown)
                 {
                     RhinoApp.WriteLine("A number sets the sweep of a full-lock turn; choose Turn first.");
                     continue;
@@ -420,302 +242,447 @@ internal static class InteractiveRouteBuilder
                 }
 
                 var typedSweep = typedDegrees * Math.PI / 180.0;
-                if (typedDegrees > 0.0) typedSweep *= lastSweepSign;
+                if (typedDegrees > 0.0) typedSweep *= _journey.LastSweepSign;
                 Commit(new ManoeuvreControl(
-                    LockedTurnGenerator.CursorForSweep(state, typedSweep, turnRangeMetres),
+                    LockedTurnGenerator.CursorForSweep(state, typedSweep, _turnRangeMetres),
                     state.Direction,
                     ManoeuvreControlKind.Turn));
                 continue;
             }
 
             if (getResult != GetResult.Point) continue;
-
-            // Re-plan from the committed Rhino point rather than trusting the last mouse-move
-            // callback. That makes the stored control and the baked samples an exact pair even if
-            // snapping adjusts the click after the final dynamic-draw event.
-            var picked = getter.Point();
-            var pickedSquared = OrthoInEffect(shiftKeyDown);
-            var pickedLocked = lockedTurn || controlKeyDown;
-            var pickedReference = ConstructionPlaneHeading(
-                getter.View()?.ActiveViewport ?? document.Views.ActiveView?.ActiveViewport);
-            var pickedCursor = Cursor(
-                picked, state, pickedSquared && pickedLocked, document.ModelUnitSystem, pickedReference);
-            var pickedTarget = new Point3(pickedCursor.X, pickedCursor.Y, picked.Z * metresPerModelUnit);
-            var pickedKind = pickedLocked ? ManoeuvreControlKind.Turn
-                : finishing ? ManoeuvreControlKind.Finish
-                : ManoeuvreControlKind.Aim;
-            var pickedExit = pickedSquared
-                ? SnappedExitHeading(picked, state, document.ModelUnitSystem, pickedReference)
-                : null;
-
-            if (pickingTrailerRear)
-            {
-                // The rear of the trailer at the bay, then the way it backs in; the journey stores
-                // the axle that puts the rear there. Plan reverse always needs the direction.
-                pickedLocked = false;
-                pickedKind = ManoeuvreControlKind.Aim;
-                if (!TrySwingExitDirection(pickedTarget, pickedKind, out var bayHeading, trailerRear: true))
-                {
-                    pointExitNext = false;
-                    continue;
-                }
-
-                pickedExit = bayHeading;
-                pickedTarget = TrailerBay.AxleFromRear(vehicle, pickedTarget, bayHeading);
-                pointExitNext = false;
-            }
-            // A locked turn ends still turning by definition, so there is no exit direction to swing.
-            else if (pointExitNext && !pickedLocked)
-            {
-                if (!TrySwingExitDirection(pickedTarget, pickedKind, out var swung))
-                {
-                    pointExitNext = false;
-                    continue;
-                }
-
-                pickedExit = swung;
-                pointExitNext = false;
-            }
-
-            if (planReverseNext)
-            {
-                TrailerReversePlanner.Proposal proposal;
-                try
-                {
-                    proposal = TrailerReversePlanner.Find(
-                        vehicle, mode, route, legStartIndex, state, pickedTarget, pickedExit);
-                }
-                catch (InvalidOperationException error)
-                {
-                    RhinoApp.WriteLine(error.Message);
-                    continue;
-                }
-
-                using var review = new GetPoint();
-                review.SetCommandPrompt(
-                    $"Forward travel {proposal.PullUpMetres:0.#} m; trailer miss {proposal.TrailerMissMetres:0.00} m"
-                    + (proposal.HeadingMissRadians is double miss
-                        ? $", heading miss {miss * 180.0 / Math.PI:0.#} deg" : string.Empty)
-                    + "; Enter to accept, Esc to choose another destination");
-                review.AcceptNothing(true);
-                review.PermitObjectSnap(false);
-                review.DynamicDraw += (_, args) =>
-                {
-                    sweepPreview.Draw(args.Display, proposal.Leg);
-                    var samplesToDraw = proposal.Leg.Samples;
-                    var startIndex = 0;
-                    var drawDirection = samplesToDraw[0].Direction;
-                    for (var index = 1; index <= samplesToDraw.Count; index++)
-                    {
-                        if (index < samplesToDraw.Count
-                            && samplesToDraw[index].Direction == drawDirection)
-                            continue;
-                        if (index - startIndex > 1)
-                            args.Display.DrawPolyline(
-                                new Polyline(samplesToDraw.Skip(startIndex).Take(index - startIndex)
-                                    .Select(sample => ToModelPoint(sample.PositionMetres, document.ModelUnitSystem))),
-                                drawDirection == TravelDirection.Forward
-                                    ? Color.CornflowerBlue : Color.MediumVioletRed, 3);
-                        if (index < samplesToDraw.Count)
-                        {
-                            startIndex = index - 1;
-                            drawDirection = samplesToDraw[index].Direction;
-                        }
-                    }
-                    DrawVehicle(args.Display, vehicle, proposal.Leg.EndState, document.ModelUnitSystem,
-                        Color.DarkBlue, ArticulationTrace.At(vehicle, route, proposal.Leg));
-                };
-                if (review.Get() == GetResult.Nothing)
-                {
-                    history.Push(new HistoryEntry(state, route.ToArray(), controls.ToArray(), legStartIndex));
-                    if (proposal.Leg.FromIndex < route.Count - 1)
-                        route.RemoveRange(proposal.Leg.FromIndex + 1, route.Count - proposal.Leg.FromIndex - 1);
-                    route.AddRange(proposal.Leg.Samples.Skip(1));
-                    state = proposal.Leg.EndState;
-                    controls.AddRange(proposal.Controls);
-                    legStartIndex = route.Count - 1;
-                    committedPath = CommittedPolyline(route, document.ModelUnitSystem);
-                    committedFootprints = CommittedFootprints(route, vehicle, document.ModelUnitSystem);
-                    RhinoApp.WriteLine(proposal.ReachedTarget
-                        ? "Planned forward pull-up and reverse committed."
-                        : "Closest drivable reverse committed; the trailer did not reach the requested position and heading.");
-                }
-                planReverseNext = false;
-                stopFirst = false;
-                continue;
-            }
-
-            Commit(new ManoeuvreControl(
-                pickedTarget, state.Direction, pickedKind, pickedExit, FromStandstill: stopFirst));
-            stopFirst = false;
-            continue;
-
-            // Second stage of the pick: the point is placed, and the direction swings about it.
-            // (A plain comment because XML docs on a local function are not emitted anywhere.)
-            //
-            // The direction is swung about the point just placed rather than picked from the vehicle,
-            // because it is a property of where the leg ends. The picked point is a real Rhino pick
-            // from that base point, so Rhino's own ortho (F8 or Shift, at its ortho angle and on the
-            // CPlane) and object snaps constrain it exactly as they would drawing a line, and the
-            // rubber band shows the direction that will be used. Some directions are on no step -- a
-            // skewed arm, a bay set at whatever angle the building is -- and those can be snapped to
-            // geometry or typed. Escape abandons the click rather than committing a leg whose
-            // direction was never settled.
-            //
-            // For a trailer bay the point placed is the trailer's rear, and the axle the journey
-            // stores follows from it and the direction. The planned reverse is not previewed while
-            // swinging: the planner tries dozens of approaches, and running it on every mouse move
-            // made the pick lag behind the cursor. The docked trailer is drawn instead, and the
-            // proposal is reviewed once the direction is picked.
-            bool TrySwingExitDirection(
-                Point3 targetMetres, ManoeuvreControlKind kind, out double headingRadians, bool trailerRear = false)
-            {
-                headingRadians = 0.0;
-                var scale = RhinoMath.UnitScale(UnitSystem.Meters, document.ModelUnitSystem);
-                var pivot = new Point3d(targetMetres.X * scale, targetMetres.Y * scale, targetMetres.Z * scale);
-                var reference = ConstructionPlaneHeading(
-                    getter.View()?.ActiveViewport ?? document.Views.ActiveView?.ActiveViewport);
-
-                using var swing = new GetPoint();
-                swing.SetCommandPrompt(trailerRear
-                    ? "Point the way the trailer reverses into the bay (ortho and snaps apply), or type an angle from the CPlane"
-                    : "Swing the direction to leave along (ortho and snaps apply), or type an angle from the CPlane");
-                swing.SetBasePoint(pivot, true);
-                swing.DrawLineFromPoint(pivot, true);
-                swing.AcceptNumber(true, true);
-                swing.PermitObjectSnap(true);
-                swing.PermitOrthoSnap(true);
-                swing.PermitElevatorMode(0);
-
-                swing.DynamicDraw += (_, drawn) =>
-                {
-                    var heading = SwungHeading(pivot, drawn.CurrentPoint);
-                    if (heading is not double exit) return;
-                    var axleMetres = trailerRear ? TrailerBay.AxleFromRear(vehicle, targetMetres, exit) : targetMetres;
-                    if (trailerRear)
-                    {
-                        var outline = TrailerBay.DockedOutline(vehicle, axleMetres, exit)
-                            .Select(point => new Point3d(point.X * scale, point.Y * scale, pivot.Z))
-                            .ToList();
-                        outline.Add(outline[0]);
-                        drawn.Display.DrawPolyline(new Polyline(outline), Color.MediumPurple, 2);
-                        drawn.Display.DrawPoint(ToModelPoint(axleMetres, document.ModelUnitSystem),
-                            global::Rhino.Display.PointStyle.X, 4, Color.MediumPurple);
-                        drawn.Display.Draw2dText(
-                            $"Trailer reverses in at {Degrees(exit - reference):0.#} deg from the CPlane; rear at the picked point",
-                            Color.MediumPurple, new Point2d(24, 60), false, 16);
-                        if (planReverseNext) return;
-                    }
-
-                    var previewLeg = ManoeuvreReplayService.PlanControl(
-                        vehicle, mode, route, legStartIndex, state,
-                        new ManoeuvreControl(axleMetres, state.Direction, kind, exit, FromStandstill: stopFirst));
-                    sweepPreview.Draw(drawn.Display, previewLeg);
-                    if (previewLeg.Samples.Count > 1)
-                    {
-                        drawn.Display.DrawPolyline(
-                            new Polyline(previewLeg.Samples.Select(
-                                sample => ToModelPoint(sample.PositionMetres, document.ModelUnitSystem))),
-                            previewLeg.RequestedAngleExceeded ? Color.OrangeRed : Color.CornflowerBlue,
-                            3);
-                    }
-
-                    DrawVehicle(
-                        drawn.Display, vehicle, previewLeg.EndState, document.ModelUnitSystem,
-                        previewLeg.RequestedAngleExceeded ? Color.OrangeRed : Color.DarkBlue,
-                        ArticulationTrace.At(vehicle, route, previewLeg));
-                    DrawExitDirection(drawn.Display, previewLeg.EndState, document.ModelUnitSystem);
-                };
-
-                var swingResult = swing.Get();
-                if (swingResult == GetResult.Number)
-                {
-                    headingRadians = Geometry2D.NormalizeAngle(
-                        reference + (swing.Number() * Math.PI / 180.0));
-                    return true;
-                }
-
-                if (swingResult != GetResult.Point) return false;
-                if (SwungHeading(pivot, swing.Point()) is not double picked2)
-                {
-                    RhinoApp.WriteLine("That point is on top of the one just placed; swing further out.");
-                    return false;
-                }
-
-                headingRadians = picked2;
-                return true;
-            }
-
-            void Commit(ManoeuvreControl pickedControl)
-            {
-                var leg = ManoeuvreReplayService.PlanControl(vehicle, mode, route, legStartIndex, state, pickedControl);
-                history.Push(new HistoryEntry(state, route.ToArray(), controls.ToArray(), legStartIndex));
-                if (leg.FromIndex < route.Count - 1)
-                {
-                    route.RemoveRange(leg.FromIndex + 1, route.Count - leg.FromIndex - 1);
-                }
-
-                legStartIndex = route.Count - 1;
-                route.AddRange(leg.Samples.Skip(1));
-                state = leg.EndState;
-                controls.Add(pickedControl);
-                committedPath = CommittedPolyline(route, document.ModelUnitSystem);
-                committedFootprints = CommittedFootprints(route, vehicle, document.ModelUnitSystem);
-                if (leg.RequestedAngleExceeded)
-                {
-                    if (vehicle.IsArticulated && pickedControl.Direction == TravelDirection.Reverse)
-                    {
-                        var finalTrailer = ArticulationTrace.AtEndOf(vehicle, route)?.Poses(
-                            state.RearAxleCentreMetres.XY, state.VehicleHeadingRadians)[^1];
-                        var miss = finalTrailer?.AxleCentreMetres.DistanceTo(pickedControl.PositionMetres.XY);
-                        var target = pickedControl.ExitHeadingRadians.HasValue ? "the bay" : "the picked point";
-                        RhinoApp.WriteLine($"Trailer stopped {miss:0.00} m from {target} (or not square to it); pull farther forward or move the turn-away point to improve the approach.");
-                    }
-                    else
-                    {
-                        RhinoApp.WriteLine("Requested turn exceeded wheel lock; the committed leg was clamped to the selected driving mode. Hold Ctrl to drive the tightest turn the mode allows.");
-                    }
-                }
-
-                if (leg.AimedBehindTheBeam)
-                {
-                    RhinoApp.WriteLine("That point was behind the vehicle, so the leg stopped at a half turn rather than looping round to it. Reverse to back towards it, or hold Ctrl to turn at full lock.");
-                }
-            }
+            CommitPick(getter, route, state, sweepPreview, shiftKeyDown, controlKeyDown);
         }
 
-        samples = route;
-        manoeuvre = new ManoeuvreDefinition(
-            ManoeuvreDefinition.CurrentSchemaVersion,
-            new Point3(startModel.X * metresPerModelUnit, startModel.Y * metresPerModelUnit, startModel.Z * metresPerModelUnit),
-            Math.Atan2(headingVector.Y, headingVector.X),
-            initialDirection,
-            controls);
-        controlCurve = new PolylineCurve(
-            new[] { manoeuvre.StartPositionMetres }
-                .Concat(controls.Select(control => control.PositionMetres))
-                .Select(point => ToModelPoint(point, document.ModelUnitSystem)));
         return Result.Success;
     }
 
     /// <summary>
-    /// A short ray along the heading the leg ends on. Aiming at a point rotates the vehicle by twice
-    /// the bearing picked, so the exit direction is rarely the one the cursor suggests; drawing it
-    /// makes that visible while aiming rather than after committing.
+    /// The main pick's frame: the aim the cursor asks for, planned in the frame or in the background,
+    /// and drawn with what it would do to the route.
     /// </summary>
-    private static void DrawExitDirection(
-        global::Rhino.Display.DisplayPipeline display,
+    private void DrawPick(
+        GetPointDrawEventArgs args,
+        ViewportMessages messages,
+        IReadOnlyList<RouteSample> route,
         VehicleState state,
-        UnitSystem modelUnits)
+        JourneySweepPreview sweepPreview,
+        LatestPreview<ManoeuvreControl, LegPreview> preview,
+        bool controlKeyDown,
+        bool shiftKeyDown)
     {
-        var scale = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
-        var heading = state.VehicleHeadingRadians + (state.Direction == TravelDirection.Reverse ? Math.PI : 0.0);
-        var from = state.RearAxleCentreMetres.XY;
-        var to = from + (new Point2(Math.Cos(heading), Math.Sin(heading)) * 6.0);
-        display.DrawDottedLine(
-            new Point3d(from.X * scale, from.Y * scale, state.RearAxleCentreMetres.Z * scale),
-            new Point3d(to.X * scale, to.Y * scale, state.RearAxleCentreMetres.Z * scale),
-            Color.SlateGray);
+        var locked = _journey.LockedTurn || controlKeyDown;
+        var squared = OrthoInEffect(shiftKeyDown);
+
+        // Ortho angles are counted from the construction plane's X axis, and the plane that matters
+        // is the one belonging to the viewport the cursor is actually in — not the active view, which
+        // is a different thing the moment a pick is made in a viewport without clicking into it first.
+        var orthoReference = ConstructionPlaneHeading(args.Viewport);
+        var cursor = Cursor(args.CurrentPoint, state, squared && locked, _units, orthoReference);
+        var exitHeading = squared
+            ? SnappedExitHeading(args.CurrentPoint, state, _units, orthoReference)
+            : null;
+        if (_journey.PickingTrailerRear)
+        {
+            // Where the trailer's rear stops says nothing yet about where the axle goes, so no leg is
+            // planned until the direction has been swung.
+            messages.Add(_journey.PlanReverseNext
+                    ? "Pick the rear of the trailer at the bay; its direction comes next, then the planner searches approaches"
+                    : "Pick the rear of the trailer at the bay; its reversing direction comes next",
+                Color.DarkBlue);
+            return;
+        }
+
+        var control = new ManoeuvreControl(
+            new Point3(cursor.X, cursor.Y, args.CurrentPoint.Z * _metresPerModelUnit),
+            state.Direction,
+            _journey.KindFor(locked),
+            exitHeading);
+
+        // The snapped aim, drawn from the vehicle, so it is visible that the pick has been squared up
+        // and to what. Rhino's own ortho band is off here and would have pointed the wrong way anyway.
+        if (squared)
+        {
+            args.Display.DrawDottedLine(
+                ToModelPoint(state.RearAxleCentreMetres, _units),
+                ToModelPoint(new Point3(cursor.X, cursor.Y, state.RearAxleCentreMetres.Z), _units),
+                Color.DarkSeaGreen);
+            // What it snapped to as well as where it landed. Rhino shows the ortho angle nowhere
+            // during a pick, and a construction plane rotated to suit a site — which is exactly why
+            // ortho is counted from the plane and not the world — otherwise looks like the
+            // constraint misbehaving rather than obeying the plane it is on.
+            messages.Add(
+                $"Ortho: leaving on {Degrees(exitHeading ?? 0.0):0.#} deg "
+                + $"(every {OrthoStepDegrees():0.#} deg from CPlane {Degrees(orthoReference):0.#} deg)",
+                Color.DarkSeaGreen);
+        }
+        if (locked)
+        {
+            var sweep = LockedTurnGenerator.SweepFromCursor(state, cursor);
+            _journey.RecordSweepSide(sweep);
+            DrawLockCircles(args.Display, _vehicle, _mode, state, _units);
+            messages.Add(
+                $"Turn {Math.Abs(sweep) * 180.0 / Math.PI:0.#} deg {(sweep >= 0.0 ? "left" : "right")} at full lock",
+                Color.MediumVioletRed);
+        }
+
+        DrawPreview(args.Display, messages, route, sweepPreview, preview, control);
+    }
+
+    /// <summary>Asks the preview for a control and draws whatever it has, saying when it is behind.</summary>
+    private void DrawPreview(
+        global::Rhino.Display.DisplayPipeline display,
+        ViewportMessages messages,
+        IReadOnlyList<RouteSample> route,
+        JourneySweepPreview sweepPreview,
+        LatestPreview<ManoeuvreControl, LegPreview> preview,
+        ManoeuvreControl control)
+    {
+        var (result, current) = preview.Get(control, PlansSlowly(control));
+        if (preview.Error is { } error) messages.Add($"Preview unavailable: {error}", Color.OrangeRed);
+        else if (!current) messages.Add(result is null ? "Planning…" : "Updating… the faded preview is the last position planned", Color.DimGray);
+        if (result is null) return;
+        DrawLeg(display, messages, _vehicle, route, _committed, sweepPreview, result, current, _units);
+    }
+
+    /// <summary>
+    /// Whether planning this control is known to be too slow for a frame: a docking reverse tries
+    /// several correction strengths. Anything else is timed, and moves to the background if it
+    /// turns out slow too.
+    /// </summary>
+    private bool PlansSlowly(ManoeuvreControl control) =>
+        control.ExitHeadingRadians.HasValue
+        && control.Direction == TravelDirection.Reverse
+        && InteractiveCapabilities.DockingAvailable(_vehicle);
+
+    /// <summary>
+    /// Plans a control and everything drawn from it. Pure apart from the sweep cache, which
+    /// serialises itself, so it is safe on a background thread against a route snapshot.
+    /// </summary>
+    private LegPreview PlanPreview(
+        IReadOnlyList<RouteSample> route,
+        int legStartIndex,
+        VehicleState state,
+        JourneySweepPreview sweepPreview,
+        ManoeuvreControl control)
+    {
+        var leg = ManoeuvreReplayService.PlanControl(_vehicle, _mode, route, legStartIndex, state, control);
+        return new LegPreview(leg, sweepPreview.Build(leg), ArticulationTrace.At(_vehicle, route, leg));
+    }
+
+    /// <summary>
+    /// Commits a click. It is re-planned from the committed Rhino point rather than taken from the
+    /// last preview, which makes the stored control and the baked samples an exact pair even if
+    /// snapping adjusts the click after the final dynamic-draw event or the preview was still behind.
+    /// </summary>
+    private void CommitPick(
+        GetPoint getter,
+        IReadOnlyList<RouteSample> route,
+        VehicleState state,
+        JourneySweepPreview sweepPreview,
+        bool shiftKeyDown,
+        bool controlKeyDown)
+    {
+        var picked = getter.Point();
+        var pickedSquared = OrthoInEffect(shiftKeyDown);
+        var pickedLocked = _journey.LockedTurn || controlKeyDown;
+        var viewport = getter.View()?.ActiveViewport ?? _document.Views.ActiveView?.ActiveViewport;
+        var pickedReference = ConstructionPlaneHeading(viewport);
+        var pickedCursor = Cursor(picked, state, pickedSquared && pickedLocked, _units, pickedReference);
+        var pickedTarget = new Point3(pickedCursor.X, pickedCursor.Y, picked.Z * _metresPerModelUnit);
+        var pickedKind = _journey.KindFor(pickedLocked);
+        var pickedExit = pickedSquared
+            ? SnappedExitHeading(picked, state, _units, pickedReference)
+            : null;
+
+        if (_journey.PickingTrailerRear)
+        {
+            // The rear of the trailer at the bay, then the way it backs in; the journey stores the
+            // axle that puts the rear there. Plan reverse always needs the direction.
+            pickedKind = ManoeuvreControlKind.Aim;
+            var swung = SwingExitDirection(pickedTarget, pickedKind, viewport, route, state, sweepPreview, trailerRear: true);
+            _journey.SpendPointExit();
+            if (swung is not double bayHeading) return;
+            pickedExit = bayHeading;
+            pickedTarget = TrailerBay.AxleFromRear(_vehicle, pickedTarget, bayHeading);
+        }
+        // A locked turn ends still turning by definition, so there is no exit direction to swing.
+        else if (_journey.PointExitNext && !pickedLocked)
+        {
+            var swung = SwingExitDirection(pickedTarget, pickedKind, viewport, route, state, sweepPreview);
+            _journey.SpendPointExit();
+            if (swung is not double exit) return;
+            pickedExit = exit;
+        }
+
+        if (_journey.PlanReverseNext)
+        {
+            ReviewPlannedReverse(route, state, sweepPreview, pickedTarget, pickedExit);
+            _journey.SpendPlanReverse();
+            _journey.SpendStop();
+            return;
+        }
+
+        Commit(new ManoeuvreControl(
+            pickedTarget, state.Direction, pickedKind, pickedExit, FromStandstill: _journey.StopFirst));
+        _journey.SpendStop();
+    }
+
+    /// <summary>
+    /// Second stage of the pick: the point is placed, and the direction swings about it. Null when
+    /// the swing was abandoned, which abandons the click rather than committing a leg whose
+    /// direction was never settled.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The direction is swung about the point just placed rather than picked from the vehicle,
+    /// because it is a property of where the leg ends. The picked point is a real Rhino pick from
+    /// that base point, so Rhino's own ortho (F8 or Shift, at its ortho angle and on the CPlane) and
+    /// object snaps constrain it exactly as they would drawing a line, and the rubber band shows the
+    /// direction that will be used. Some directions are on no step -- a skewed arm, a bay set at
+    /// whatever angle the building is -- and those can be snapped to geometry or typed.
+    /// </para>
+    /// <para>
+    /// For a trailer bay the point placed is the trailer's rear, and the axle the journey stores
+    /// follows from it and the direction. The planned reverse is not previewed while swinging: the
+    /// planner tries dozens of approaches, and running it on every mouse move made the pick lag
+    /// behind the cursor. The docked trailer is drawn instead, and the proposal is reviewed once the
+    /// direction is picked. A plain docking reverse is previewed, in the background when it is slow.
+    /// </para>
+    /// </remarks>
+    private double? SwingExitDirection(
+        Point3 targetMetres,
+        ManoeuvreControlKind kind,
+        global::Rhino.Display.RhinoViewport? viewport,
+        IReadOnlyList<RouteSample> route,
+        VehicleState state,
+        JourneySweepPreview sweepPreview,
+        bool trailerRear = false)
+    {
+        var scale = RhinoMath.UnitScale(UnitSystem.Meters, _units);
+        var pivot = new Point3d(targetMetres.X * scale, targetMetres.Y * scale, targetMetres.Z * scale);
+        var reference = ConstructionPlaneHeading(viewport);
+        var planReverse = _journey.PlanReverseNext;
+        var stopFirst = _journey.StopFirst;
+        var legStartIndex = _journey.LegStartIndex;
+
+        using var swing = new GetPoint();
+        using var preview = new LatestPreview<ManoeuvreControl, LegPreview>(
+            _document, control => PlanPreview(route, legStartIndex, state, sweepPreview, control));
+        swing.SetCommandPrompt(trailerRear
+            ? "Point the way the trailer reverses into the bay, or type an angle from the CPlane"
+            : "Swing the direction to leave along, or type an angle from the CPlane");
+        swing.SetBasePoint(pivot, true);
+        swing.DrawLineFromPoint(pivot, true);
+        swing.AcceptNumber(true, true);
+        swing.PermitObjectSnap(true);
+        swing.PermitOrthoSnap(true);
+        swing.PermitElevatorMode(0);
+
+        swing.DynamicDraw += (_, drawn) =>
+        {
+            var messages = new ViewportMessages(drawn.Display);
+            try
+            {
+                if (SwungHeading(pivot, drawn.CurrentPoint) is not double exit) return;
+                var axleMetres = trailerRear ? TrailerBay.AxleFromRear(_vehicle, targetMetres, exit) : targetMetres;
+                if (trailerRear)
+                {
+                    DrawDockedTrailer(drawn.Display, _vehicle, axleMetres, exit, _units);
+                    messages.Add(
+                        $"Trailer reverses in at {Degrees(exit - reference):0.#} deg from the CPlane; rear at the picked point",
+                        Color.MediumPurple);
+                    if (planReverse) return;
+                }
+
+                DrawPreview(drawn.Display, messages, route, sweepPreview, preview,
+                    new ManoeuvreControl(axleMetres, state.Direction, kind, exit, FromStandstill: stopFirst));
+            }
+            finally
+            {
+                Legend(messages, showModifiers: false);
+            }
+        };
+
+        var swingResult = swing.Get();
+        if (swingResult == GetResult.Number)
+        {
+            return Geometry2D.NormalizeAngle(reference + (swing.Number() * Math.PI / 180.0));
+        }
+
+        if (swingResult != GetResult.Point) return null;
+        if (SwungHeading(pivot, swing.Point()) is not double picked)
+        {
+            RhinoApp.WriteLine("That point is on top of the one just placed; swing further out.");
+            return null;
+        }
+
+        return picked;
+    }
+
+    /// <summary>
+    /// Runs the reverse planner for a bay and shows its proposal, which is committed only if
+    /// accepted.
+    /// </summary>
+    private void ReviewPlannedReverse(
+        IReadOnlyList<RouteSample> route,
+        VehicleState state,
+        JourneySweepPreview sweepPreview,
+        Point3 target,
+        double? exitHeading)
+    {
+        TrailerReversePlanner.Proposal proposal;
+        try
+        {
+            proposal = TrailerReversePlanner.Find(
+                _vehicle, _mode, route, _journey.LegStartIndex, state, target, exitHeading);
+        }
+        catch (InvalidOperationException error)
+        {
+            RhinoApp.WriteLine(error.Message);
+            return;
+        }
+
+        // Planned once, not per frame: the review's cursor changes nothing about the proposal.
+        var reviewed = new LegPreview(proposal.Leg, sweepPreview.Build(proposal.Leg),
+            ArticulationTrace.At(_vehicle, route, proposal.Leg));
+        using var review = new GetPoint();
+        review.SetCommandPrompt(
+            $"Forward travel {proposal.PullUpMetres:0.#} m; trailer miss {proposal.TrailerMissMetres:0.00} m"
+            + (proposal.HeadingMissRadians is double miss
+                ? $", heading miss {miss * 180.0 / Math.PI:0.#} deg" : string.Empty)
+            + "; Enter to accept, Esc to choose another destination");
+        review.AcceptNothing(true);
+        review.PermitObjectSnap(false);
+        review.DynamicDraw += (_, args) =>
+        {
+            var messages = new ViewportMessages(args.Display);
+            DrawLeg(args.Display, messages, _vehicle, route, _committed, sweepPreview, reviewed, true, _units);
+            Legend(messages, showModifiers: false);
+        };
+        if (review.Get() != GetResult.Nothing) return;
+
+        _journey.Commit(proposal.Leg, proposal.Controls, sealLeg: true);
+        RhinoApp.WriteLine(proposal.ReachedTarget
+            ? "Planned forward pull-up and reverse committed."
+            : "Closest drivable reverse committed; the trailer did not reach the requested position and heading.");
+        ReportCompletion();
+    }
+
+    private void Commit(ManoeuvreControl pickedControl)
+    {
+        var leg = ManoeuvreReplayService.PlanControl(
+            _vehicle, _mode, _journey.Route, _journey.LegStartIndex, _journey.State, pickedControl);
+        _journey.Commit(leg, [pickedControl]);
+        if (leg.RequestedAngleExceeded)
+        {
+            if (InteractiveCapabilities.PointPlacesTrailer(_vehicle, pickedControl.Direction))
+            {
+                var state = _journey.State;
+                var finalTrailer = ArticulationTrace.AtEndOf(_vehicle, _journey.Route)?.Poses(
+                    state.RearAxleCentreMetres.XY, state.VehicleHeadingRadians)[^1];
+                var miss = finalTrailer?.AxleCentreMetres.DistanceTo(pickedControl.PositionMetres.XY);
+                var target = pickedControl.ExitHeadingRadians.HasValue ? "the bay" : "the picked point";
+                RhinoApp.WriteLine($"Trailer stopped {miss:0.00} m from {target} (or not square to it); pull farther forward or move the turn-away point to improve the approach.");
+            }
+            else
+            {
+                RhinoApp.WriteLine("Requested turn exceeded wheel lock; the committed leg was clamped to the selected driving mode. Hold Ctrl to drive the tightest turn the mode allows.");
+            }
+        }
+
+        if (leg.AimedBehindTheBeam)
+        {
+            RhinoApp.WriteLine("That point was behind the vehicle, so the leg stopped at a half turn rather than looping round to it. Reverse to back towards it, or hold Ctrl to turn at full lock.");
+        }
+
+        ReportCompletion();
+    }
+
+    private void ReportCompletion()
+    {
+        if (_journey.IsComplete)
+            RhinoApp.WriteLine("Journey finished: Finish sets how it ends, so the route is complete.");
+    }
+
+    private void ToggleDirection()
+    {
+        _journey.ToggleDirection();
+        RhinoApp.WriteLine($"Travel direction: {_journey.State.Direction}");
+        if (InteractiveCapabilities.PointPlacesTrailer(_vehicle, _journey.State.Direction))
+            RhinoApp.WriteLine("Pick where the trailer axle should stop, or choose Direction to pick the rear of the trailer at the bay and the way it reverses in; the preview shows the full reverse sweep.");
+    }
+
+    private void ToggleStop()
+    {
+        _journey.ToggleStop();
+        RhinoApp.WriteLine(_journey.StopFirst
+            ? "The next leg starts from a standstill: the wheel is turned before the vehicle moves."
+            : "The next leg starts rolling.");
+    }
+
+    private void TogglePointExit()
+    {
+        _journey.TogglePointExit();
+        RhinoApp.WriteLine(_journey.PointExitNext
+            ? InteractiveCapabilities.DockingAvailable(_vehicle)
+              && (_journey.State.Direction == TravelDirection.Reverse || _journey.PlanReverseNext)
+                ? "Pick the rear of the trailer at the bay, then point the way it reverses in."
+                : "Place the point, then swing the direction to leave along."
+            : "Exit direction released.");
+    }
+
+    private void TogglePlanReverse()
+    {
+        _journey.TogglePlanReverse();
+        if (_journey.PlanReverseNext)
+            RhinoApp.WriteLine("Pick the rear of the trailer at the bay, then point the way it reverses in. The planner will try forward pull-ups and reverse approaches, then show its proposal before you accept it.");
+    }
+
+    /// <summary>
+    /// Esc with legs driven. Enter keeps them, as if the journey had been finished there; Esc again
+    /// goes back to driving, because cancelling a question should not be the way work is lost.
+    /// </summary>
+    private EscapeChoice AskOnEscape()
+    {
+        using var ask = new GetOption();
+        var legs = _journey.LegCount;
+        ask.SetCommandPrompt($"Keep the {legs} leg{(legs == 1 ? string.Empty : "s")} driven so far? Enter keeps them");
+        ask.AcceptNothing(true);
+        var keep = ask.AddOption("Keep");
+        var discard = ask.AddOption("Discard");
+        var carryOn = ask.AddOption("Continue");
+        var answer = ask.Get();
+        if (answer == GetResult.Nothing) return EscapeChoice.Keep;
+        if (answer != GetResult.Option) return EscapeChoice.Continue;
+        var option = ask.OptionIndex();
+        return option == keep ? EscapeChoice.Keep
+            : option == discard ? EscapeChoice.Discard
+            : option == carryOn ? EscapeChoice.Continue
+            : EscapeChoice.Continue;
+    }
+
+    private string Prompt(VehicleState state)
+    {
+        if (_journey.PlanReverseNext) return "Plan reverse: pick the rear of the trailer at the bay";
+        if (_journey.PickingTrailerRear) return $"Pick the rear of the trailer at the bay ({state.Direction})";
+        var wheel = state.SteeringAngleRadians * 180.0 / Math.PI;
+        if (_journey.Finishing) return $"Finish: pick the direction to end up travelling in (wheel {wheel:0.#} deg)";
+        if (_journey.LockedTurn) return $"Full-lock turn: pick the side and heading, or type degrees ({state.Direction})";
+        var target = InteractiveCapabilities.PointPlacesTrailer(_vehicle, state.Direction) ? "Trailer axle destination" : "Next point";
+        return $"{target} ({state.Direction}, wheel {wheel:0.#} deg"
+            + (_journey.StopFirst ? ", stop first" : string.Empty)
+            + (_journey.PointExitNext ? ", then the exit" : string.Empty)
+            + "); Enter when done";
+    }
+
+    private void RefreshCommitted()
+    {
+        // Rebuilt on commit and undo only. Every commit or undo changes the leg count, and nothing
+        // else changes the route.
+        if (_committedLegCount == _journey.LegCount) return;
+        _committed = InteractiveRouteDrawing.Committed(_journey.Route, _vehicle, _units);
+        _committedLegCount = _journey.LegCount;
     }
 
     /// <summary>
@@ -831,136 +798,5 @@ internal static class InteractiveRouteBuilder
     {
         var degrees = radians * 180.0 / Math.PI;
         return degrees < 0.0 ? degrees + 360.0 : degrees;
-    }
-
-    /// <summary>
-    /// The two circles the rear axle would trace at full lock, left and right of where the vehicle
-    /// stands.
-    /// </summary>
-    /// <remarks>
-    /// Drawn only while a locked turn is being aimed, because they answer the question that mode
-    /// exists for: how tight the turn can actually be. Without them the tightest available radius is
-    /// invisible, and the only way to discover it is to click and see.
-    /// </remarks>
-    private static void DrawLockCircles(
-        global::Rhino.Display.DisplayPipeline display,
-        VehicleDefinition vehicle,
-        DrivingModeDefinition mode,
-        VehicleState state,
-        UnitSystem modelUnits)
-    {
-        var scale = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
-        var radius = TurningGeometryCalculator.AtFullLock(vehicle, mode).RearAxleRadiusMetres;
-        var heading = state.VehicleHeadingRadians + (state.Direction == TravelDirection.Reverse ? Math.PI : 0.0);
-        foreach (var side in new[] { 1.0, -1.0 })
-        {
-            var centre = state.RearAxleCentreMetres.XY + new Point2(
-                Math.Cos(heading + (side * Math.PI * 0.5)) * radius,
-                Math.Sin(heading + (side * Math.PI * 0.5)) * radius);
-            var points = new List<Point3d>();
-            for (var step = 0; step <= 72; step++)
-            {
-                var angle = step * Math.PI * 2.0 / 72.0;
-                points.Add(new Point3d(
-                    (centre.X + (Math.Cos(angle) * radius)) * scale,
-                    (centre.Y + (Math.Sin(angle) * radius)) * scale,
-                    state.RearAxleCentreMetres.Z * scale));
-            }
-
-            display.DrawDottedPolyline(new Polyline(points), Color.Thistle, false);
-        }
-    }
-
-    private static Polyline CommittedPolyline(IReadOnlyList<RouteSample> route, UnitSystem modelUnits) =>
-        new(route.Select(sample => ToModelPoint(sample.PositionMetres, modelUnits)));
-
-    /// <summary>
-    /// Body outlines stamped along the committed route, at the footprint reading interval.
-    /// </summary>
-    /// <remarks>
-    /// Each stamp remembers which sample it was taken at, so a preview that rewinds part of the
-    /// route can drop the stamps belonging to the part being given back.
-    /// </remarks>
-    private static IReadOnlyList<(IReadOnlyList<Polyline> Outlines, int SampleIndex)> CommittedFootprints(
-        IReadOnlyList<RouteSample> route,
-        VehicleDefinition vehicle,
-        UnitSystem modelUnits)
-    {
-        // Stamps are a reading aid, and they are redrawn on every mouse move. Two metres is the
-        // readable spacing, but a long manoeuvre must not turn each frame into hundreds of
-        // polylines, so the interval opens up once the count would exceed what anyone can read.
-        const int maximumStamps = 120;
-        var routeLength = route.Count == 0 ? 0.0 : route[^1].StationMetres;
-        var intervalMetres = Math.Max(2.0, routeLength / maximumStamps);
-        var scale = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
-        var stamps = new List<(IReadOnlyList<Polyline> Outlines, int SampleIndex)>();
-        var nextStation = 0.0;
-        var chain = ArticulationTrace.Along(vehicle, route);
-        for (var index = 0; index < route.Count; index++)
-        {
-            var sample = route[index];
-            if (sample.StationMetres < nextStation) continue;
-            nextStation = sample.StationMetres + intervalMetres;
-            var heading = Geometry2D.NormalizeAngle(
-                sample.PathHeadingRadians + (sample.Direction == TravelDirection.Reverse ? Math.PI : 0.0));
-            var outlines = new List<IReadOnlyList<Point2>> { vehicle.BodyOutline
-                .Select(point => Geometry2D.Transform(point, sample.PositionMetres.XY, heading)).ToArray() };
-            foreach (var towed in chain[index]?.Poses(sample.PositionMetres.XY, heading) ?? [])
-            {
-                if (towed.BodyOutlineWorldMetres.Count >= 3) outlines.Add(towed.BodyOutlineWorldMetres);
-            }
-
-            stamps.Add((outlines.Select(outline =>
-            {
-                var points = outline
-                    .Select(point => new Point3d(point.X * scale, point.Y * scale, sample.PositionMetres.Z * scale))
-                    .ToList();
-                points.Add(points[0]);
-                return new Polyline(points);
-            }).ToArray(), index));
-        }
-
-        return stamps;
-    }
-
-    private static RouteSample StateSample(VehicleState state, VehicleDefinition vehicle)
-    {
-        var pathHeading = Geometry2D.NormalizeAngle(
-            state.VehicleHeadingRadians + (state.Direction == TravelDirection.Reverse ? Math.PI : 0.0));
-        var curvature = (double)state.Direction * Math.Tan(state.SteeringAngleRadians) / vehicle.WheelbaseMetres;
-        return new RouteSample(state.StationMetres, state.RearAxleCentreMetres, pathHeading, curvature, state.Direction);
-    }
-
-    private static void DrawVehicle(
-        global::Rhino.Display.DisplayPipeline display,
-        VehicleDefinition vehicle,
-        VehicleState state,
-        UnitSystem modelUnits,
-        Color color,
-        ArticulationChain? chain = null)
-    {
-        var scale = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
-        var origin = state.RearAxleCentreMetres.XY;
-        var outlines = new List<IReadOnlyList<Point2>> { vehicle.BodyOutline
-            .Select(point => Geometry2D.Transform(point, origin, state.VehicleHeadingRadians)).ToArray() };
-        foreach (var towed in chain?.Poses(origin, state.VehicleHeadingRadians) ?? [])
-        {
-            if (towed.BodyOutlineWorldMetres.Count >= 3) outlines.Add(towed.BodyOutlineWorldMetres);
-        }
-
-        foreach (var outline in outlines)
-        {
-            var points = outline
-                .Select(point => new Point3d(point.X * scale, point.Y * scale, state.RearAxleCentreMetres.Z * scale))
-                .ToList();
-            points.Add(points[0]);
-            display.DrawPolyline(new Polyline(points), color, 2);
-        }
-    }
-
-    private static Point3d ToModelPoint(Point3 pointMetres, UnitSystem modelUnits)
-    {
-        var scale = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
-        return new Point3d(pointMetres.X * scale, pointMetres.Y * scale, pointMetres.Z * scale);
     }
 }

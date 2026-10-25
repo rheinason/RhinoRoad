@@ -116,6 +116,8 @@ public sealed class RRVehicleAccessCommand : Command
         ManoeuvreDefinition? manoeuvre = null;
         RhinoObject sourceObject;
         Guid sourceId;
+        CurveSelection? interactiveObstacles = null;
+        CurveSelection? interactiveBoundaries = null;
 
         if (settings.Source == PathSourceKind.ExistingCurve)
         {
@@ -156,16 +158,39 @@ public sealed class RRVehicleAccessCommand : Command
         }
         else
         {
+            // The site is picked before driving rather than after, so the live sweep is drawn against
+            // it and a clash shows while the leg is being aimed instead of first appearing in the
+            // report. The same selection is then the one the analysis checks.
+            interactiveObstacles = settings.CheckObstacles ? SelectCurves("Select obstacle curves to drive against; Enter to skip") : CurveSelection.Empty;
+            if (interactiveObstacles is null) return Result.Cancel;
+            interactiveBoundaries = settings.CheckAllowedArea ? SelectCurves("Select closed allowed-area boundaries to drive within; Enter to skip", closedOnly: true) : CurveSelection.Empty;
+            if (interactiveBoundaries is null) return Result.Cancel;
+            if (interactiveObstacles.Curves.Count + interactiveBoundaries.Curves.Count > 0)
+            {
+                // Highlighted references would hide the red clash drawn over them.
+                document.Objects.UnselectAll();
+                document.Views.Redraw();
+            }
+
+            var site = new SiteConstraints(
+                interactiveObstacles.Curves
+                    .Select(curve => new SiteObstacle(CurveOutline.Points(curve, document.ModelUnitSystem), curve.IsClosed))
+                    .ToArray(),
+                interactiveBoundaries.Curves
+                    .Select(curve => (IReadOnlyList<Point2>)CurveOutline.Points(curve, document.ModelUnitSystem))
+                    .ToArray());
             var interactive = InteractiveRouteBuilder.TryBuild(
-                document, vehicle, drivingMode, settings.Direction, settings.ClearanceMetres, out route, out manoeuvre, out controlCurve);
+                document, vehicle, drivingMode, settings.Direction, settings.ClearanceMetres, site, out route, out manoeuvre, out controlCurve);
             if (interactive != Result.Success) return interactive;
             sourceId = Guid.NewGuid();
             sourceObject = null!;
         }
 
-        var obstacleSelection = settings.CheckObstacles ? SelectCurves("Select obstacle curves; Enter to skip") : CurveSelection.Empty;
+        var obstacleSelection = interactiveObstacles
+            ?? (settings.CheckObstacles ? SelectCurves("Select obstacle curves; Enter to skip") : CurveSelection.Empty);
         if (obstacleSelection is null) return Result.Cancel;
-        var boundarySelection = settings.CheckAllowedArea ? SelectCurves("Select closed allowed-area boundaries; Enter to skip", closedOnly: true) : CurveSelection.Empty;
+        var boundarySelection = interactiveBoundaries
+            ?? (settings.CheckAllowedArea ? SelectCurves("Select closed allowed-area boundaries; Enter to skip", closedOnly: true) : CurveSelection.Empty);
         if (boundarySelection is null) return Result.Cancel;
         settings.ReselectReferences = false;
 
