@@ -21,7 +21,15 @@ public sealed class RRUpdateVehicleAccessCommand : Command
         return Update(document, selected);
     }
 
-    internal static Result Update(RhinoDoc document, RhinoObject selected)
+    /// <summary>
+    /// Reruns a saved road or sizing result. The Edit Road palette and the inspector call this from
+    /// outside any command, so it opens its own undo record there; run as RRUpdateRoad it joins the
+    /// command's record instead.
+    /// </summary>
+    internal static Result Update(RhinoDoc document, RhinoObject selected) =>
+        DocumentUndo.Record(document, "RhinoRoad update road", () => UpdateRecorded(document, selected));
+
+    private static Result UpdateRecorded(RhinoDoc document, RhinoObject selected)
     {
         if (AccessDerivedService.Anchor(document, selected) is { } anchor)
         {

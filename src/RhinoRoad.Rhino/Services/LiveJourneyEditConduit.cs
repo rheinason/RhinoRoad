@@ -16,9 +16,10 @@ namespace RhinoRoad.Rhino.Services;
 /// </summary>
 internal sealed class LiveJourneyEditConduit : DisplayConduit
 {
-    private sealed class Preview
+    internal sealed class Preview
     {
         public required VehicleAccessDefinition Saved;
+        public required string? SavedJson;
         public required Point3[] Vertices;
         public Task<JourneyEditPreviewResult>? Work;
         public Point3[]? WorkVertices;
@@ -27,89 +28,77 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
         public string? Error;
     }
 
-    private sealed class DocumentState
+    /// <summary>The preview's working state for one document, held on its <see cref="RoadDocumentSession"/>.</summary>
+    internal sealed class PreviewState
     {
         public bool Dirty = true;
         public Guid[] Sources = [];
-        public Dictionary<Guid, Preview> Previews = new();
+        internal Dictionary<Guid, Preview> Previews { get; } = new();
     }
 
     private static readonly LiveJourneyEditConduit Instance = new();
-    private static readonly Dictionary<uint, DocumentState> Documents = new();
-    private static readonly Dictionary<uint, Guid> Sessions = new();
     private static readonly VehicleCatalog Catalog = VehicleCatalog.LoadEmbedded();
-    private static bool _initialized;
 
-    public static void Initialize()
-    {
-        if (_initialized) return;
-        _initialized = true;
-        RhinoDoc.AddRhinoObject += (_, e) => Dirty(e.TheObject.Document);
-        RhinoDoc.DeleteRhinoObject += (_, e) => Dirty(e.TheObject.Document);
-        RhinoDoc.ReplaceRhinoObject += (_, e) => Dirty(e.Document);
-        RhinoDoc.ModifyObjectAttributes += (_, e) => Dirty(e.Document);
-        RhinoDoc.EndOpenDocument += (_, e) => Dirty(e.Document);
-        RhinoDoc.CloseDocument += (_, e) =>
-        {
-            // The document is going away, so drop the session without asking it to redraw.
-            Sessions.Remove(e.Document.RuntimeSerialNumber);
-            Documents.Remove(e.Document.RuntimeSerialNumber);
-            Instance.Enabled = Sessions.Count > 0;
-        };
-    }
+    // The session object listens to the document events that mark the source list dirty.
+    public static void Initialize() => RoadDocumentSession.Initialize();
 
     /// <summary>Starts previewing edits to one saved journey. Only one journey is edited at a time.</summary>
     public static void Begin(RhinoDoc document, Guid stableSourceId)
     {
-        Sessions[document.RuntimeSerialNumber] = stableSourceId;
-        Documents.Remove(document.RuntimeSerialNumber);
+        var session = RoadDocumentSession.For(document);
+        session.EditingStableId = stableSourceId;
+        session.LivePreview = null;
         Instance.Enabled = true;
+        session.RaisePreviewChanged();
         document.Views.Redraw();
     }
 
     public static void End(RhinoDoc document)
     {
-        Sessions.Remove(document.RuntimeSerialNumber);
-        Documents.Remove(document.RuntimeSerialNumber);
-        Instance.Enabled = Sessions.Count > 0;
+        if (RoadDocumentSession.Find(document) is { } session)
+        {
+            session.EditingStableId = null;
+            session.LivePreview = null;
+            session.RaisePreviewChanged();
+        }
+        RefreshEnabled();
         document.Views.Redraw();
     }
 
-    public static bool IsEditing(RhinoDoc document, Guid stableSourceId) =>
-        Sessions.TryGetValue(document.RuntimeSerialNumber, out var editing) && editing == stableSourceId;
+    /// <summary>Switches the conduit off once no document has an edit session.</summary>
+    public static void RefreshEnabled() => Instance.Enabled = RoadDocumentSession.AnyEditing;
 
-    private static void Dirty(RhinoDoc? document)
-    {
-        if (document is not null && Documents.TryGetValue(document.RuntimeSerialNumber, out var state)) state.Dirty = true;
-    }
+    public static bool IsEditing(RhinoDoc document, Guid stableSourceId) =>
+        RoadDocumentSession.Find(document)?.EditingStableId == stableSourceId;
 
     public static bool IsPreviewing(RhinoDoc document, Guid stableId) =>
-        Documents.TryGetValue(document.RuntimeSerialNumber, out var state) && state.Previews.ContainsKey(stableId);
+        RoadDocumentSession.Find(document)?.LivePreview?.Previews.ContainsKey(stableId) == true;
 
     public static JourneyEditPreviewResult? CurrentResult(RhinoDoc document, Guid stableId) =>
-        Documents.TryGetValue(document.RuntimeSerialNumber, out var state) &&
+        RoadDocumentSession.Find(document)?.LivePreview is { } state &&
         state.Previews.TryGetValue(stableId, out var preview) &&
         preview.ResultVertices?.SequenceEqual(preview.Vertices) == true
             ? preview.Result : null;
 
-    private static readonly HashSet<Guid> ForcedDrafts = new();
-
     public static void ForceDraft(RhinoDoc document, Guid stableId, bool enabled)
     {
-        if (enabled) ForcedDrafts.Add(stableId);
-        else ForcedDrafts.Remove(stableId);
+        var drafts = RoadDocumentSession.For(document).ForcedDrafts;
+        if (enabled) drafts.Add(stableId);
+        else drafts.Remove(stableId);
         document.Views.Redraw();
     }
 
     protected override void PreDrawObjects(DrawEventArgs e)
     {
         var document = e.RhinoDoc;
-        if (document is null || !Sessions.TryGetValue(document.RuntimeSerialNumber, out var editing)) return;
-        if (!Documents.TryGetValue(document.RuntimeSerialNumber, out var state))
-            Documents[document.RuntimeSerialNumber] = state = new DocumentState();
+        if (RoadDocumentSession.Find(document) is not { EditingStableId: Guid editing } session) return;
+        var state = session.LivePreview ??= new PreviewState();
+        // Anything the palette shows from the preview -- whether it is live, and the live clear-area
+        // line -- follows from these changes, so it is told about them instead of polling for them.
+        var changed = false;
         if (state.Dirty)
         {
-            state.Sources = document.Objects.GetObjectList(ObjectType.Curve)
+            state.Sources = document!.Objects.GetObjectList(ObjectType.Curve)
                 .Where(o => o.Attributes.GetUserString(AccessDefinitionStore.DefinitionKey) is not null)
                 .Select(o => o.Id).ToArray();
             state.Dirty = false;
@@ -117,23 +106,29 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
         var active = new HashSet<Guid>();
         foreach (var id in state.Sources)
         {
-            var source = document.Objects.FindId(id);
+            var source = document!.Objects.FindId(id);
             if (source is null || !source.Visible || source.Geometry is not Curve curve ||
-                !AccessDefinitionStore.TryRead(source, out var saved, out _) || saved?.Manoeuvre is null ||
+                !AccessDefinitionStore.TryReadCached(source, out var saved, out var savedJson) || saved?.Manoeuvre is null ||
                 saved.SourceKind != PathSourceKind.Interactive || saved.StableSourceId != editing) continue;
             try
             {
                 var vertices = Positions(source, curve, document.ModelUnitSystem);
                 if (JourneyEditPreview.PositionsMatch(saved.Manoeuvre, vertices)
-                    && !ForcedDrafts.Contains(saved.StableSourceId)) continue;
+                    && !session.ForcedDrafts.Contains(saved.StableSourceId)) continue;
                 active.Add(saved.StableSourceId);
+                // The cache hands back the same instance until the saved text changes, so the text
+                // is compared only when the instance differs -- never reserialised per frame.
                 if (!state.Previews.TryGetValue(saved.StableSourceId, out var preview) ||
-                    AccessDefinitionSerializer.Serialize(preview.Saved) != AccessDefinitionSerializer.Serialize(saved))
-                    state.Previews[saved.StableSourceId] = preview = new Preview { Saved = saved, Vertices = vertices };
+                    (!ReferenceEquals(preview.Saved, saved) && !string.Equals(preview.SavedJson, savedJson, StringComparison.Ordinal)))
+                {
+                    state.Previews[saved.StableSourceId] = preview = new Preview { Saved = saved, SavedJson = savedJson, Vertices = vertices };
+                    changed = true;
+                }
                 if (!preview.Vertices.SequenceEqual(vertices))
                 {
                     preview.Vertices = vertices;
                     preview.Error = null;
+                    changed = true;
                 }
                 if (preview.Work?.IsCompleted == true)
                 {
@@ -150,6 +145,7 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
                         if (preview.WorkVertices!.SequenceEqual(vertices)) preview.Error = error;
                     }
                     preview.Work = null;
+                    changed = true;
                 }
                 if (preview.Work is null && preview.Error is null &&
                     (preview.ResultVertices is null || !preview.ResultVertices.SequenceEqual(vertices)))
@@ -171,9 +167,10 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
                         _ = completed.Exception;
                         RhinoApp.InvokeOnUiThread((Action)(() =>
                         {
-                            if (Documents.TryGetValue(serial, out var current) &&
-                                current.Previews.TryGetValue(sourceId, out var currentPreview) && currentPreview.Work == work)
-                                RhinoDoc.FromRuntimeSerialNumber(serial)?.Views.Redraw();
+                            var current = RhinoDoc.FromRuntimeSerialNumber(serial);
+                            if (RoadDocumentSession.Find(current)?.LivePreview is { } live &&
+                                live.Previews.TryGetValue(sourceId, out var currentPreview) && currentPreview.Work == work)
+                                current!.Views.Redraw();
                         }));
                     }, TaskScheduler.Default);
                 }
@@ -181,10 +178,16 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
             catch (Exception error)
             {
                 active.Add(saved.StableSourceId);
-                state.Previews[saved.StableSourceId] = new Preview { Saved = saved, Vertices = [], Error = error.Message };
+                state.Previews[saved.StableSourceId] = new Preview { Saved = saved, SavedJson = savedJson, Vertices = [], Error = error.Message };
+                changed = true;
             }
         }
-        foreach (var id in state.Previews.Keys.Where(id => !active.Contains(id)).ToArray()) state.Previews.Remove(id);
+        foreach (var id in state.Previews.Keys.Where(id => !active.Contains(id)).ToArray())
+        {
+            state.Previews.Remove(id);
+            changed = true;
+        }
+        if (changed) session.RaisePreviewChanged();
     }
 
     private static Point3[] Positions(RhinoObject source, Curve curve, UnitSystem units)
@@ -215,8 +218,8 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
 
     protected override void DrawForeground(DrawEventArgs e)
     {
-        if (e.RhinoDoc is not { } document || !Documents.TryGetValue(document.RuntimeSerialNumber, out var state)) return;
-        var scale = RhinoMath.UnitScale(UnitSystem.Meters, document.ModelUnitSystem);
+        if (RoadDocumentSession.Find(e.RhinoDoc)?.LivePreview is not { } state) return;
+        var scale = RhinoMath.UnitScale(UnitSystem.Meters, e.RhinoDoc!.ModelUnitSystem);
         var row = 0;
         foreach (var preview in state.Previews.Values)
         {

@@ -1,7 +1,5 @@
-using System.Drawing;
 using Eto.Forms;
 using Rhino;
-using Rhino.Display;
 using Rhino.DocObjects;
 using Rhino.Geometry;
 using Rhino.Input;
@@ -9,6 +7,7 @@ using Rhino.Input.Custom;
 using Rhino.UI;
 using RhinoRoad.Core;
 using RhinoRoad.Rhino.Commands;
+using RhinoRoad.Rhino.UI;
 using CommandResult = global::Rhino.Commands.Result;
 using EtoSize = Eto.Drawing.Size;
 using EtoPoint = Eto.Drawing.Point;
@@ -22,63 +21,60 @@ namespace RhinoRoad.Rhino.Services;
 /// grips are dragged, so the session now reads as one thing: it opens, the numbered controls and the
 /// live sweep appear, driving intent is changed in place, and Save or Discard closes it.
 /// </summary>
+/// <remarks>
+/// Every change the palette makes is the draft: it is written to the control line so the live
+/// preview shows it, Save commits it through RRUpdateRoad, and Discard restores the road as opened.
+/// The palette follows the document through its events rather than a timer, so undo, a grip drag
+/// or a deleted yard reach it as they happen and an idle palette costs nothing.
+/// </remarks>
 internal sealed class JourneyEditForm : Form
 {
-    private static readonly Dictionary<uint, JourneyEditForm> OpenForms = new();
-    private static readonly VehicleCatalog Catalog = VehicleCatalog.LoadEmbedded();
+    internal static readonly VehicleCatalog Catalog = VehicleCatalog.LoadEmbedded();
+
+    private const int PaletteWidth = 360;
+    private const int CompactHeight = 600;
+    private const int SearchHeight = 420;
 
     private readonly RhinoDoc _document;
+    private readonly RoadDocumentSession _session;
     private readonly Guid _sourceId;
-    private readonly Guid _stableId;
     private readonly Curve _originalCurve;
     private readonly VehicleAccessDefinition _originalDefinition;
+    // The text as opened, and as this version writes it: either means the definition is unchanged.
+    private readonly string? _originalJson;
+    private readonly string _originalSerialized;
     private readonly Label _status = new() { Wrap = WrapMode.Word };
-    private readonly Label _areaStatus = new() { Wrap = WrapMode.Word };
-    private readonly Label _liveArea = new() { Wrap = WrapMode.Word };
     private readonly Label _controlsStatus = new() { Wrap = WrapMode.Word };
-    private readonly Label _yardLabel = new() { Wrap = WrapMode.Word };
-    private readonly Label _obstaclesLabel = new() { Wrap = WrapMode.Word };
-    private readonly Label _bayLabel = new() { Wrap = WrapMode.Word };
     private readonly Label _title = new();
     private readonly DropDown _startDirection = new();
-    private readonly DropDown _adjustFrom = new();
-    private readonly DropDown _searchTime = new();
-    private readonly DropDown _suggestions = new();
-    private readonly Button _searchButton = new() { Text = "Find less clear area…" };
     private readonly StackLayout _controls = new() { Spacing = 3 };
-    private readonly ControlLabelConduit _labels = new();
-    private readonly UITimer _timer = new() { Interval = 0.4 };
+    private readonly JourneyEditLabelConduit _labels = new();
+    private readonly AreaSearchPanel _areaSearch;
     private bool _saved;
     private bool _closing;
+    private bool _abandoned;
     private bool _suppressDirectionEvent;
-    private bool _searching;
-    private bool _areaDraftApplied;
-    private bool _suppressSuggestionEvent;
-    // The road as it stood when the search started. Every suggestion is applied on top of this, so
-    // moving between suggestions -- or back to the current route -- never compounds one onto another.
-    private Curve? _baselineCurve;
-    private VehicleAccessDefinition? _baselineDefinition;
-    private string? _appliedFingerprint;
-    private CancellationTokenSource? _searchCancellation;
-    private ManoeuvringAreaSearch.Result? _searchResult;
-    private IReadOnlyList<Point2>? _searchYard;
-    private IReadOnlyList<IReadOnlyList<Point2>> _searchObstacles = [];
-    // The site the search measures against, picked in the palette. They start from the references
-    // the road was saved with, so a road that already checks a yard and buildings needs no picking.
-    private Guid? _yardId;
-    private List<Guid> _obstacleIds = [];
+    private bool _draftApplied;
+    private bool _refreshQueued;
+    private bool _sourceDirty;
+    private bool _siteDirty;
+    // The saved text the rows were last built from, so an undo or another tool's change rebuilds them.
+    private string? _shownJson;
 
     private JourneyEditForm(RhinoDoc document, RhinoObject source, VehicleAccessDefinition definition, Curve curve)
     {
         _document = document;
+        _session = RoadDocumentSession.For(document);
         _sourceId = source.Id;
-        _stableId = definition.StableSourceId;
+        StableId = definition.StableSourceId;
         _originalCurve = (Curve)curve.Duplicate();
         _originalDefinition = definition;
+        _originalJson = source.Attributes.GetUserString(AccessDefinitionStore.DefinitionKey);
+        _originalSerialized = AccessDefinitionSerializer.Serialize(definition);
 
         Title = "Edit Road";
-        ClientSize = new EtoSize(360, 860);
-        MinimumSize = new EtoSize(300, 560);
+        ClientSize = new EtoSize(PaletteWidth, CompactHeight);
+        MinimumSize = new EtoSize(300, 420);
         Padding = 12;
         Resizable = true;
         Maximizable = false;
@@ -100,41 +96,20 @@ internal sealed class JourneyEditForm : Form
             if (_suppressDirectionEvent || Read() is not { Manoeuvre: { } journey } saved) return;
             if (!Enum.TryParse(_startDirection.SelectedKey, out TravelDirection chosen) || chosen == journey.StartDirection) return;
             // Reversing the start flips every leg, so the reversal pattern the user drove is kept.
-            WriteIntent(saved, ManoeuvreControlReconciler.WithStartDirection(journey, chosen));
+            WriteIntent(saved, ManoeuvreControlReconciler.WithStartDirection(journey, chosen), "RhinoRoad change start direction");
         };
 
         var heading = new Button { Text = "Set start heading…" };
         heading.Click += (_, _) => PickHeading();
-        var settings = new Button { Text = "Settings…" };
+        var settings = new Button { Text = "Settings…", ToolTip = "Vehicle, mode, clearance and checks for this road. The change is part of the draft until Save." };
         settings.Click += (_, _) => RunSettings();
         var save = new Button { Text = "Save" };
         save.Click += (_, _) => Save();
         var discard = new Button { Text = "Discard" };
         discard.Click += (_, _) => Discard();
-        _searchButton.Click += (_, _) =>
-        {
-            if (_searching)
-            {
-                _searchCancellation?.Cancel();
-                _areaStatus.Text = "Stopping search…";
-            }
-            else StartAreaSearch();
-        };
-        var bay = new Button { Text = "Set trailer bay…", ToolTip = "Pick the rear of the trailer at the bay, then point the way it reverses in." };
-        bay.Click += (_, _) => PickTrailerBay();
-        var pickYard = new Button { Text = "Pick yard…", ToolTip = "One closed curve around the area the truck may use." };
-        pickYard.Click += (_, _) => PickYard();
-        var pickObstacles = new Button { Text = "Pick obstacles…", ToolTip = "Closed curves around buildings, storage and anything else the truck must clear. Enter with nothing selected clears the list." };
-        pickObstacles.Click += (_, _) => PickObstacles();
-        _adjustFrom.ToolTip = "The search keeps every control before this one exactly as drawn. It may move this control and replace everything after it with a pull-up and reverse to the same bay.";
-        _suggestions.Enabled = false;
-        _searchTime.Items.Add(new ListItem { Key = "30", Text = "30 seconds" });
-        _searchTime.Items.Add(new ListItem { Key = "120", Text = "2 minutes" });
-        _searchTime.SelectedKey = "30";
-        _suggestions.SelectedKeyChanged += (_, _) =>
-        {
-            if (!_suppressSuggestionEvent) SelectSuggestion(_suggestions.SelectedKey);
-        };
+
+        _areaSearch = new AreaSearchPanel(this, document, _sourceId, _labels, definition);
+        _areaSearch.LayoutChanged += FitToScreen;
 
         Content = new StackLayout
         {
@@ -163,30 +138,7 @@ internal sealed class JourneyEditForm : Form
                     Content = new Scrollable { Border = BorderType.None, ExpandContentWidth = true, Content = _controls }
                 }, true),
                 _controlsStatus,
-                new GroupBox
-                {
-                    Text = "SVT clear-area search",
-                    Padding = 8,
-                    Content = new StackLayout
-                    {
-                        Spacing = 5,
-                        HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                        Items =
-                        {
-                            Heading("1. Site"),
-                            _yardLabel, pickYard,
-                            _obstaclesLabel, pickObstacles,
-                            Heading("2. Trailer bay"),
-                            _bayLabel, bay,
-                            Heading("3. Search"),
-                            new Label { Text = "Keep the route as drawn up to, and let the search move from:", Wrap = WrapMode.Word },
-                            _adjustFrom,
-                            _searchTime, _searchButton,
-                            Heading("4. Suggestions"),
-                            _suggestions, _areaStatus, _liveArea
-                        }
-                    }
-                },
+                _areaSearch,
                 new StackLayout
                 {
                     Orientation = Orientation.Horizontal,
@@ -196,7 +148,6 @@ internal sealed class JourneyEditForm : Form
             }
         };
 
-        _timer.Elapsed += (_, _) => Poll();
         Closing += (_, args) =>
         {
             // Closing the palette is the same decision as Discard; without this a half-finished drag
@@ -212,8 +163,9 @@ internal sealed class JourneyEditForm : Form
             {
                 _labels.SourceId = _sourceId;
                 _labels.Enabled = true;
-                LiveJourneyEditConduit.Begin(_document, _stableId);
-                _timer.Start();
+                _session.ObjectChanged += OnObjectChanged;
+                _session.PreviewChanged += QueueRefresh;
+                LiveJourneyEditConduit.Begin(_document, StableId);
             }
             catch (Exception error)
             {
@@ -221,23 +173,18 @@ internal sealed class JourneyEditForm : Form
             }
         };
 
-        if (definition.CheckAllowedArea &&
-            definition.AllowedBoundaryObjectIds.FirstOrDefault(id => ClosedCurve(id) is not null) is var savedYard &&
-            savedYard != Guid.Empty)
-            _yardId = savedYard;
-        if (definition.CheckObstacles)
-            _obstacleIds = definition.ObstacleObjectIds.Where(id => ClosedCurve(id) is not null).ToList();
-        RefreshSite();
         Rebuild(definition);
+        _shownJson = _originalJson;
+        _status.Text = "No change yet. The saved result is what you see.";
     }
 
-    private static Label Heading(string text) =>
-        new() { Text = text, Font = Eto.Drawing.Fonts.Sans(9, Eto.Drawing.FontStyle.Bold) };
+    public Guid StableId { get; }
 
     /// <summary>Opens, or brings forward, the edit session for one saved journey.</summary>
     public static CommandResult Start(RhinoDoc document, RhinoObject source, VehicleAccessDefinition definition, Curve curve)
     {
-        if (OpenForms.TryGetValue(document.RuntimeSerialNumber, out var existing))
+        var session = RoadDocumentSession.For(document);
+        if (session.EditForm is { } existing)
         {
             if (existing._sourceId == source.Id)
             {
@@ -253,7 +200,7 @@ internal sealed class JourneyEditForm : Form
         }
 
         var form = new JourneyEditForm(document, source, definition, curve);
-        OpenForms[document.RuntimeSerialNumber] = form;
+        session.EditForm = form;
         document.Objects.UnselectAll();
         document.Objects.Select(source.Id);
         source.GripsOn = true;
@@ -264,12 +211,12 @@ internal sealed class JourneyEditForm : Form
             try
             {
                 form.Show();
-                form.PositionOverActiveView();
+                form.PlaceOnScreen();
             }
             catch (Exception error)
             {
                 RhinoApp.WriteLine($"RhinoRoad could not open Edit Road: {error.Message}");
-                OpenForms.Remove(document.RuntimeSerialNumber);
+                if (session.EditForm == form) session.EditForm = null;
                 form.Teardown();
             }
         });
@@ -277,378 +224,181 @@ internal sealed class JourneyEditForm : Form
     }
 
     public static bool IsEditing(RhinoDoc document, Guid sourceObjectId) =>
-        OpenForms.TryGetValue(document.RuntimeSerialNumber, out var form) && form._sourceId == sourceObjectId;
+        RoadDocumentSession.Find(document)?.EditForm?._sourceId == sourceObjectId;
 
-    private void PositionOverActiveView()
+    /// <summary>
+    /// Starts beside the active view, as before, but kept inside the screen's working area: the
+    /// palette was 860 px tall, more than many laptop screens, and opened with its buttons off-screen.
+    /// </summary>
+    private void PlaceOnScreen()
     {
-        if (_document.Views.ActiveView is not { } view) return;
-        var rect = view.ScreenRectangle;
-        Location = new EtoPoint(rect.Left + 18, rect.Top + 12);
+        if (_document.Views.ActiveView is { } view)
+        {
+            var rect = view.ScreenRectangle;
+            Location = new EtoPoint(rect.Left + 18, rect.Top + 12);
+        }
+        FitToScreen();
     }
 
-    private VehicleAccessDefinition? Read() =>
+    /// <summary>Sizes the palette for what it shows -- taller while the search is open -- within the screen.</summary>
+    private void FitToScreen()
+    {
+        if (_closing || !Visible) return;
+        var area = (Screen.FromPoint(new Eto.Drawing.PointF(Location.X, Location.Y)) ?? Screen.PrimaryScreen).WorkingArea;
+        const int margin = 8;
+        var wanted = CompactHeight + (_areaSearch.Visible && _areaSearch.Expanded ? SearchHeight : 0);
+        var width = (int)Math.Max(MinimumSize.Width, Math.Min(Math.Max(Width, PaletteWidth), area.Width - (2 * margin)));
+        var height = (int)Math.Max(MinimumSize.Height, Math.Min(wanted, area.Height - (2 * margin)));
+        var x = (int)Math.Max(area.Left + margin, Math.Min(Location.X, area.Right - width - margin));
+        var y = (int)Math.Max(area.Top + margin, Math.Min(Location.Y, area.Bottom - height - margin));
+        Size = new EtoSize(width, height);
+        Location = new EtoPoint(x, y);
+    }
+
+    internal VehicleAccessDefinition? Read() =>
         _document.Objects.FindId(_sourceId) is { } source &&
         AccessDefinitionStore.TryRead(source, out var definition, out _) ? definition : null;
+
+    /// <summary>The control line for a journey: its start, then each control, in model units.</summary>
+    internal Curve ControlLine(ManoeuvreDefinition journey)
+    {
+        var scale = RhinoMath.UnitScale(UnitSystem.Meters, _document.ModelUnitSystem);
+        return new PolylineCurve(new[] { journey.StartPositionMetres }
+            .Concat(journey.Controls.Select(control => control.PositionMetres))
+            .Select(point => new Point3d(point.X * scale, point.Y * scale, point.Z * scale)));
+    }
 
     /// <summary>
     /// Writes changed intent back to the source without rebaking. Only Direction, Kind and heading
     /// move: the stored positions stay exactly as saved, so the live preview keeps comparing the
-    /// dragged grips against the saved journey rather than quietly adopting them.
+    /// dragged grips against the saved journey rather than quietly adopting them. A pick that moves
+    /// the bay passes the moved control line with it, so the two land in one undo step.
     /// </summary>
-    private void WriteIntent(VehicleAccessDefinition definition, ManoeuvreDefinition journey)
+    private bool WriteIntent(VehicleAccessDefinition definition, ManoeuvreDefinition journey, string undoDescription,
+        Curve? controlLine = null) =>
+        WriteDraft(controlLine, definition with { Manoeuvre = journey }, undoDescription);
+
+    /// <summary>
+    /// Puts a change on the control line as the unsaved edit, as one undo step: a new line when
+    /// <paramref name="curve"/> is given, and the definition. Save commits it like any other edit and
+    /// Discard still restores the road as it was opened.
+    /// </summary>
+    internal bool WriteDraft(Curve? curve, VehicleAccessDefinition definition, string undoDescription)
     {
-        AccessDefinitionStore.Write(_document, _sourceId, definition with { Manoeuvre = journey });
-        Rebuild(definition with { Manoeuvre = journey });
-        _document.Views.Redraw();
+        if (_document.Objects.FindId(_sourceId) is not { Geometry: Curve previousCurve } source || Read() is not { } previous)
+        {
+            _status.Text = "The road can no longer be read. Close Edit Road and open it again.";
+            return false;
+        }
+        var previousCopy = (Curve)previousCurve.Duplicate();
+        var written = DocumentUndo.Record(_document, undoDescription, () =>
+        {
+            if (curve is not null)
+            {
+                source.GripsOn = false;
+                if (!_document.Objects.Replace(_sourceId, curve)) return false;
+            }
+            if (AccessDefinitionStore.Write(_document, _sourceId, definition)) return true;
+            if (curve is not null) _document.Objects.Replace(_sourceId, previousCopy);
+            AccessDefinitionStore.Write(_document, _sourceId, previous);
+            return false;
+        });
+        if (!written)
+        {
+            RestoreEditSelection();
+            _status.Text = "That change could not be applied; the previous edit remains.";
+            return false;
+        }
+        Rebuild(definition);
+        UpdateDraft();
+        RestoreEditSelection();
+        return true;
+    }
+
+    /// <summary>
+    /// Previews the draft whenever it differs from the road as opened, even with every grip where the
+    /// saved controls are -- as after a suggestion, a settings change or an inserted control.
+    /// </summary>
+    private void UpdateDraft()
+    {
+        if (_document.Objects.FindId(_sourceId) is not { Geometry: Curve current } source) return;
+        var json = source.Attributes.GetUserString(AccessDefinitionStore.DefinitionKey);
+        var draft = !GeometryBase.GeometryEquals(current, _originalCurve) ||
+            !(string.Equals(json, _originalJson, StringComparison.Ordinal) ||
+              string.Equals(json, _originalSerialized, StringComparison.Ordinal));
+        if (draft == _draftApplied) return;
+        _draftApplied = draft;
+        LiveJourneyEditConduit.ForceDraft(_document, StableId, draft);
     }
 
     private void Rebuild(VehicleAccessDefinition definition)
     {
+        _shownJson = AccessDefinitionSerializer.Serialize(definition);
         var journey = definition.Manoeuvre;
         _suppressDirectionEvent = true;
         _startDirection.SelectedKey = (journey?.StartDirection ?? TravelDirection.Forward).ToString();
         _suppressDirectionEvent = false;
 
         _controls.Items.Clear();
-        var selectedStart = _adjustFrom.SelectedKey;
-        _adjustFrom.Items.Clear();
-        if (journey is null) return;
-        for (var index = 0; index < journey.Controls.Count; index++)
-        {
-            _controls.Items.Add(Row(definition, journey, index));
-            if (index < journey.Controls.Count - 1 && journey.Controls[index].Direction == TravelDirection.Forward)
-                _adjustFrom.Items.Add(new ListItem
-                {
-                    Key = index.ToString(),
-                    Text = index == 0 ? "control 1 (search the whole route)"
-                        : index == 1 ? "control 2 (keep control 1 as drawn)"
-                        : $"control {index + 1} (keep controls 1–{index} as drawn)"
-                });
-        }
-        // The first control gives the search the whole approach to work with; later ones are for
-        // keeping a part of the route that is already settled.
-        _adjustFrom.SelectedKey = _adjustFrom.Items.Any(item => item.Key == selectedStart)
-            ? selectedStart : _adjustFrom.Items.FirstOrDefault()?.Key;
-        RefreshBay(definition);
+        if (journey is not null)
+            for (var index = 0; index < journey.Controls.Count; index++)
+                _controls.Items.Add(Row(definition, journey, index));
+        _areaSearch.Refresh(definition);
     }
 
-    private void RefreshBay(VehicleAccessDefinition definition)
+    private void OnObjectChanged(Guid objectId)
     {
-        var journey = definition.Manoeuvre;
-        if (journey is null || journey.Controls.Count == 0 ||
-            journey.Controls[^1] is not { Direction: TravelDirection.Reverse } final)
-        {
-            _bayLabel.Text = "The road must end reversing into a bay. Set the last control to Reverse, or redraw it with PlanReverse.";
-            return;
-        }
-        var vehicle = Catalog.Get(definition.VehicleId);
-        if (!vehicle.IsArticulated)
-        {
-            _bayLabel.Text = "Bay placement is for articulated vehicles.";
-            return;
-        }
-        if (final.ExitHeadingRadians is not double heading)
-        {
-            _bayLabel.Text = "No reversing direction yet — required for the search.";
-            return;
-        }
-        // The control line's last vertex is where the axle is now, dragged or not.
-        var axle = _document.Objects.FindId(_sourceId)?.Geometry is Curve line
-            ? AccessDefinitionStore.PolylineVertices(line, _document.ModelUnitSystem)[^1]
-            : final.PositionMetres;
-        var rear = TrailerBay.RearFromAxle(vehicle, axle, heading);
-        var degrees = heading * 180.0 / Math.PI;
-        _bayLabel.Text = $"Trailer rear at ({rear.X:0.##}, {rear.Y:0.##}) m, reversing in at {(degrees < 0 ? degrees + 360 : degrees):0.#}° (purple).";
-    }
-
-    private Curve? ClosedCurve(Guid id) =>
-        id != _sourceId && _document.Objects.FindId(id)?.Geometry is Curve curve && IsClosedEnough(curve) ? curve : null;
-
-    private bool IsClosedEnough(Curve curve) =>
-        curve.IsClosed || curve.IsClosable(_document.ModelAbsoluteTolerance);
-
-    /// <summary>
-    /// Re-reads the picked site from the document: labels, the polygons the live readout measures
-    /// and what the viewport highlights. Curves deleted or opened since the pick drop out.
-    /// </summary>
-    private void RefreshSite()
-    {
-        if (_yardId is Guid staleYard && ClosedCurve(staleYard) is null) _yardId = null;
-        _obstacleIds = _obstacleIds.Where(id => ClosedCurve(id) is not null).Distinct().ToList();
-        _searchYard = _yardId is Guid yardId ? SampleClosed(ClosedCurve(yardId)!) : null;
-        _searchObstacles = _obstacleIds
-            .Select(id => (IReadOnlyList<Point2>)SampleClosed(ClosedCurve(id)!)).ToArray();
-        _yardLabel.Text = _yardId is Guid picked
-            ? $"Yard: {CurveName(picked)} (green)."
-            : "Yard: not picked — required for the search.";
-        _obstaclesLabel.Text = _obstacleIds.Count == 0
-            ? "Obstacles: none picked."
-            : $"Obstacles: {_obstacleIds.Count} closed curve{(_obstacleIds.Count == 1 ? string.Empty : "s")} (red).";
-        _labels.YardId = _yardId;
-        _labels.ObstacleIds = _obstacleIds.ToArray();
-        _document.Views.Redraw();
-    }
-
-    private string CurveName(Guid id) =>
-        _document.Objects.FindId(id) is { Name.Length: > 0 } named ? $"“{named.Name}”" : "closed curve";
-
-    /// <summary>
-    /// Picks closed curves in the viewport for the site. The road's own control line is selected while
-    /// editing, and a picker that honoured that selection took it as the yard — an open curve — before
-    /// anything could be clicked; so preselection is ignored and the selection restored afterwards.
-    /// </summary>
-    private List<Guid>? PickClosedCurves(string prompt, bool multiple)
-    {
-        _document.Objects.UnselectAll();
-        try
-        {
-            using var picker = new GetObject();
-            picker.SetCommandPrompt(prompt);
-            picker.GeometryFilter = ObjectType.Curve;
-            picker.SubObjectSelect = false;
-            picker.EnablePreSelect(false, true);
-            picker.SetCustomGeometryFilter((rhinoObject, geometry, _) =>
-                rhinoObject?.Id != _sourceId && geometry is Curve curve && IsClosedEnough(curve));
-            if (multiple)
-            {
-                picker.AcceptNothing(true);
-                picker.GetMultiple(1, 0);
-                if (picker.CommandResult() == CommandResult.Cancel) return null;
-                if (picker.Result() == GetResult.Nothing) return [];
-            }
-            else if (picker.Get() != GetResult.Object) return null;
-            return Enumerable.Range(0, picker.ObjectCount).Select(index => picker.Object(index).ObjectId).ToList();
-        }
-        finally
-        {
-            _document.Objects.UnselectAll();
-            _document.Objects.Select(_sourceId);
-            if (_document.Objects.FindId(_sourceId) is { } source) source.GripsOn = true;
-            _document.Views.Redraw();
-        }
-    }
-
-    private void PickYard()
-    {
-        if (_searching) return;
-        _areaStatus.Text = "Click one closed curve around the planning yard in the viewport. Open curves cannot be picked. Esc keeps the current yard.";
-        var picked = PickClosedCurves("Select one closed curve around the planning yard", multiple: false);
-        if (picked is null)
-        {
-            _areaStatus.Text = "Yard unchanged.";
-            return;
-        }
-        _yardId = picked[0];
-        _obstacleIds.Remove(picked[0]);
-        ClearSuggestions();
-        RefreshSite();
-        _areaStatus.Text = "Yard picked. Pick obstacles, check the trailer bay, then search.";
-    }
-
-    private void PickObstacles()
-    {
-        if (_searching) return;
-        _areaStatus.Text = "Click closed curves around buildings and storage in the viewport, then press Enter. Enter with nothing selected clears the obstacles; Esc keeps them.";
-        var picked = PickClosedCurves("Select closed building and storage outlines", multiple: true);
-        if (picked is null)
-        {
-            _areaStatus.Text = "Obstacles unchanged.";
-            return;
-        }
-        _obstacleIds = picked.Where(id => id != _yardId).ToList();
-        ClearSuggestions();
-        RefreshSite();
-        _areaStatus.Text = _obstacleIds.Count == 0 ? "Obstacles cleared." : $"{_obstacleIds.Count} obstacle(s) picked.";
-    }
-
-    private void ClearSuggestions()
-    {
-        _searchResult = null;
-        _suggestions.Items.Clear();
-        _suggestions.Enabled = false;
-        _labels.SearchCandidate = null;
-        _baselineCurve = null;
-        _baselineDefinition = null;
-        _appliedFingerprint = null;
-    }
-
-    private void StartAreaSearch()
-    {
-        if (_searching) return;
-        if (Read() is not { Manoeuvre: { } stored } definition ||
-            _document.Objects.FindId(_sourceId)?.Geometry is not Curve sourceCurve)
-        {
-            _areaStatus.Text = "The saved road could not be read. Close Edit Road and open it again.";
-            return;
-        }
-        if (definition.VehicleId != "SVT")
-        {
-            _areaStatus.Text = "The clear-area search currently supports SVT journeys only.";
-            return;
-        }
-        if (!int.TryParse(_adjustFrom.SelectedKey, out var first))
-        {
-            _areaStatus.Text = "The route needs a forward control before the final reverse for the search to move.";
-            return;
-        }
-        var journey = ManoeuvreControlReconciler.Reconcile(stored,
-            AccessDefinitionStore.PolylineVertices(sourceCurve, _document.ModelUnitSystem));
-        if (journey.Controls[^1] is not { Direction: TravelDirection.Reverse,
-            Kind: ManoeuvreControlKind.Aim, ExitHeadingRadians: not null })
-        {
-            _areaStatus.Text = "Set the trailer bay first (step 2): the road must end reversing into a bay with a direction.";
-            return;
-        }
-        RefreshSite();
-        if (_searchYard is not { } yard)
-        {
-            _areaStatus.Text = "Pick the planning yard first (step 1).";
-            return;
-        }
-        var obstacles = _searchObstacles;
-        ClearSuggestions();
-        _baselineCurve = (Curve)sourceCurve.Duplicate();
-        _baselineDefinition = definition;
-        _searching = true;
-        _searchButton.Text = "Stop search";
-        _areaStatus.Text = "Searching drivable manoeuvres and measuring their clear yard area…";
-        _searchCancellation?.Cancel();
-        var cancellation = _searchCancellation = new CancellationTokenSource();
-        var vehicle = Catalog.Get("SVT");
-        var mode = vehicle.DrivingModes[definition.ModeId];
-        var seconds = _searchTime.SelectedKey == "120" ? 120 : 30;
-        _ = Task.Run(() => ManoeuvringAreaSearch.Find(vehicle, mode, journey, first,
-                yard, obstacles, definition.ClearanceMetres, TimeSpan.FromSeconds(seconds), cancellation.Token))
-            .ContinueWith(work => Application.Instance.AsyncInvoke(() =>
-            {
-                if (_closing || cancellation != _searchCancellation) return;
-                _searching = false;
-                _searchButton.Text = "Find less clear area…";
-                if (!work.IsCompletedSuccessfully)
-                {
-                    _areaStatus.Text = $"Search stopped: {work.Exception?.GetBaseException().Message ?? "cancelled"}";
-                    return;
-                }
-                _searchResult = work.Result;
-                _suppressSuggestionEvent = true;
-                _suggestions.Items.Clear();
-                for (var index = 0; index < work.Result.Suggestions.Count; index++)
-                {
-                    var candidate = work.Result.Suggestions[index];
-                    var change = work.Result.Current is { } current
-                        ? $" ({candidate.ClearAreaSquareMetres - current.ClearAreaSquareMetres:+0.0;-0.0;0.0} m²)"
-                        : string.Empty;
-                    _suggestions.Items.Add(new ListItem { Key = index.ToString(),
-                        Text = $"{index + 1}. {candidate.ClearAreaSquareMetres:0.0} m²{change}" });
-                }
-                if (work.Result.Suggestions.Count > 0)
-                    _suggestions.Items.Add(new ListItem { Key = CurrentRouteKey, Text = "Current route (unchanged)" });
-                _suggestions.Enabled = work.Result.Suggestions.Count > 0;
-                var summary = $"Found {work.Result.Suggestions.Count} suggestions from {work.Result.Tried} routes"
-                    + (work.Result.TimeLimitReached ? " before the time limit" : string.Empty) + ". ";
-                if (work.Result.Suggestions.Count == 0)
-                {
-                    _suppressSuggestionEvent = false;
-                    _areaStatus.Text = $"No passing route found. Tried {work.Result.Tried}; outside yard {work.Result.OutsideYard}, fixed-object conflicts {work.Result.ObstacleConflicts}, vehicle/arrival failures {work.Result.VehicleFailures}.";
-                }
-                else if (!SourceMatchesBaseline())
-                {
-                    // Applying now would silently overwrite whatever was changed while it ran.
-                    _suggestions.SelectedKey = CurrentRouteKey;
-                    _suppressSuggestionEvent = false;
-                    _areaStatus.Text = summary + "The controls changed during the search, so nothing was applied. Choosing a suggestion replaces those changes.";
-                }
-                else
-                {
-                    // The best suggestion becomes the draft straight away, so Save keeps it without a
-                    // separate step; choosing another entry, or the current route, switches.
-                    _suggestions.SelectedKey = "0";
-                    _suppressSuggestionEvent = false;
-                    SelectSuggestion("0", summary);
-                }
-                _document.Views.Redraw();
-            }));
-    }
-
-    private static string PreviewText(ManoeuvringAreaSearch.Candidate candidate) =>
-        $"Preview {candidate.ClearAreaSquareMetres:0.0} m²; bay error {candidate.PositionErrorMetres:0.00} m / {candidate.HeadingErrorDegrees:0.0}°; {candidate.Corrections} correction(s). Orange dot marks the tightest location. Save keeps it, or adjust its controls first.";
-
-    private Point2[] SampleClosed(Curve curve) => CurveOutline.Points(curve, _document.ModelUnitSystem);
-
-    private const string CurrentRouteKey = "current";
-
-    private bool SourceMatchesBaseline() =>
-        _baselineCurve is not null && _baselineDefinition is not null &&
-        _document.Objects.FindId(_sourceId)?.Geometry is Curve now && GeometryBase.GeometryEquals(now, _baselineCurve) &&
-        Read() is { } definition &&
-        AccessDefinitionSerializer.Serialize(definition) == AccessDefinitionSerializer.Serialize(_baselineDefinition);
-
-    private void SelectSuggestion(string? key, string prefix = "")
-    {
-        if (_searchResult is null || _baselineCurve is null || _baselineDefinition is null) return;
-        if (key == CurrentRouteKey)
-        {
-            if (!WriteDraft((Curve)_baselineCurve.Duplicate(), _baselineDefinition)) return;
-            _labels.SearchCandidate = null;
-            _appliedFingerprint = null;
-            _areaStatus.Text = prefix + "Showing the route as it was before the search. Choose a suggestion to try it.";
-            return;
-        }
-        if (!int.TryParse(key, out var index) || index < 0 || index >= _searchResult.Suggestions.Count) return;
-        if (_yardId is not Guid yardId)
-        {
-            _areaStatus.Text = "The yard can no longer be read. Pick the yard and search again.";
-            return;
-        }
-        var suggestion = _searchResult.Suggestions[index];
-        var scale = RhinoMath.UnitScale(UnitSystem.Meters, _document.ModelUnitSystem);
-        var curve = new PolylineCurve(new[] { suggestion.Manoeuvre.StartPositionMetres }
-            .Concat(suggestion.Manoeuvre.Controls.Select(control => control.PositionMetres))
-            .Select(point => new Point3d(point.X * scale, point.Y * scale, point.Z * scale)));
-        var draft = _baselineDefinition with
-        {
-            Manoeuvre = suggestion.Manoeuvre,
-            CheckAllowedArea = true,
-            AllowedBoundaryObjectIds = [yardId],
-            // The palette's list started from the saved obstacles, so it replaces them: an obstacle
-            // removed from the pick is no longer checked.
-            CheckObstacles = _obstacleIds.Count > 0,
-            ObstacleObjectIds = _obstacleIds.ToArray()
-        };
-        if (!WriteDraft(curve, draft)) return;
-        _labels.SearchCandidate = suggestion;
-        _appliedFingerprint = AccessDefinitionStore.Fingerprint(_document.Objects.FindId(_sourceId)!.Geometry);
-        _areaStatus.Text = prefix + $"Suggestion {index + 1} is the draft. " + PreviewText(suggestion);
+        if (objectId == _sourceId) _sourceDirty = true;
+        else if (_areaSearch.UsesSite(objectId)) _siteDirty = true;
+        else return;
+        QueueRefresh();
     }
 
     /// <summary>
-    /// Puts a route on the control line as the unsaved edit. Save commits it like any other edit and
-    /// Discard still restores the road as it was opened.
+    /// Document and preview events arrive mid-change, often several for one edit, so they only ask
+    /// for a refresh; it runs once, after the change is complete.
     /// </summary>
-    private bool WriteDraft(Curve curve, VehicleAccessDefinition definition)
+    private void QueueRefresh()
     {
-        if (_document.Objects.FindId(_sourceId) is not { Geometry: Curve previousCurve } source || Read() is not { } previous)
+        if (_refreshQueued || _closing) return;
+        _refreshQueued = true;
+        Application.Instance.AsyncInvoke(() =>
         {
-            _areaStatus.Text = "The road can no longer be read. Close Edit Road and open it again.";
-            return false;
-        }
-        var previousCopy = (Curve)previousCurve.Duplicate();
-        source.GripsOn = false;
-        if (!_document.Objects.Replace(_sourceId, curve) || !AccessDefinitionStore.Write(_document, _sourceId, definition))
-        {
-            _document.Objects.Replace(_sourceId, previousCopy);
-            AccessDefinitionStore.Write(_document, _sourceId, previous);
-            RestoreEditSelection();
-            _areaStatus.Text = "That route could not be applied; the previous edit remains.";
-            return false;
-        }
-        _areaDraftApplied = !(GeometryBase.GeometryEquals(curve, _originalCurve) &&
-            AccessDefinitionSerializer.Serialize(definition) == AccessDefinitionSerializer.Serialize(_originalDefinition));
-        LiveJourneyEditConduit.ForceDraft(_document, _stableId, _areaDraftApplied);
-        Rebuild(definition);
-        RestoreEditSelection();
-        return true;
+            _refreshQueued = false;
+            if (!_closing) Refresh();
+        });
     }
+
+    private void Refresh()
+    {
+        if (_document.Objects.FindId(_sourceId) is not { } source)
+        {
+            _status.Text = "The control line has been deleted.";
+            return;
+        }
+        if (_siteDirty)
+        {
+            _siteDirty = false;
+            _areaSearch.RefreshSite();
+        }
+        if (_sourceDirty)
+        {
+            _sourceDirty = false;
+            AccessDefinitionStore.TryReadCached(source, out var definition, out var json);
+            // An undo, or another tool, changed the road under the palette; show what it is now.
+            if (definition is not null && !string.Equals(json, _shownJson, StringComparison.Ordinal)) Rebuild(definition);
+            UpdateDraft();
+            _areaSearch.SourceChanged(definition);
+        }
+        // This runs for each frame of a drag, and setting a label's text relays the palette out.
+        var status = LiveJourneyEditConduit.IsPreviewing(_document, StableId)
+            ? "Unsaved edit — Save reruns the checks and refreshes the sizing results."
+            : "No change yet. The saved result is what you see.";
+        if (_status.Text != status) _status.Text = status;
+        _areaSearch.UpdateReadout();
+    }
+
+    private enum ControlEdit { InsertBefore, InsertAfter, Delete }
 
     private Control Row(VehicleAccessDefinition definition, ManoeuvreDefinition journey, int index)
     {
@@ -656,14 +406,14 @@ internal sealed class JourneyEditForm : Form
         var last = index == journey.Controls.Count - 1;
         var number = new Label { Text = $"{index + 1}.", Width = 24, VerticalAlignment = VerticalAlignment.Center };
 
-        var direction = new DropDown { Width = 96 };
+        var direction = new DropDown { Width = 88 };
         direction.Items.Add(new ListItem { Key = nameof(TravelDirection.Forward), Text = "Forward" });
         direction.Items.Add(new ListItem { Key = nameof(TravelDirection.Reverse), Text = "Reverse" });
         direction.SelectedKey = control.Direction.ToString();
         direction.SelectedKeyChanged += (_, _) =>
         {
             if (!Enum.TryParse(direction.SelectedKey, out TravelDirection chosen) || chosen == control.Direction) return;
-            Replace(definition, journey, index, control with { Direction = chosen });
+            Replace(definition, journey, index, control with { Direction = chosen }, "RhinoRoad change control direction");
         };
 
         // Turn is legal anywhere in the route, so the whole row is no longer last-only; Finish still
@@ -679,13 +429,13 @@ internal sealed class JourneyEditForm : Form
         kind.SelectedKeyChanged += (_, _) =>
         {
             if (!Enum.TryParse(kind.SelectedKey, out ManoeuvreControlKind chosen) || chosen == control.Kind) return;
-            Replace(definition, journey, index, control with { Kind = chosen });
+            Replace(definition, journey, index, control with { Kind = chosen }, "RhinoRoad change control kind");
         };
 
         var heading = new Button
         {
-            Width = 72,
-            Text = control.ExitHeadingRadians is double exit ? $"{Degrees(exit):0.#}°" : "Dir…",
+            Width = 64,
+            Text = control.ExitHeadingRadians is double exit ? $"{JourneyEditPicks.Degrees(exit):0.#}°" : "Dir…",
             Enabled = control.Kind != ManoeuvreControlKind.Turn,
             ToolTip = control.Kind == ManoeuvreControlKind.Turn
                 ? "A full-lock Turn has no direction to leave along."
@@ -695,23 +445,81 @@ internal sealed class JourneyEditForm : Form
         };
         heading.Click += (_, _) => PickControlDirection(index);
 
+        // Grips can only move a control, so adding or removing one is offered here.
+        var more = new Button { Text = "…", Width = 28, ToolTip = "Insert a control before or after this one, or delete it." };
+        var menu = new ContextMenu();
+        var before = new ButtonMenuItem { Text = "Insert control before" };
+        before.Click += (_, _) => EditControl(index, ControlEdit.InsertBefore);
+        var after = new ButtonMenuItem { Text = "Insert control after" };
+        after.Click += (_, _) => EditControl(index, ControlEdit.InsertAfter);
+        var delete = new ButtonMenuItem { Text = "Delete control", Enabled = journey.Controls.Count > 1 };
+        delete.Click += (_, _) => EditControl(index, ControlEdit.Delete);
+        menu.Items.Add(before);
+        menu.Items.Add(after);
+        menu.Items.Add(delete);
+        more.Click += (_, _) => menu.Show(more);
+
         var row = new StackLayout
         {
             Orientation = Orientation.Horizontal,
             Spacing = 6,
             VerticalContentAlignment = VerticalAlignment.Center,
-            Items = { number, direction, kind, heading }
+            Items = { number, direction, kind, heading, more }
         };
         row.MouseEnter += (_, _) => Highlight(index);
         row.MouseLeave += (_, _) => Highlight(null);
         return row;
     }
 
-    private void Replace(VehicleAccessDefinition definition, ManoeuvreDefinition journey, int index, ManoeuvreControl replacement)
+    private void Replace(VehicleAccessDefinition definition, ManoeuvreDefinition journey, int index,
+        ManoeuvreControl replacement, string undoDescription)
     {
         var controls = journey.Controls.ToArray();
         controls[index] = replacement;
-        WriteIntent(definition, journey with { Controls = controls });
+        WriteIntent(definition, journey with { Controls = controls }, undoDescription);
+    }
+
+    /// <summary>
+    /// Inserts or deletes a control. The control line and the stored controls change together, one
+    /// vertex per control, so the reconciler and the preview read them as the user sees them. The
+    /// grips' current positions are taken first, so a drag made before the edit is kept.
+    /// </summary>
+    private void EditControl(int index, ControlEdit edit)
+    {
+        if (_areaSearch.Searching) return;
+        if (Read() is not { Manoeuvre: { } stored } definition ||
+            _document.Objects.FindId(_sourceId)?.Geometry is not Curve controlCurve ||
+            index < 0 || index >= stored.Controls.Count)
+        {
+            _controlsStatus.Text = "The saved road could not be read. Close Edit Road and open it again.";
+            return;
+        }
+        var vertices = AccessDefinitionStore.PolylineVertices(controlCurve, _document.ModelUnitSystem);
+        if (vertices.Count != stored.Controls.Count + 1)
+        {
+            _controlsStatus.Text = "The control line no longer matches its controls. Discard and open Edit Road again.";
+            return;
+        }
+        if (edit == ControlEdit.Delete && stored.Controls.Count == 1)
+        {
+            _controlsStatus.Text = "A road needs at least one control.";
+            return;
+        }
+        var current = ManoeuvreControlReconciler.Reconcile(stored, vertices);
+        var edited = edit switch
+        {
+            ControlEdit.InsertBefore => ManoeuvreControlEdits.Insert(current, index),
+            ControlEdit.InsertAfter => ManoeuvreControlEdits.Insert(current, index + 1),
+            _ => ManoeuvreControlEdits.Delete(current, index)
+        };
+        _areaSearch.ClearSuggestions();
+        Highlight(null);
+        var description = edit == ControlEdit.Delete ? "RhinoRoad delete control" : "RhinoRoad insert control";
+        if (!WriteDraft(ControlLine(edited), definition with { Manoeuvre = edited }, description)) return;
+        var inserted = edit == ControlEdit.InsertBefore ? index + 1 : index + 2;
+        _controlsStatus.Text = edit == ControlEdit.Delete
+            ? $"Control {index + 1} deleted. The blue sweep previews the road without it; Save keeps it."
+            : $"Control {inserted} inserted as a plain aim. Drag it into place; Save keeps it.";
     }
 
     private void Highlight(int? index)
@@ -737,7 +545,7 @@ internal sealed class JourneyEditForm : Form
             RhinoApp.WriteLine("That point is on the start of the route, so it gives no heading.");
             return;
         }
-        WriteIntent(definition, journey with { StartHeadingRadians = Math.Atan2(delta.Y, delta.X) });
+        WriteIntent(definition, journey with { StartHeadingRadians = Math.Atan2(delta.Y, delta.X) }, "RhinoRoad set start heading");
     }
 
     /// <summary>
@@ -746,40 +554,39 @@ internal sealed class JourneyEditForm : Form
     /// control line's last vertex moves to it as though its grip had been dragged. The direction is a
     /// real pick from the rear, so Rhino's ortho and object snaps constrain it as they would a line.
     /// </summary>
-    private void PickTrailerBay()
+    internal void PickTrailerBay(Action<string> report)
     {
-        if (_searching) return;
         if (Read() is not { Manoeuvre: { } journey } definition ||
             _document.Objects.FindId(_sourceId)?.Geometry is not Curve controlCurve)
         {
-            _areaStatus.Text = "The saved road could not be read. Close Edit Road and open it again.";
+            report("The saved road could not be read. Close Edit Road and open it again.");
             return;
         }
         if (journey.Controls.Count == 0 || journey.Controls[^1] is not { Direction: TravelDirection.Reverse } final)
         {
-            _areaStatus.Text = "The road must end reversing into the bay. Set the last control to Reverse, or redraw it with PlanReverse.";
+            report("The road must end reversing into the bay. Set the last control to Reverse, or redraw it with PlanReverse.");
             return;
         }
         var vehicle = Catalog.Get(definition.VehicleId);
         if (!vehicle.IsArticulated)
         {
-            _areaStatus.Text = "Bay placement is for articulated vehicles.";
+            report("Bay placement is for articulated vehicles.");
             return;
         }
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, _document.ModelUnitSystem);
         var vertices = AccessDefinitionStore.PolylineVertices(controlCurve, _document.ModelUnitSystem);
         if (vertices.Count != journey.Controls.Count + 1)
         {
-            _areaStatus.Text = "The control line no longer matches its controls. Discard and open Edit Road again.";
+            report("The control line no longer matches its controls. Discard and open Edit Road again.");
             return;
         }
         var axleNow = vertices[^1];
         Point3? rearNow = final.ExitHeadingRadians is double headingNow
             ? TrailerBay.RearFromAxle(vehicle, axleNow, headingNow) : null;
 
-        _areaStatus.Text = "In the viewport: click the rear of the trailer at the bay"
+        report("In the viewport: click the rear of the trailer at the bay"
             + (rearNow is null ? "." : " (Enter keeps it).")
-            + " Then point the way it reverses in; ortho and snaps apply, or type an angle.";
+            + " Then point the way it reverses in; ortho and snaps apply, or type an angle.");
         _document.Objects.UnselectAll();
         Point3 rear;
         using (var rearPicker = new GetPoint())
@@ -800,91 +607,33 @@ internal sealed class JourneyEditForm : Form
             else
             {
                 RestoreEditSelection();
-                _areaStatus.Text = "Trailer bay unchanged.";
+                report("Trailer bay unchanged.");
                 return;
             }
         }
 
         var pivot = new Point3d(rear.X * scale, rear.Y * scale, rear.Z * scale);
-        var picked = PickDirection(pivot,
+        var picked = JourneyEditPicks.PickDirection(_document, pivot,
             "Point the way the trailer reverses into the bay, or type an angle from the CPlane",
             allowClear: false,
-            (display, heading) => DrawDockedTrailer(display, vehicle, TrailerBay.AxleFromRear(vehicle, rear, heading), heading),
+            (display, heading) => JourneyEditPicks.DrawDockedTrailer(_document, display, vehicle,
+                TrailerBay.AxleFromRear(vehicle, rear, heading), heading),
             out var bayHeading);
         if (picked != DirectionPick.Picked)
         {
             RestoreEditSelection();
-            _areaStatus.Text = "Trailer bay unchanged.";
+            report("Trailer bay unchanged.");
             return;
         }
 
         var axle = TrailerBay.AxleFromRear(vehicle, rear, bayHeading);
         var controls = journey.Controls.ToArray();
         controls[^1] = final with { ExitHeadingRadians = bayHeading, Kind = ManoeuvreControlKind.Aim };
-        ClearSuggestions();
+        _areaSearch.ClearSuggestions();
         var points = vertices.Take(vertices.Count - 1).Append(axle)
             .Select(point => new Point3d(point.X * scale, point.Y * scale, point.Z * scale));
-        _document.Objects.Replace(_sourceId, new PolylineCurve(points));
-        WriteIntent(definition, journey with { Controls = controls });
-        RestoreEditSelection();
-        _areaStatus.Text = "Trailer bay set. Search to compare approaches, or Save.";
-    }
-
-    private enum DirectionPick { Picked, Cleared, Cancelled }
-
-    /// <summary>
-    /// Picks a direction from <paramref name="pivot"/>. It is a real point pick from that base point,
-    /// so Rhino's ortho (F8 or Shift, at its ortho angle on the CPlane) and object snaps constrain it
-    /// as they would drawing a line; an angle can also be typed, counted from the CPlane.
-    /// </summary>
-    private DirectionPick PickDirection(
-        Point3d pivot, string prompt, bool allowClear,
-        Action<DisplayPipeline, double>? draw, out double headingRadians)
-    {
-        headingRadians = 0.0;
-        var reference = _document.Views.ActiveView?.ActiveViewport is { } viewport ? CPlaneHeading(viewport) : 0.0;
-        using var picker = new GetPoint();
-        picker.SetCommandPrompt(prompt);
-        picker.SetBasePoint(pivot, true);
-        picker.DrawLineFromPoint(pivot, true);
-        picker.PermitObjectSnap(true);
-        picker.PermitOrthoSnap(true);
-        picker.AcceptNumber(true, true);
-        picker.AcceptNothing(allowClear);
-        picker.DynamicDraw += (_, args) =>
-        {
-            var delta = args.CurrentPoint - pivot;
-            if (draw is null || new Vector2d(delta.X, delta.Y).Length <= _document.ModelAbsoluteTolerance) return;
-            draw(args.Display, Math.Atan2(delta.Y, delta.X));
-        };
-        while (true)
-        {
-            var result = picker.Get();
-            if (result == GetResult.Nothing && allowClear) return DirectionPick.Cleared;
-            if (result == GetResult.Number)
-            {
-                headingRadians = Geometry2D.NormalizeAngle(reference + (picker.Number() * Math.PI / 180.0));
-                return DirectionPick.Picked;
-            }
-            if (result != GetResult.Point) return DirectionPick.Cancelled;
-            var delta = picker.Point() - pivot;
-            if (new Vector2d(delta.X, delta.Y).Length > _document.ModelAbsoluteTolerance)
-            {
-                headingRadians = Math.Atan2(delta.Y, delta.X);
-                return DirectionPick.Picked;
-            }
-            RhinoApp.WriteLine("That point is on the control itself, so it gives no direction; pick away from it.");
-        }
-    }
-
-    private void DrawDockedTrailer(DisplayPipeline display, VehicleDefinition vehicle, Point3 axle, double heading)
-    {
-        var scale = RhinoMath.UnitScale(UnitSystem.Meters, _document.ModelUnitSystem);
-        var outline = TrailerBay.DockedOutline(vehicle, axle, heading)
-            .Select(point => new Point3d(point.X * scale, point.Y * scale, axle.Z * scale)).ToList();
-        if (outline.Count == 0) return;
-        outline.Add(outline[0]);
-        display.DrawPolyline(new Polyline(outline), Color.MediumPurple, 2);
+        if (WriteIntent(definition, journey with { Controls = controls }, "RhinoRoad set trailer bay", new PolylineCurve(points)))
+            report("Trailer bay set. Search to compare approaches, or Save.");
     }
 
     /// <summary>
@@ -894,7 +643,7 @@ internal sealed class JourneyEditForm : Form
     /// </summary>
     private void PickControlDirection(int index)
     {
-        if (_searching) return;
+        if (_areaSearch.Searching) return;
         if (Read() is not { Manoeuvre: { } journey } definition ||
             _document.Objects.FindId(_sourceId)?.Geometry is not Curve controlCurve ||
             index < 0 || index >= journey.Controls.Count)
@@ -919,7 +668,7 @@ internal sealed class JourneyEditForm : Form
         if (bay && control.ExitHeadingRadians is null)
         {
             // Without a direction the stored point is the axle, and the rear is not yet known.
-            PickTrailerBay();
+            PickTrailerBay(message => _controlsStatus.Text = message);
             return;
         }
 
@@ -927,15 +676,16 @@ internal sealed class JourneyEditForm : Form
         var point = vertices[index + 1];
         var rear = bay ? TrailerBay.RearFromAxle(vehicle, point, control.ExitHeadingRadians!.Value) : point;
         _controlsStatus.Text = bay
-            ? $"In the viewport: point the way the trailer reverses in; it turns about its rear. Ortho and snaps apply, or type an angle. Enter clears it."
+            ? "In the viewport: point the way the trailer reverses in; it turns about its rear. Ortho and snaps apply, or type an angle. Enter clears it."
             : $"In the viewport: point the way to leave control {index + 1}. Ortho and snaps apply, or type an angle. Enter clears it.";
         _document.Objects.UnselectAll();
-        var picked = PickDirection(new Point3d(rear.X * scale, rear.Y * scale, rear.Z * scale),
+        var picked = JourneyEditPicks.PickDirection(_document, new Point3d(rear.X * scale, rear.Y * scale, rear.Z * scale),
             bay
                 ? "Point the way the trailer reverses into the bay, or type an angle from the CPlane; Enter clears it"
                 : $"Point the way to leave control {index + 1}, or type an angle from the CPlane; Enter clears it",
             allowClear: true,
-            bay ? (display, heading) => DrawDockedTrailer(display, vehicle, TrailerBay.AxleFromRear(vehicle, rear, heading), heading)
+            bay ? (display, heading) => JourneyEditPicks.DrawDockedTrailer(_document, display, vehicle,
+                    TrailerBay.AxleFromRear(vehicle, rear, heading), heading)
                 : null,
             out var headingRadians);
         if (picked == DirectionPick.Cancelled)
@@ -947,48 +697,72 @@ internal sealed class JourneyEditForm : Form
 
         var controls = journey.Controls.ToArray();
         controls[index] = control with { ExitHeadingRadians = picked == DirectionPick.Picked ? headingRadians : null };
+        Curve? moved = null;
         if (bay && picked == DirectionPick.Picked)
         {
             var axle = TrailerBay.AxleFromRear(vehicle, rear, headingRadians);
-            var points = vertices.Select((vertex, at) => at == vertices.Count - 1 ? axle : vertex)
-                .Select(vertex => new Point3d(vertex.X * scale, vertex.Y * scale, vertex.Z * scale));
-            _document.Objects.Replace(_sourceId, new PolylineCurve(points));
+            moved = new PolylineCurve(vertices.Select((vertex, at) => at == vertices.Count - 1 ? axle : vertex)
+                .Select(vertex => new Point3d(vertex.X * scale, vertex.Y * scale, vertex.Z * scale)));
         }
-        ClearSuggestions();
-        WriteIntent(definition, journey with { Controls = controls });
-        RestoreEditSelection();
+        _areaSearch.ClearSuggestions();
+        if (!WriteIntent(definition, journey with { Controls = controls }, "RhinoRoad change control direction", moved)) return;
         _controlsStatus.Text = picked == DirectionPick.Picked
-            ? $"Control {index + 1} now leaves along {Degrees(headingRadians):0.#}°. The blue sweep previews it; Save keeps it."
+            ? $"Control {index + 1} now leaves along {JourneyEditPicks.Degrees(headingRadians):0.#}°. The blue sweep previews it; Save keeps it."
             : $"Control {index + 1} direction cleared.";
     }
 
-    private static double Degrees(double radians)
-    {
-        var degrees = radians * 180.0 / Math.PI;
-        return degrees < 0.0 ? degrees + 360.0 : degrees;
-    }
+    private void RestoreEditSelection() => JourneyEditPicks.RestoreEditSelection(_document, _sourceId);
 
-    private void RestoreEditSelection()
-    {
-        _document.Objects.UnselectAll();
-        _document.Objects.Select(_sourceId);
-        if (_document.Objects.FindId(_sourceId) is { } source) source.GripsOn = true;
-        _document.Views.Redraw();
-    }
-
-    private static double CPlaneHeading(global::Rhino.Display.RhinoViewport viewport)
-    {
-        var axis = viewport.GetConstructionPlane().Plane.XAxis;
-        return Math.Abs(axis.X) + Math.Abs(axis.Y) <= RhinoMath.ZeroTolerance ? 0.0 : Math.Atan2(axis.Y, axis.X);
-    }
-
+    /// <summary>
+    /// The Road settings for the draft. Running <c>RRRoad</c> for this, as the palette once did,
+    /// took its configure path, which committed the dragged draft while the palette still said it was
+    /// unsaved, and a later Discard left the rebaked output of the discarded draft behind. The dialog
+    /// is shown here instead and its answers join the draft, so Save and Discard keep their meaning.
+    /// </summary>
     private void RunSettings()
     {
-        if (_document.Objects.FindId(_sourceId) is null) return;
-        _document.Objects.UnselectAll();
-        _document.Objects.Select(_sourceId);
-        RhinoApp.RunScript(_document.RuntimeSerialNumber, "_RRRoad", false);
-        if (Read() is { } refreshed) Rebuild(refreshed);
+        if (_areaSearch.Searching) return;
+        if (Read() is not { } draft)
+        {
+            _status.Text = "The road can no longer be read. Close Edit Road and open it again.";
+            return;
+        }
+        var settings = new VehicleAccessSettings();
+        AccessDefinitionSettings.Apply(draft, settings);
+        settings.Reconcile(Catalog);
+        if (!VehicleAccessDialog.Show(_document, Catalog, settings, configuringSavedSource: true)) return;
+        if (settings.Source != draft.SourceKind)
+            RhinoApp.WriteLine("Edit Road keeps this road driven interactively; the Source setting was not changed.");
+
+        var configured = AccessDefinitionSettings.WithSettings(draft, settings);
+        if (settings.CheckObstacles && (settings.ReselectReferences || configured.ObstacleObjectIds.Count == 0 ||
+            configured.ObstacleObjectIds.Any(id => _document.Objects.FindId(id) is null)))
+        {
+            var obstacles = JourneyEditPicks.PickCurves(_document, _sourceId,
+                "Select replacement obstacle curves; Enter for none", multiple: true, closedOnly: false);
+            if (obstacles is null)
+            {
+                _status.Text = "Settings unchanged.";
+                return;
+            }
+            configured = configured with { ObstacleObjectIds = obstacles };
+        }
+        if (settings.CheckAllowedArea && (settings.ReselectReferences || configured.AllowedBoundaryObjectIds.Count == 0 ||
+            configured.AllowedBoundaryObjectIds.Any(id => _document.Objects.FindId(id) is null)))
+        {
+            var boundaries = JourneyEditPicks.PickCurves(_document, _sourceId,
+                "Select replacement closed allowed-area boundaries; Enter for none", multiple: true, closedOnly: true);
+            if (boundaries is null)
+            {
+                _status.Text = "Settings unchanged.";
+                return;
+            }
+            configured = configured with { AllowedBoundaryObjectIds = boundaries };
+        }
+        if (AccessDefinitionSerializer.Serialize(configured) == AccessDefinitionSerializer.Serialize(draft)) return;
+        if (configured.VehicleId != draft.VehicleId) _areaSearch.ClearSuggestions();
+        if (WriteDraft(null, configured, "RhinoRoad change road settings"))
+            _controlsStatus.Text = "Settings changed. The blue sweep previews them; Save reruns the checks with them, Discard restores the road as opened.";
     }
 
     private void Save()
@@ -1002,17 +776,19 @@ internal sealed class JourneyEditForm : Form
         // End the preview first: the review conduit and the baked objects both hide themselves while
         // a preview is live, so committing underneath one leaves the new result invisible.
         LiveJourneyEditConduit.End(_document);
-        LiveJourneyEditConduit.ForceDraft(_document, _stableId, false);
+        LiveJourneyEditConduit.ForceDraft(_document, StableId, false);
+        // Update records its own undo step here, outside any command, so Ctrl+Z brings back the
+        // previous result.
         var result = RRUpdateVehicleAccessCommand.Update(_document, source);
         if (result != CommandResult.Success)
         {
-            LiveJourneyEditConduit.Begin(_document, _stableId);
-            if (_areaDraftApplied) LiveJourneyEditConduit.ForceDraft(_document, _stableId, true);
+            LiveJourneyEditConduit.Begin(_document, StableId);
+            if (_draftApplied) LiveJourneyEditConduit.ForceDraft(_document, StableId, true);
             _status.Text = "Save failed — see the command line. The edit is still open.";
             return;
         }
         _saved = true;
-        VehicleAccessInspectorService.Refresh(_document, _stableId);
+        VehicleAccessInspectorService.Refresh(_document, StableId);
         Close();
     }
 
@@ -1020,157 +796,47 @@ internal sealed class JourneyEditForm : Form
     {
         if (_closing) return;
         _closing = true;
-        _searchCancellation?.Cancel();
-        LiveJourneyEditConduit.ForceDraft(_document, _stableId, false);
+        _areaSearch.Close();
+        LiveJourneyEditConduit.ForceDraft(_document, StableId, false);
         _labels.SearchCandidate = null;
         if (_document.Objects.FindId(_sourceId) is { } editable) editable.GripsOn = false;
-        if (_document.Objects.FindId(_sourceId) is { Geometry: Curve current } &&
-            !GeometryBase.GeometryEquals(_originalCurve, current))
-            _document.Objects.Replace(_sourceId, _originalCurve);
-        if (_document.Objects.FindId(_sourceId) is not null)
-            AccessDefinitionStore.Write(_document, _sourceId, _originalDefinition);
+        DocumentUndo.Record(_document, "RhinoRoad discard road edit", () =>
+        {
+            if (_document.Objects.FindId(_sourceId) is { Geometry: Curve current } &&
+                !GeometryBase.GeometryEquals(_originalCurve, current))
+                _document.Objects.Replace(_sourceId, _originalCurve);
+            if (_document.Objects.FindId(_sourceId) is { } source &&
+                source.Attributes.GetUserString(AccessDefinitionStore.DefinitionKey) is var json &&
+                !string.Equals(json, _originalJson, StringComparison.Ordinal))
+                AccessDefinitionStore.Write(_document, _sourceId, _originalDefinition);
+        });
         Close();
     }
 
-    private void Poll()
+    /// <summary>
+    /// The document is closing. Nothing may be written to it or redrawn in it, so the palette shuts
+    /// without the discard it would otherwise make.
+    /// </summary>
+    internal void Abandon()
     {
-        if (_document.Objects.FindId(_sourceId) is null)
-        {
-            _status.Text = "The control line has been deleted.";
-            return;
-        }
-        // The suggestion's clearance outline and tightest point describe it as suggested; once its
-        // controls are dragged they describe something else, and the live sweep takes over.
-        if (_labels.SearchCandidate is not null && _appliedFingerprint is not null &&
-            AccessDefinitionStore.Fingerprint(_document.Objects.FindId(_sourceId)!.Geometry) != _appliedFingerprint)
-        {
-            _labels.SearchCandidate = null;
-            _document.Views.Redraw();
-        }
-        _status.Text = LiveJourneyEditConduit.IsPreviewing(_document, _stableId)
-            ? "Unsaved edit — Save reruns the checks and refreshes the sizing results."
-            : "No change yet. The saved result is what you see.";
-        if (_searching || _searchYard is not { } yard ||
-            LiveJourneyEditConduit.CurrentResult(_document, _stableId) is not { Clearance.IsSuccess: true } preview)
-        {
-            _liveArea.Text = string.Empty;
-            return;
-        }
-        var footprint = preview.Clearance.Region!;
-        var area = AccessFootprint.IntersectionArea(footprint, yard);
-        var outside = AccessFootprint.Outside(footprint, new[] { yard }) is not null;
-        var obstacle = _searchObstacles.Any(polygon => AccessFootprint.ConflictPoint(footprint, polygon, true) is not null);
-        var final = preview.Definition.Controls[^1];
-        var vehicle = Catalog.Get("SVT");
-        var end = preview.Journey.EndState;
-        var trailer = ArticulationTrace.AtEndOf(vehicle, preview.Journey.Samples)!
-            .Poses(end.RearAxleCentreMetres.XY, end.VehicleHeadingRadians)[^1];
-        var positionError = trailer.AxleCentreMetres.DistanceTo(final.PositionMetres.XY);
-        var headingError = final.ExitHeadingRadians is double heading
-            ? Math.Abs(Geometry2D.NormalizeAngle(trailer.HeadingRadians - heading - Math.PI)) * 180.0 / Math.PI
-            : double.PositiveInfinity;
-        var maximumFold = ArticulationTrace.Follow(vehicle, preview.Journey.Samples)
-            .Max(step => Math.Abs(step.Chain!.ArticulationAngleRadians(0, step.VehicleHeadingRadians)));
-        var foldExceeded = maximumFold >= 65.0 * Math.PI / 180.0;
-        var difference = _searchResult?.Current is { } current
-            ? $" ({area - current.ClearAreaSquareMetres:+0.0;-0.0;0.0} m² vs current)" : string.Empty;
-        _liveArea.Text = $"Live clear area {area:0.0} m²{difference}; bay error {positionError:0.00} m / {headingError:0.0}°. "
-            + (outside ? "Outside yard. " : string.Empty)
-            + (obstacle ? "Fixed-object conflict. " : string.Empty)
-            + (foldExceeded ? "Trailer fold limit. " : string.Empty)
-            + (preview.Journey.RequestedAngleExceeded ? "Steering limit. " : string.Empty)
-            + (!outside && !obstacle && !foldExceeded
-                && positionError <= TrailerReversePlanner.ArrivalToleranceMetres
-                && headingError <= TrailerReversePlanner.ArrivalToleranceDegrees
-                && !preview.Journey.RequestedAngleExceeded
-                ? "Position, heading and site clear." : "Adjust the controls before saving.");
+        _abandoned = true;
+        _closing = true;
+        _areaSearch.Close();
+        Close();
     }
 
     private void Teardown()
     {
         _closing = true;
-        _searchCancellation?.Cancel();
-        _timer.Stop();
+        _areaSearch.Close();
         _labels.Enabled = false;
-        LiveJourneyEditConduit.ForceDraft(_document, _stableId, false);
+        _session.ObjectChanged -= OnObjectChanged;
+        _session.PreviewChanged -= QueueRefresh;
+        if (_session.EditForm == this) _session.EditForm = null;
+        if (_abandoned) return;
+        LiveJourneyEditConduit.ForceDraft(_document, StableId, false);
         LiveJourneyEditConduit.End(_document);
         if (_document.Objects.FindId(_sourceId) is { } source) source.GripsOn = false;
-        OpenForms.Remove(_document.RuntimeSerialNumber);
         _document.Views.Redraw();
-    }
-
-    /// <summary>Numbers the controls in the viewport so a row in the palette names something visible.</summary>
-    private sealed class ControlLabelConduit : DisplayConduit
-    {
-        public Guid SourceId { get; set; }
-        public int? Highlighted { get; set; }
-        public ManoeuvringAreaSearch.Candidate? SearchCandidate { get; set; }
-        public Guid? YardId { get; set; }
-        public Guid[] ObstacleIds { get; set; } = [];
-
-        protected override void DrawForeground(DrawEventArgs e)
-        {
-            if (e.RhinoDoc is not { } document || document.Objects.FindId(SourceId) is not { } source) return;
-            if (!AccessDefinitionStore.TryRead(source, out var definition, out _) || definition?.Manoeuvre is null) return;
-            if (source.Geometry is not Curve curve) return;
-            var vertices = AccessDefinitionStore.PolylineVertices(curve, document.ModelUnitSystem);
-            var scale = RhinoMath.UnitScale(UnitSystem.Meters, document.ModelUnitSystem);
-
-            // The site the search will use, so what was picked is visible rather than remembered.
-            if (YardId is Guid yardId && document.Objects.FindId(yardId)?.Geometry is Curve yard)
-                e.Display.DrawCurve(yard, Color.SeaGreen, 4);
-            foreach (var obstacleId in ObstacleIds)
-                if (document.Objects.FindId(obstacleId)?.Geometry is Curve obstacle)
-                    e.Display.DrawCurve(obstacle, Color.IndianRed, 3);
-
-            // The trailer as it stands in the bay at the control line's current end, rear marked.
-            if (definition.Manoeuvre.Controls.Count > 0 && vertices.Count > 1 &&
-                definition.Manoeuvre.Controls[^1] is { Direction: TravelDirection.Reverse, ExitHeadingRadians: double bayHeading } &&
-                Catalog.Get(definition.VehicleId) is { IsArticulated: true } bayVehicle)
-            {
-                var axle = vertices[^1];
-                var docked = TrailerBay.DockedOutline(bayVehicle, axle, bayHeading)
-                    .Select(point => new Point3d(point.X * scale, point.Y * scale, axle.Z * scale)).ToList();
-                if (docked.Count > 0)
-                {
-                    docked.Add(docked[0]);
-                    e.Display.DrawDottedPolyline(docked, Color.MediumPurple, true);
-                    var rear = TrailerBay.RearFromAxle(bayVehicle, axle, bayHeading);
-                    e.Display.DrawDot(new Point3d(rear.X * scale, rear.Y * scale, rear.Z * scale),
-                        "rear", Color.MediumPurple, Color.White);
-                }
-            }
-            if (SearchCandidate is { } suggestion)
-            {
-                var height = suggestion.Route[0].PositionMetres.Z * scale;
-                e.Display.DrawPolyline(suggestion.Route.Select(sample =>
-                    new Point3d(sample.PositionMetres.X * scale,
-                        sample.PositionMetres.Y * scale, sample.PositionMetres.Z * scale)),
-                    Color.MediumVioletRed, 3);
-                foreach (var loop in new[] { suggestion.Clearance.OuterBoundary }
-                    .Concat(suggestion.Clearance.Holes))
-                    e.Display.DrawPolyline(loop.Append(loop[0]).Select(point =>
-                        new Point3d(point.X * scale, point.Y * scale, height)),
-                        Color.SeaGreen, 2);
-                e.Display.DrawDot(new Point3d(suggestion.LimitingPointMetres.X * scale,
-                    suggestion.LimitingPointMetres.Y * scale, height),
-                    "tightest", Color.DarkOrange, Color.White);
-            }
-            var controls = definition.Manoeuvre.Controls;
-            // Grips move the vertices but never add or remove one, so the live vertex list still
-            // lines up with the stored controls; a mismatch means the curve was edited another way.
-            var count = Math.Min(controls.Count, Math.Max(0, vertices.Count - 1));
-            for (var index = 0; index < count; index++)
-            {
-                var control = controls[index];
-                var vertex = vertices[index + 1];
-                var point = new Point3d(vertex.X * scale, vertex.Y * scale, vertex.Z * scale);
-                var highlighted = Highlighted == index;
-                var colour = highlighted ? Color.Gold
-                    : control.Kind == ManoeuvreControlKind.Finish ? Color.DarkOrange
-                    : control.Direction == TravelDirection.Forward ? Color.RoyalBlue : Color.MediumPurple;
-                e.Display.DrawDot(point, $"{index + 1}", colour, Color.White);
-            }
-        }
     }
 }

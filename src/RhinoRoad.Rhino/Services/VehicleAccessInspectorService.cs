@@ -9,14 +9,7 @@ namespace RhinoRoad.Rhino.Services;
 
 internal static class VehicleAccessInspectorService
 {
-    private static readonly Dictionary<uint, VehicleAccessInspectorForm> OpenForms = new();
-
-    static VehicleAccessInspectorService() => RhinoDoc.CloseDocument += (_, args) =>
-    {
-        if (!OpenForms.Remove(args.Document.RuntimeSerialNumber, out var form)) return;
-        if (form.Visible) form.Close();
-    };
-
+    // The open inspector lives on the document's session, which closes it with the document.
     public static Result Start(RhinoDoc document)
     {
         var selected = document.Objects.GetSelectedObjects(false, false).Take(2).ToArray();
@@ -33,7 +26,8 @@ internal static class VehicleAccessInspectorService
             return Result.Failure;
         }
 
-        if (OpenForms.TryGetValue(document.RuntimeSerialNumber, out var existing))
+        var session = RoadDocumentSession.For(document);
+        if (session.InspectorForm is { } existing)
         {
             existing.SetObject(target.Id);
             existing.BringToFront();
@@ -41,8 +35,8 @@ internal static class VehicleAccessInspectorService
         }
 
         var form = new VehicleAccessInspectorForm(document, target.Id);
-        OpenForms[document.RuntimeSerialNumber] = form;
-        form.Closed += (_, _) => OpenForms.Remove(document.RuntimeSerialNumber);
+        session.InspectorForm = form;
+        form.Closed += (_, _) => Forget(session, form);
         Application.Instance.AsyncInvoke(() =>
         {
             try
@@ -53,16 +47,19 @@ internal static class VehicleAccessInspectorService
             catch (Exception error)
             {
                 RhinoApp.WriteLine($"RhinoRoad could not open Inspect Road: {error.Message}");
-                OpenForms.Remove(document.RuntimeSerialNumber);
+                Forget(session, form);
                 form.Close();
             }
         });
         return Result.Success;
     }
 
-    public static void Refresh(RhinoDoc document, Guid sourceId)
+    public static void Refresh(RhinoDoc document, Guid sourceId) =>
+        RoadDocumentSession.Find(document)?.InspectorForm?.RefreshSource(sourceId);
+
+    private static void Forget(RoadDocumentSession session, VehicleAccessInspectorForm form)
     {
-        if (OpenForms.TryGetValue(document.RuntimeSerialNumber, out var form)) form.RefreshSource(sourceId);
+        if (session.InspectorForm == form) session.InspectorForm = null;
     }
 
     private static RhinoObject? Pick()

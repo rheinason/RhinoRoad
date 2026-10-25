@@ -33,7 +33,7 @@ public sealed class RRVehicleAccessCommand : Command
         if (storedSource is not null && AccessDefinitionStore.TryRead(storedSource, out var readDefinition, out _))
         {
             storedDefinition = readDefinition;
-            if (storedDefinition is not null) Apply(storedDefinition, _settings);
+            if (storedDefinition is not null) AccessDefinitionSettings.Apply(storedDefinition, _settings);
         }
         if (mode == RunMode.Interactive)
         {
@@ -53,7 +53,7 @@ public sealed class RRVehicleAccessCommand : Command
         // and the accepted changes are replayed without asking for the path again.
         if (storedSource is not null && storedDefinition is not null && settings.Source == storedDefinition.SourceKind)
         {
-            var configured = WithSettings(storedDefinition, settings);
+            var configured = AccessDefinitionSettings.WithSettings(storedDefinition, settings);
             var obstacleReferencesNeedSelection = configured.ObstacleObjectIds.Count == 0 ||
                 configured.ObstacleObjectIds.Any(id => document.Objects.FindId(id) is null);
             if (settings.CheckObstacles && (settings.ReselectReferences || obstacleReferencesNeedSelection))
@@ -418,58 +418,6 @@ public sealed class RRVehicleAccessCommand : Command
     }
 
     private static double Degrees(double radians) => radians * 180.0 / Math.PI;
-
-    private static void Apply(VehicleAccessDefinition definition, VehicleAccessSettings settings)
-    {
-        settings.Source = definition.SourceKind;
-        settings.VehicleId = definition.VehicleId;
-        settings.ModeId = definition.ModeId;
-        settings.Direction = definition.SourceKind == PathSourceKind.Interactive
-            ? definition.Manoeuvre?.StartDirection ?? definition.ExistingCurveDirection
-            : definition.ExistingCurveDirection;
-        settings.EdgeMethod = definition.RoadEdgeMethod;
-        settings.ClearanceMetres = definition.ClearanceMetres;
-        settings.LeftWidthMetres = definition.LeftWidthMetres;
-        settings.RightWidthMetres = definition.RightWidthMetres;
-        settings.CheckMaximumGrade = definition.CheckMaximumGrade;
-        settings.MaximumGradePercent = definition.MaximumGradePercent;
-        settings.CheckObstacles = definition.CheckObstacles;
-        settings.CheckAllowedArea = definition.CheckAllowedArea;
-        settings.Footprints = definition.FootprintMode;
-        settings.FootprintIntervalMetres = definition.FootprintIntervalMetres;
-        settings.PreviewBeforeBaking = definition.PreviewBeforeBaking;
-        settings.ReplaceExisting = definition.ReplaceExisting;
-    }
-
-    private static VehicleAccessDefinition WithSettings(
-        VehicleAccessDefinition definition,
-        VehicleAccessSettings settings)
-    {
-        var manoeuvre = definition.Manoeuvre is null
-            ? null
-            : ManoeuvreControlReconciler.WithStartDirection(definition.Manoeuvre, settings.Direction);
-        return definition with
-        {
-            VehicleId = settings.VehicleId,
-            ModeId = settings.ModeId,
-            ExistingCurveDirection = settings.Direction,
-            Manoeuvre = manoeuvre,
-            ClearanceMetres = settings.ClearanceMetres,
-            RoadEdgeMethod = settings.EdgeMethod,
-            LeftWidthMetres = settings.LeftWidthMetres,
-            RightWidthMetres = settings.RightWidthMetres,
-            CheckMaximumGrade = settings.CheckMaximumGrade,
-            MaximumGradePercent = settings.MaximumGradePercent,
-            CheckObstacles = settings.CheckObstacles,
-            CheckAllowedArea = settings.CheckAllowedArea,
-            ObstacleObjectIds = settings.CheckObstacles ? definition.ObstacleObjectIds : Array.Empty<Guid>(),
-            AllowedBoundaryObjectIds = settings.CheckAllowedArea ? definition.AllowedBoundaryObjectIds : Array.Empty<Guid>(),
-            FootprintMode = settings.Footprints,
-            FootprintIntervalMetres = settings.FootprintIntervalMetres,
-            PreviewBeforeBaking = settings.PreviewBeforeBaking,
-            ReplaceExisting = settings.ReplaceExisting
-        };
-    }
 
     private static VehicleAccessDefinition Definition(
         RhinoDoc document,
