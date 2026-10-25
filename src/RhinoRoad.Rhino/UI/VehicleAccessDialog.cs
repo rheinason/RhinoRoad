@@ -29,6 +29,7 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
     private readonly DropDown _direction = new();
     private readonly DropDown _edgeMethod = new();
     private readonly NumericStepper _clearance = Metres(0.0, 5.0);
+    private readonly Label _clearanceDefault = new() { VerticalAlignment = VerticalAlignment.Center };
     private readonly NumericStepper _leftWidth = Metres(0.0, 50.0);
     private readonly NumericStepper _rightWidth = Metres(0.0, 50.0);
     private readonly NumericStepper _footprintInterval = Metres(0.0, 100.0);
@@ -43,6 +44,11 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
     private readonly CheckBox _reselectReferences = new() { Text = "Reselect obstacle and boundary curves" };
     private readonly CheckBox _replaceExisting = new() { Text = "Replace previous result for the same path" };
     private readonly CheckBox _previewBeforeBaking = new() { Text = "Preview and confirm before baking" };
+
+    // Once the allowance has been typed or stepped, changing vehicle or mode must not overwrite it
+    // with the mode's default. The guard stops our own assignments counting as an edit.
+    private bool _clearanceEdited;
+    private bool _settingClearance;
 
     // Narrow is the whole point of the resize, so the width survives to the next run.
     private static Size? _lastClientSize;
@@ -68,14 +74,24 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         _source.Items.Add(new ListItem { Text = "Drive the vehicle interactively", Key = nameof(PathSourceKind.Interactive) });
         _direction.Items.Add(new ListItem { Text = "Forward", Key = nameof(TravelDirection.Forward) });
         _direction.Items.Add(new ListItem { Text = "Reverse", Key = nameof(TravelDirection.Reverse) });
-        foreach (var method in Enum.GetNames<RoadEdgeMethod>())
+        // Only two outcomes exist: the clearance footprint is always produced, and a fixed-width
+        // road is added to it for Both and FixedWidth alike (see VehicleAccessSettings.CreateFixedEdges).
+        // MinimumFootprint and None behave identically, so None is not offered as a separate choice
+        // (it stays in the enum for saved documents and maps to the first option here).
+        _edgeMethod.Items.Add(new ListItem { Text = "Clearance footprint only", Key = nameof(RoadEdgeMethod.MinimumFootprint) });
+        _edgeMethod.Items.Add(new ListItem { Text = "Clearance footprint + fixed-width road", Key = nameof(RoadEdgeMethod.Both) });
+        _direction.ToolTip = "Starting direction for an interactive route, and the direction the vehicle faces along an existing curve.";
+        if (configuringSavedSource)
         {
-            _edgeMethod.Items.Add(new ListItem { Text = method, Key = method });
+            _source.Enabled = false;
+            _source.ToolTip = "A saved road keeps its source. To use a different source, create a new road.";
         }
 
         Apply(settings);
-        _vehicle.SelectedKeyChanged += (_, _) => { RefreshModes(); RefreshFacts(); };
-        _mode.SelectedKeyChanged += (_, _) => RefreshFacts();
+        _vehicle.SelectedKeyChanged += (_, _) => { RefreshModes(); RefreshFacts(); RefreshClearanceDefault(); };
+        _mode.SelectedKeyChanged += (_, _) => { RefreshFacts(); RefreshClearanceDefault(); };
+        _clearance.ValueChanged += (_, _) => { if (!_settingClearance) _clearanceEdited = true; };
+        _edgeMethod.SelectedKeyChanged += (_, _) => RefreshEdgeChoice();
         _checkGrade.CheckedChanged += (_, _) => _maximumGrade.Enabled = _checkGrade.Checked == true;
         _footprintMode.SelectedKeyChanged += (_, _) =>
             _footprintInterval.Enabled = _footprintMode.SelectedKey == nameof(FootprintMode.AtInterval);
@@ -97,7 +113,7 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
             Spacing = 8,
             Items =
             {
-                Group("Fixed-width corridor", Fields(("Road edges", _edgeMethod),
+                Group("Road edges", Fields(("Output", _edgeMethod),
                     ("Left width (m)", _leftWidth), ("Right width (m)", _rightWidth))),
                 Group("Output", Stretched(Fields(("Vehicle footprints", _footprintMode),
                     ("Interval (m)", _footprintInterval)), _previewBeforeBaking, _replaceExisting))
@@ -118,8 +134,8 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
                         _turningFacts)),
                     Group("Path", Fields(
                         ("Source", _source),
-                        ("Travel direction", _direction))),
-                    Group("Clearance", Fields(("Allowance (m)", _clearance))),
+                        ("Starting direction", _direction))),
+                    Group("Clearance", Fields(("Allowance (m)", ClearanceRow()))),
                     Group("Site constraints", Stretched(
                         _checkObstacles,
                         _checkAllowedArea,
@@ -223,6 +239,31 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
     private static GroupBox Group(string title, Control content) =>
         new() { Text = title, Padding = 8, Content = content };
 
+    private Control ClearanceRow()
+    {
+        var row = new TableLayout { Spacing = new Size(8, 0) };
+        row.Rows.Add(new TableRow(new TableCell(_clearance, true), new TableCell(_clearanceDefault)));
+        return row;
+    }
+
+    /// <summary>Follows the mode's published allowance until the user sets their own.</summary>
+    private void RefreshClearanceDefault()
+    {
+        if (!SelectedVehicle.DrivingModes.TryGetValue(_mode.SelectedKey ?? string.Empty, out var mode)) return;
+        _clearanceDefault.Text = $"default {mode.DefaultClearanceMetres:0.00} m";
+        if (_clearanceEdited) return;
+        _settingClearance = true;
+        _clearance.Value = mode.DefaultClearanceMetres;
+        _settingClearance = false;
+    }
+
+    private void RefreshEdgeChoice()
+    {
+        var fixedWidth = _edgeMethod.SelectedKey == nameof(RoadEdgeMethod.Both);
+        _leftWidth.Enabled = fixedWidth;
+        _rightWidth.Enabled = fixedWidth;
+    }
+
     private VehicleDefinition SelectedVehicle => _catalog.Get(_vehicle.SelectedKey);
 
     private void RefreshModes()
@@ -286,8 +327,17 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
 
         _source.SelectedKey = settings.Source.ToString();
         _direction.SelectedKey = settings.Direction.ToString();
-        _edgeMethod.SelectedKey = settings.EdgeMethod.ToString();
+        _edgeMethod.SelectedKey = settings.CreateFixedEdges
+            ? nameof(RoadEdgeMethod.Both)
+            : nameof(RoadEdgeMethod.MinimumFootprint);
+        RefreshEdgeChoice();
+        _settingClearance = true;
         _clearance.Value = settings.ClearanceMetres;
+        _settingClearance = false;
+        // A value that is not the mode's default was chosen by someone, so keep it.
+        _clearanceEdited = !(_catalog.Get(_vehicle.SelectedKey).DrivingModes.TryGetValue(_mode.SelectedKey ?? string.Empty, out var startMode) &&
+            Math.Abs(startMode.DefaultClearanceMetres - settings.ClearanceMetres) < 1e-9);
+        RefreshClearanceDefault();
         _leftWidth.Value = settings.LeftWidthMetres;
         _rightWidth.Value = settings.RightWidthMetres;
         _footprintInterval.Value = settings.FootprintIntervalMetres;
@@ -335,6 +385,7 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         var dialog = new VehicleAccessDialog(catalog, settings, configuringSavedSource);
         if (!dialog.ShowModal(RhinoEtoApp.MainWindowForDocument(document))) return false;
         dialog.Harvest(settings);
+        settings.Save();
         return true;
     }
 
