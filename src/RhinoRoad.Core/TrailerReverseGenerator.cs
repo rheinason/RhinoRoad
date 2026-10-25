@@ -164,21 +164,21 @@ public static class TrailerReverseGenerator
     }
 
     /// <summary>
-    /// Whether <see cref="DockTowedUnit"/> can be trusted for this vehicle.
+    /// Whether a reverse onto a dock can be planned for this vehicle — by <see cref="DockTowedUnit"/>
+    /// for one joint, by <see cref="MultiJointReverseDocking.Dock"/> for two.
     /// </summary>
     /// <remarks>
-    /// One joint only. A two-joint chain does not hold: the heading loop has to be slower than the
-    /// folds it commands, and the folds cannot be driven fast enough to leave room for it — every
-    /// pairing of the two gains measured on PVT either crawled, converged and then wandered off, or
-    /// ran straight into the fold stop. It is the second joint that does it, not the drawbar it
-    /// happens to hang from: rebuilding PVT with its dolly on a fifth wheel, and again with the hitch
-    /// on the axle, changed nothing. Aiming at a point is stable for both, so a chain that cannot be
-    /// docked is aimed instead, and the heading is reported as unavailable rather than missed.
+    /// <see cref="DockTowedUnit"/> itself is one joint only. A two-joint chain does not hold under it:
+    /// the heading loop has to be slower than the folds it commands, and the folds cannot be driven
+    /// fast enough to leave room for it — every pairing of the two gains measured on PVT either
+    /// crawled, converged and then wandered off, or ran straight into the fold stop. Two joints are
+    /// planned by simulation instead, which is measured on PVT; longer chains are not, so they are
+    /// aimed instead, and the heading is reported as unavailable rather than missed.
     /// </remarks>
     public static bool CanDock(VehicleDefinition vehicle)
     {
         ArgumentNullException.ThrowIfNull(vehicle);
-        return vehicle.TowedUnits.Count == 1;
+        return vehicle.TowedUnits.Count is 1 or 2;
     }
 
     /// <summary>
@@ -283,10 +283,10 @@ public static class TrailerReverseGenerator
         ArgumentNullException.ThrowIfNull(vehicle);
         ArgumentNullException.ThrowIfNull(mode);
         ArgumentNullException.ThrowIfNull(chain);
-        if (!CanDock(vehicle))
+        if (vehicle.TowedUnits.Count != 1)
         {
             throw new ArgumentException(
-                "Only a single-joint combination can be docked; check CanDock first.", nameof(vehicle));
+                "This law docks a single-joint combination; use MultiJointReverseDocking for more.", nameof(vehicle));
         }
 
         if (maximumStepMetres <= 0.0) throw new ArgumentOutOfRangeException(nameof(maximumStepMetres));

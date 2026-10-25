@@ -87,12 +87,19 @@ public static class ManoeuvreReplayService
             // point that gets followed. Chains that cannot be docked are aimed at the point instead,
             // and say that the heading was not honoured rather than quietly dropping it.
             var docking = control.ExitHeadingRadians.HasValue && TrailerReverseGenerator.CanDock(vehicle);
+            // More than one joint defeats the feedback cascade, so those chains are planned instead.
+            var multiJoint = MultiJointReverseDocking.Handles(vehicle);
             var reversed = docking
-                ? TrailerReverseGenerator.DockTowedUnitInAvailableSpace(
-                    vehicle, mode, state, chain, target, control.ExitHeadingRadians!.Value, StepMetres,
-                    wheelSetAtStandstill: standstill)
-                : TrailerReverseGenerator.AimTowedUnit(
-                    vehicle, mode, state, chain, target, StepMetres, wheelSetAtStandstill: standstill);
+                ? multiJoint
+                    ? MultiJointReverseDocking.Dock(
+                        vehicle, mode, state, chain, target, control.ExitHeadingRadians!.Value, StepMetres, standstill)
+                    : TrailerReverseGenerator.DockTowedUnitInAvailableSpace(
+                        vehicle, mode, state, chain, target, control.ExitHeadingRadians!.Value, StepMetres,
+                        wheelSetAtStandstill: standstill)
+                : multiJoint
+                    ? MultiJointReverseDocking.Aim(vehicle, mode, state, chain, target, StepMetres, standstill)
+                    : TrailerReverseGenerator.AimTowedUnit(
+                        vehicle, mode, state, chain, target, StepMetres, wheelSetAtStandstill: standstill);
             return new PlannedManoeuvreLeg(
                 route.Count - 1,
                 reversed.Samples,
