@@ -25,13 +25,26 @@ internal static class AccessDefinitionStore
         if (selected.Attributes.GetUserString(DefinitionKey) is not null) return selected;
         var sourceId = selected.Attributes.GetUserString(SourceIdKey);
         if (string.IsNullOrWhiteSpace(sourceId)) return null;
-        return DocumentObjects.All(document).FirstOrDefault(candidate =>
-            candidate.Attributes.GetUserString(DefinitionKey) is not null &&
-            string.Equals(candidate.Attributes.GetUserString(SourceIdKey), sourceId, StringComparison.OrdinalIgnoreCase));
+        // Every output carries its source's id, so this ran for each click on one; scanning the whole
+        // document each time was the cost on a large site. The session keeps the answer per document.
+        return RoadDocumentSession.For(document).FindSource(document, sourceId);
     }
 
     public static bool TryRead(RhinoObject source, out VehicleAccessDefinition? definition, out string? error) =>
         AccessDefinitionSerializer.TryDeserialize(source.Attributes.GetUserString(DefinitionKey), out definition, out error);
+
+    /// <summary>
+    /// <see cref="TryRead"/> for code that runs on every redraw: the parsed definition is kept per
+    /// object, and <paramref name="json"/> is the saved text, for cheap comparisons. The instance is
+    /// shared, which a record makes harmless.
+    /// </summary>
+    public static bool TryReadCached(RhinoObject source, out VehicleAccessDefinition? definition, out string? json)
+    {
+        if (source.Document is { } document)
+            return RoadDocumentSession.For(document).TryReadDefinition(source, out definition, out json);
+        json = source.Attributes.GetUserString(DefinitionKey);
+        return AccessDefinitionSerializer.TryDeserialize(json, out definition, out _) && definition is not null;
+    }
 
     public static bool Write(RhinoDoc document, Guid objectId, VehicleAccessDefinition definition)
     {
