@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace RhinoRoad.Core;
@@ -119,7 +120,10 @@ public static class AccessDefinitionSerializer
         VehicleAccessDefinition definition;
         try
         {
-            definition = JsonSerializer.Deserialize<VehicleAccessDefinition>(json, Options)
+            var root = JsonNode.Parse(json) as JsonObject
+                ?? throw new InvalidDataException("The access definition is malformed.");
+            SchemaMigration.UpgradeDefinition(root);
+            definition = root.Deserialize<VehicleAccessDefinition>(Options)
                 ?? throw new InvalidDataException("The access definition is empty.");
         }
         catch (JsonException exception)
