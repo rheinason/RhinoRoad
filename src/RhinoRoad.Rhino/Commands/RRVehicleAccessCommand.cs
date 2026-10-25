@@ -201,8 +201,7 @@ public sealed class RRVehicleAccessCommand : Command
             obstacleSelection.Curves,
             boundarySelection.Curves,
             settings.ClearanceMetres,
-            document.ModelUnitSystem,
-            document.ModelAbsoluteTolerance);
+            document.ModelUnitSystem);
         analysis.MinimumClearanceMetres = clearance.MinimumClearanceMetres;
         var allViolations = analysis.Violations.Concat(clearance.Violations).ToArray();
 

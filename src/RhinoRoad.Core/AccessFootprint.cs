@@ -46,7 +46,7 @@ public static class AccessFootprint
         return null;
     }
 
-    private static PathsD Paths(SweptRegion region) =>
+    internal static PathsD Paths(SweptRegion region) =>
         new(new[] { Path(region.OuterBoundary, true) }.Concat(region.Holes.Select(h => Path(h, false))));
 
     public static IReadOnlyList<SweptRegion> Combine(IEnumerable<SweptRegion> regions)
@@ -115,7 +115,7 @@ public static class AccessFootprint
         return intervals;
     }
 
-    private static PathD Path(IReadOnlyList<Point2> loop, bool positive)
+    internal static PathD Path(IReadOnlyList<Point2> loop, bool positive)
     {
         var path = new PathD(loop.Select(p => new PointD(p.X, p.Y)));
         if ((Clipper.Area(path) > 0) != positive) path.Reverse();

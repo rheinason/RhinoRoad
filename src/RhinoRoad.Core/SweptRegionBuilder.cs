@@ -34,7 +34,23 @@ public sealed record SweptRegionResult(
     int RegionCount,
     string Message)
 {
+    private readonly IReadOnlyList<SweptRegion>? _regions;
+
     public bool IsSuccess => Status == SweptRegionStatus.Success && Region is not null;
+
+    /// <summary>
+    /// Every separate area the union produced, largest first, each with the holes it encloses.
+    /// <see cref="Region"/> stays the largest of them for callers that only want one.
+    /// </summary>
+    /// <remarks>
+    /// A disjoint sweep is a failure, but its pieces are still real occupied ground. Reporting only
+    /// the largest hides the rest, and pinning every hole onto it misplaces the holes of the others.
+    /// </remarks>
+    public IReadOnlyList<SweptRegion> Regions
+    {
+        get => _regions ?? (Region is null ? [] : [Region]);
+        init => _regions = value;
+    }
 }
 
 /// <summary>
@@ -128,35 +144,69 @@ public static class SweptRegionBuilder
             return new SweptRegionResult(SweptRegionStatus.NoInput, null, 0, "The union produced no closed area.");
         }
 
-        // Clipper emits outer boundaries and holes in opposite orientations. The largest loop is the
-        // outer boundary; loops sharing its orientation are separate regions, the rest are its holes.
-        var ordered = loops.OrderByDescending(loop => Math.Abs(SignedArea(loop))).ToArray();
-        var outer = ordered[0];
-        var outerSign = Math.Sign(SignedArea(outer));
-        var holes = new List<IReadOnlyList<Point2>>();
-        var separateRegions = 1;
-        foreach (var loop in ordered.Skip(1))
-        {
-            if (Math.Sign(SignedArea(loop)) == outerSign) separateRegions++;
-            else holes.Add(loop);
-        }
-
-        var region = new SweptRegion(outer, holes);
-        if (separateRegions > 1)
+        var regions = Nest(loops);
+        var region = regions[0];
+        if (regions.Count > 1)
         {
             return new SweptRegionResult(
                 SweptRegionStatus.Disjoint,
                 region,
-                separateRegions,
-                $"The footprints formed {separateRegions} disconnected areas rather than one continuous sweep.");
+                regions.Count,
+                $"The footprints formed {regions.Count} disconnected areas rather than one continuous sweep.")
+            {
+                Regions = regions
+            };
         }
 
-        var holeNote = holes.Count == 0 ? string.Empty : $" with {holes.Count} enclosed hole(s)";
+        var holeNote = region.Holes.Count == 0 ? string.Empty : $" with {region.Holes.Count} enclosed hole(s)";
         return new SweptRegionResult(
             SweptRegionStatus.Success,
             region,
             1,
-            $"Swept region of {region.AreaSquareMetres:0.00} m²{holeNote}.");
+            $"Swept region of {region.AreaSquareMetres:0.00} m²{holeNote}.")
+        {
+            Regions = regions
+        };
+    }
+
+    /// <summary>
+    /// Sorts the closed loops of a polygon operation into regions: each outer boundary with the
+    /// holes it directly encloses, largest region first.
+    /// </summary>
+    /// <remarks>
+    /// Clipper emits outer boundaries and holes in opposite orientations, and the largest loop is
+    /// always an outer one, so its orientation tells the two apart. A hole belongs to the smallest
+    /// outer loop around it. That is what stops an island standing in another region's hole -- an
+    /// outer loop nested inside a hole -- from being counted as part of the region around it.
+    /// </remarks>
+    internal static IReadOnlyList<SweptRegion> Nest(IEnumerable<IReadOnlyList<Point2>> loops)
+    {
+        var ordered = loops
+            .Where(loop => loop.Count >= 3)
+            .Select(loop => (Loop: loop, Area: SignedArea(loop)))
+            .OrderByDescending(item => Math.Abs(item.Area))
+            .ToArray();
+        if (ordered.Length == 0) return [];
+        var outerSign = Math.Sign(ordered[0].Area);
+        var outers = ordered.Where(item => Math.Sign(item.Area) == outerSign).ToArray();
+        var holes = outers.Select(_ => new List<IReadOnlyList<Point2>>()).ToArray();
+        foreach (var hole in ordered.Where(item => Math.Sign(item.Area) != outerSign))
+        {
+            // Outers run largest first, so the last one around the hole is the smallest.
+            var owner = 0;
+            for (var index = 0; index < outers.Length; index++)
+            {
+                if (Math.Abs(outers[index].Area) > Math.Abs(hole.Area) &&
+                    Geometry2D.Contains(outers[index].Loop, hole.Loop[0]))
+                {
+                    owner = index;
+                }
+            }
+
+            holes[owner].Add(hole.Loop);
+        }
+
+        return outers.Select((outer, index) => new SweptRegion(outer.Loop, holes[index])).ToArray();
     }
 
     private static PathD ToPath(IReadOnlyList<Point2> loop)
@@ -166,7 +216,7 @@ public static class SweptRegionBuilder
         return path;
     }
 
-    private static IReadOnlyList<Point2> ToLoop(PathD path)
+    internal static IReadOnlyList<Point2> ToLoop(PathD path)
     {
         var loop = new List<Point2>(path.Count);
         foreach (var point in path)

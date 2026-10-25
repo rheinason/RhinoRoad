@@ -107,8 +107,7 @@ internal static class VehicleAccessRunService
                 obstacles,
                 boundaries,
                 stored.ClearanceMetres,
-                document.ModelUnitSystem,
-                document.ModelAbsoluteTolerance);
+                document.ModelUnitSystem);
             analysis.MinimumClearanceMetres = clearance.MinimumClearanceMetres;
             var violations = analysis.Violations.Concat(clearance.Violations).ToArray();
             var analysisId = Guid.NewGuid().ToString("N");
