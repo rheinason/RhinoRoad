@@ -17,20 +17,48 @@ internal static class RhinoRouteSampler
         var lengthMetres = curve.GetLength() * metresPerModelUnit;
         if (lengthMetres <= 1e-6) throw new ArgumentException("The selected path is too short.", nameof(curve));
         var divisionCount = Math.Max(2, (int)Math.Ceiling(lengthMetres / targetSpacingMetres));
-        var parameters = curve.DivideByCount(divisionCount, includeEnds: true);
-        if (parameters is null || parameters.Length < 2) throw new InvalidOperationException("The path could not be sampled.");
+        var divisions = curve.DivideByCount(divisionCount, includeEnds: true);
+        if (divisions is null || divisions.Length < 2) throw new InvalidOperationException("The path could not be sampled.");
 
-        var raw = new List<(double Parameter, Point3 Point, double Heading)>(parameters.Length);
-        foreach (var parameter in parameters)
+        // Kinks are found on the curve rather than inferred from neighbouring headings, which miss
+        // anything gentler than the threshold and leave the curvature spike on the wrong sample.
+        var parameters = SamplingParameters.MergeBreaks(
+            divisions,
+            FindTangentBreaks(curve),
+            (divisions[^1] - divisions[0]) / divisionCount * 0.01);
+
+        var raw = new List<(Point3 Point, double Heading, double Curvature, bool IsBreak)>(parameters.Count);
+        for (var index = 0; index < parameters.Count; index++)
         {
+            var parameter = parameters[index].Parameter;
             var point = curve.PointAt(parameter);
             var tangent = curve.TangentAt(parameter);
             var planLength = Math.Sqrt((tangent.X * tangent.X) + (tangent.Y * tangent.Y));
             if (planLength <= 1e-10) throw new InvalidOperationException("The path has a vertical or undefined tangent in plan.");
+
+            // The ends of the curve are never reported as a kink.
+            var isBreak = parameters[index].IsTangentBreak && index > 0 && index < parameters.Count - 1;
+
+            // At a kink curvature is not defined, and the break is reported in its own right.
+            var curvature = 0.0;
+            if (!isBreak)
+            {
+                var curvatureVector = curve.CurvatureAt(parameter);
+                if (curvatureVector.IsValid)
+                {
+                    // Curvature of the plan projection, signed positive to the left: the turn of the
+                    // heading per plan distance. The cross product of tangent and curvature vector,
+                    // over the plan length cubed, gives it directly and stays finite for a sloping curve.
+                    var cross = (tangent.X * curvatureVector.Y) - (tangent.Y * curvatureVector.X);
+                    curvature = cross / (planLength * planLength * planLength) / metresPerModelUnit;
+                }
+            }
+
             raw.Add((
-                parameter,
                 new Point3(point.X * metresPerModelUnit, point.Y * metresPerModelUnit, point.Z * metresPerModelUnit),
-                Math.Atan2(tangent.Y, tangent.X)));
+                Math.Atan2(tangent.Y, tangent.X),
+                curvature,
+                isBreak));
         }
 
         var stations = new double[raw.Count];
@@ -42,25 +70,36 @@ internal static class RhinoRouteSampler
         var result = new List<RouteSample>(raw.Count);
         for (var index = 0; index < raw.Count; index++)
         {
-            var previous = Math.Max(0, index - 1);
-            var next = Math.Min(raw.Count - 1, index + 1);
-            var span = Math.Max(stations[next] - stations[previous], 1e-9);
-            var headingChange = Geometry2D.NormalizeAngle(raw[next].Heading - raw[previous].Heading);
-            var curvature = headingChange / span;
-            var adjacentHeadingChange = index == 0
-                ? Geometry2D.NormalizeAngle(raw[1].Heading - raw[0].Heading)
-                : Geometry2D.NormalizeAngle(raw[index].Heading - raw[index - 1].Heading);
-            var tangentDiscontinuity = Math.Abs(adjacentHeadingChange) > Math.PI / 18.0;
             result.Add(new RouteSample(
                 stations[index],
                 raw[index].Point,
                 raw[index].Heading,
-                curvature,
+                raw[index].Curvature,
                 direction,
-                tangentDiscontinuity));
+                raw[index].IsBreak));
         }
 
         return result;
+    }
+
+    private static IReadOnlyList<double> FindTangentBreaks(Curve curve)
+    {
+        var breaks = new List<double>();
+        var domain = curve.Domain;
+        var from = domain.Min;
+
+        // Half a degree: finer than any kink worth a driver's attention, coarse enough to ignore the
+        // noise of a fitted NURBS.
+        var cosAngleTolerance = Math.Cos(Math.PI / 360.0);
+        while (curve.GetNextDiscontinuity(Continuity.G1_continuous, from, domain.Max, cosAngleTolerance, 0.0, out var t))
+        {
+            // A search that does not advance would never end.
+            if (t <= from) break;
+            breaks.Add(t);
+            from = t;
+        }
+
+        return breaks;
     }
 
     public static PolylineCurve ToPlanCurve(IReadOnlyList<RouteSample> samples, UnitSystem modelUnits, double elevationMetres)

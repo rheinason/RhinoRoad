@@ -142,20 +142,27 @@ public sealed class VehicleAccessAnalyzer
                         }
                     }
 
-                    var grade = (sample.PositionMetres.Z - previous.PositionMetres.Z) / distance;
-                    maximumGrade = Math.Max(maximumGrade, Math.Abs(grade));
-                    if (maximumAbsoluteGrade.HasValue && Math.Abs(grade) > maximumAbsoluteGrade.Value + 1e-8)
-                    {
-                        violations.Add(new AnalysisViolation(
-                            ViolationKind.Grade,
-                            sample.StationMetres,
-                            sample.PositionMetres,
-                            $"Grade {Math.Abs(grade) * 100.0:0.00}% exceeds {maximumAbsoluteGrade.Value * 100.0:0.00}%."));
-                    }
+                    maximumGrade = Math.Max(maximumGrade, Math.Abs((sample.PositionMetres.Z - previous.PositionMetres.Z) / distance));
                 }
             }
 
             previousSteering = steering;
+        }
+
+        // The limit is judged over a window, not between samples, so Z noise on a sampled curve
+        // does not read as a spike. The point-to-point maximum above is still reported.
+        var maximumWindowedGrade = 0.0;
+        foreach (var (windowEnd, grade) in WindowedGrade.Compute(samples, WindowedGrade.WindowMetres(vehicle.WheelbaseMetres)))
+        {
+            maximumWindowedGrade = Math.Max(maximumWindowedGrade, Math.Abs(grade));
+            if (maximumAbsoluteGrade.HasValue && Math.Abs(grade) > maximumAbsoluteGrade.Value + 1e-8)
+            {
+                violations.Add(new AnalysisViolation(
+                    ViolationKind.Grade,
+                    samples[windowEnd].StationMetres,
+                    samples[windowEnd].PositionMetres,
+                    $"Grade {Math.Abs(grade) * 100.0:0.00}% exceeds {maximumAbsoluteGrade.Value * 100.0:0.00}%."));
+            }
         }
 
         return new VehicleAccessResult
@@ -169,6 +176,7 @@ public sealed class VehicleAccessAnalyzer
             MaximumSteeringAngleRadians = maximumSteering,
             MaximumSteeringRateRadiansPerSecond = maximumSteeringRate,
             MaximumAbsoluteGrade = maximumGrade,
+            MaximumWindowedGrade = maximumWindowedGrade,
             TowedAxleTracksMetres = towedTracks.Select(track => (IReadOnlyList<Point2>)track).ToArray(),
             MaximumArticulationAnglesRadians = maximumFolds
         };

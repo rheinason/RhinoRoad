@@ -240,6 +240,13 @@ public sealed class VehicleAccessResult
     public required double MaximumSteeringRateRadiansPerSecond { get; init; }
     public required double MaximumAbsoluteGrade { get; init; }
 
+    /// <summary>
+    /// Largest grade over a moving window of the longer of 5 m and the wheelbase. This is the value
+    /// the grade limit is checked against; <see cref="MaximumAbsoluteGrade"/> is the point-to-point
+    /// maximum and is sensitive to noise in Z.
+    /// </summary>
+    public double MaximumWindowedGrade { get; init; }
+
     /// <summary>Axle-centre track of each towed unit, nearest first. Empty for a rigid vehicle.</summary>
     public IReadOnlyList<IReadOnlyList<Point2>> TowedAxleTracksMetres { get; init; } = [];
 
