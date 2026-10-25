@@ -15,6 +15,7 @@ internal sealed class VehicleAccessProfileControl : Drawable
     private const int Bottom = 28;
     private VehicleAccessReview? _review;
     private double? _hoverStation;
+    private double? _scrubStation;
 
     public VehicleAccessProfileControl()
     {
@@ -22,15 +23,26 @@ internal sealed class VehicleAccessProfileControl : Drawable
         MinimumSize = new Size(300, 150);
         BackgroundColor = Color.FromArgb(43, 45, 49);
         Cursor = Cursors.Crosshair;
-        ToolTip = "Move along the profile to show that vehicle pose in the viewport.";
+        ToolTip = "Move along the profile to show that vehicle pose in the viewport; click to set the playback station.";
     }
 
     public ReviewMetricKind Metric { get; set; } = ReviewMetricKind.SteeringAngle;
     public event EventHandler<double?>? HoverStationChanged;
 
+    /// <summary>Raised when the profile is clicked, so the inspector's slider can follow.</summary>
+    public event EventHandler<double>? StationClicked;
+
+    /// <summary>The slider/playback station; drawn as a marker that stays when the mouse leaves.</summary>
+    public double? ScrubStation
+    {
+        get => _scrubStation;
+        set { _scrubStation = value; Invalidate(); }
+    }
+
     public void SetReview(VehicleAccessReview? review)
     {
         _review = review;
+        _scrubStation = null;
         Invalidate();
     }
 
@@ -81,6 +93,16 @@ internal sealed class VehicleAccessProfileControl : Drawable
         graphics.DrawRectangle(Color.FromArgb(88, 91, 96), Left, Top, PlotWidth, PlotHeight);
         graphics.DrawText(font, Color.FromArgb(170, 174, 181), Left, Top + PlotHeight + 5,
             $"Station 0 — {_review.RouteLengthMetres:0.#} m");
+        if (_scrubStation.HasValue)
+        {
+            var scrubSample = _review.Samples[StationPlayback.NearestIndex(_review.Samples, item => item.StationMetres, _scrubStation.Value)];
+            var scrubX = X(scrubSample.StationMetres);
+            using var scrubPen = new Pen(Color.FromArgb(255, 170, 60), 2);
+            graphics.DrawLine(scrubPen, scrubX, Top, scrubX, Top + PlotHeight);
+            var scrubValue = Value(scrubSample);
+            if (double.IsFinite(scrubValue))
+                graphics.FillEllipse(Color.FromArgb(255, 170, 60), scrubX - 3.5f, Y(scrubValue, minimum, maximum) - 3.5f, 7f, 7f);
+        }
         if (_hoverStation.HasValue)
         {
             var sample = _review.Samples.MinBy(item => Math.Abs(item.StationMetres - _hoverStation.Value))!;
@@ -109,6 +131,17 @@ internal sealed class VehicleAccessProfileControl : Drawable
             Invalidate();
         }
         base.OnMouseMove(e);
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        if (_review is not null && e.Buttons == MouseButtons.Primary &&
+            e.Location.X >= Left && e.Location.X <= Left + PlotWidth)
+        {
+            var station = (e.Location.X - Left) / Math.Max(1.0, PlotWidth) * _review.RouteLengthMetres;
+            StationClicked?.Invoke(this, StationPlayback.Clamp(station, _review.RouteLengthMetres));
+        }
+        base.OnMouseDown(e);
     }
 
     protected override void OnMouseLeave(MouseEventArgs e)

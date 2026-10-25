@@ -26,6 +26,15 @@ internal sealed class VehicleAccessReviewConduit : DisplayConduit
     public VehicleAccessOverlayParts Parts { get; set; } = VehicleAccessOverlayParts.All;
     public UnitSystem ModelUnits { get; set; } = UnitSystem.Meters;
     public double? HoveredStation { get; set; }
+
+    /// <summary>The station the inspector's slider or playback is at; hover overrides it while the mouse is on the graph.</summary>
+    public double? ScrubStation { get; set; }
+
+    /// <summary>Draws the occupied outlines from the start up to the current station, faintly.</summary>
+    public bool ShowSweptTrail { get; set; }
+
+    /// <summary>Upper bound on trail outlines per frame; the poses are decimated to this.</summary>
+    private const int MaximumTrailPoses = 60;
     public VehicleAccessProblemEvent? SelectedEvent { get; set; }
 
     public void SetSnapshot(VehicleAccessReviewSnapshot? snapshot) => _snapshot = snapshot;
@@ -139,11 +148,15 @@ internal sealed class VehicleAccessReviewConduit : DisplayConduit
     private void DrawHighlightedPose(DrawEventArgs e)
     {
         if (_snapshot is null) return;
-        var station = SelectedEvent?.WorstStationMetres ?? HoveredStation;
+        var station = HoveredStation ?? ScrubStation ?? SelectedEvent?.WorstStationMetres;
         if (!station.HasValue) return;
         var review = _snapshot.Review;
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, ModelUnits);
-        var pose = _snapshot.Run.Analysis.Poses.MinBy(item => Math.Abs(item.StationMetres - station.Value))!;
+        var poses = _snapshot.Run.Analysis.Poses;
+        var poseIndex = StationPlayback.NearestIndex(poses, item => item.StationMetres, station.Value);
+        if (poseIndex < 0) return;
+        var pose = poses[poseIndex];
+        if (ShowSweptTrail) DrawSweptTrail(e, poses, poseIndex, scale);
         foreach (var outline in pose.OccupiedOutlinesWorldMetres)
         {
             var points = outline.Select(point => new Point3d(
@@ -178,18 +191,30 @@ internal sealed class VehicleAccessReviewConduit : DisplayConduit
             Color.White);
     }
 
+    /// <summary>
+    /// The envelope building up behind the vehicle: a bounded, evenly spaced subset of the poses so
+    /// far, drawn thin and dim. No region union happens here -- that is what the baked envelope is for.
+    /// </summary>
+    private static void DrawSweptTrail(DrawEventArgs e, IReadOnlyList<VehiclePose> poses, int lastIndex, double scale)
+    {
+        var colour = Color.FromArgb(150, 120, 170, 210);
+        foreach (var index in StationPlayback.TrailIndices(poses.Count, lastIndex, MaximumTrailPoses))
+        {
+            var pose = poses[index];
+            foreach (var outline in pose.OccupiedOutlinesWorldMetres)
+            {
+                if (outline.Count < 3) continue;
+                var points = outline.Select(point => new Point3d(
+                    point.X * scale, point.Y * scale, pose.RearAxleCentreMetres.Z * scale)).ToList();
+                points.Add(points[0]);
+                e.Display.DrawPolyline(new Polyline(points), colour, 1);
+            }
+        }
+    }
+
     private static int NearestSample(VehicleAccessReview review, double station)
     {
-        var nearest = 0;
-        var best = double.MaxValue;
-        for (var index = 0; index < review.Samples.Count; index++)
-        {
-            var distance = Math.Abs(review.Samples[index].StationMetres - station);
-            if (distance >= best) continue;
-            best = distance;
-            nearest = index;
-        }
-        return nearest;
+        return Math.Max(0, StationPlayback.NearestIndex(review.Samples, item => item.StationMetres, station));
     }
 
     private static string MetricLabel(ReviewMetricKind kind) => kind switch
