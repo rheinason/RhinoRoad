@@ -49,12 +49,10 @@ internal sealed class VehicleAccessInspectorForm : Form
         this.UseRhinoStyle();
         _conduit.ModelUnits = document.ModelUnitSystem;
 
-        foreach (var metric in Enum.GetValues<ReviewMetricKind>())
-            _metric.Items.Add(new ListItem { Key = metric.ToString(), Text = MetricName(metric) });
-        _metric.SelectedKey = ReviewMetricKind.SteeringAngle.ToString();
+        RebuildMetrics(articulated: false);
         _metric.SelectedKeyChanged += (_, _) =>
         {
-            if (!Enum.TryParse(_metric.SelectedKey, out ReviewMetricKind selected)) return;
+            if (_metric.SelectedKey is null || !Enum.TryParse(_metric.SelectedKey, out ReviewMetricKind selected)) return;
             _profile.Metric = selected;
             _conduit.Metric = selected;
             _profile.Invalidate();
@@ -196,6 +194,7 @@ internal sealed class VehicleAccessInspectorForm : Form
     private void SetSnapshot(VehicleAccessReviewSnapshot? snapshot)
     {
         _snapshot = snapshot;
+        RebuildMetrics(snapshot?.Review.Samples.Any(sample => sample.FoldAngleRadians.HasValue) == true);
         _conduit.SetSnapshot(snapshot);
         _profile.SetReview(snapshot?.Review);
         _conduit.HoveredStation = null;
@@ -206,6 +205,24 @@ internal sealed class VehicleAccessInspectorForm : Form
         RebuildMeasurements();
         RebuildEvents();
         _document.Views.Redraw();
+    }
+
+    /// <summary>
+    /// Lists the profile metrics this road has. Fold angle is offered only for an articulated
+    /// vehicle; a rigid one has no joint, and an empty graph would read as a fold of nothing.
+    /// </summary>
+    private void RebuildMetrics(bool articulated)
+    {
+        var wanted = Enum.GetValues<ReviewMetricKind>()
+            .Where(metric => articulated || metric != ReviewMetricKind.FoldAngle)
+            .Select(metric => metric.ToString())
+            .ToArray();
+        if (_metric.Items.Select(item => item.Key).SequenceEqual(wanted)) return;
+        var previous = _metric.SelectedKey;
+        _metric.Items.Clear();
+        foreach (var key in wanted)
+            _metric.Items.Add(new ListItem { Key = key, Text = MetricName(Enum.Parse<ReviewMetricKind>(key)) });
+        _metric.SelectedKey = previous is not null && wanted.Contains(previous) ? previous : ReviewMetricKind.SteeringAngle.ToString();
     }
 
     private void RebuildChecks()
@@ -240,6 +257,8 @@ internal sealed class VehicleAccessInspectorForm : Form
         AddMeasurement("Maximum grade", gradeState == ReviewCheckState.Unavailable
             ? "— (World XY route)"
             : $"{review.MaximumAbsoluteGrade * 100.0:0.00}%");
+        if (review.Checks.FirstOrDefault(check => check.Kind == ReviewCheckKind.ArticulationAngle) is { ActualValue: { } fold })
+            AddMeasurement("Maximum fold", $"{fold:0.0}°");
         AddMeasurement("Minimum clearance", review.MinimumClearanceMetres is { } clearance ? $"{clearance:0.00} m" : "—");
         AddMeasurement("Reversals", review.ReversalCount.ToString());
         AddMeasurement("Vehicle / mode", $"{review.VehicleName} / {review.ModeName}");
@@ -444,6 +463,7 @@ internal sealed class VehicleAccessInspectorForm : Form
         ReviewCheckKind.FixedWidthRoadFit => "Fixed-width road fit",
         ReviewCheckKind.AllowedAreaFit => "Allowed-area fit",
         ReviewCheckKind.ObstacleClearance => "Obstacle clearance",
+        ReviewCheckKind.ArticulationAngle => "Fold angle",
         _ => kind.ToString()
     };
     private static string MetricName(ReviewMetricKind kind) => kind switch
@@ -452,6 +472,7 @@ internal sealed class VehicleAccessInspectorForm : Form
         ReviewMetricKind.SteeringRate => "Steering rate (°/s)",
         ReviewMetricKind.ClearanceOrRoadMargin => "Clearance / road margin (m)",
         ReviewMetricKind.Grade => "Grade (%)",
+        ReviewMetricKind.FoldAngle => "Fold angle (°)",
         _ => kind.ToString()
     };
 }

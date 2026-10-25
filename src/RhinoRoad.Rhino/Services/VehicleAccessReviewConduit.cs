@@ -198,6 +198,7 @@ internal sealed class VehicleAccessReviewConduit : DisplayConduit
         ReviewMetricKind.SteeringRate => "°/s",
         ReviewMetricKind.ClearanceOrRoadMargin => "margin m",
         ReviewMetricKind.Grade => "grade %",
+        ReviewMetricKind.FoldAngle => "fold°",
         _ => string.Empty
     };
 

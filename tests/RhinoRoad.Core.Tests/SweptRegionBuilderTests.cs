@@ -111,6 +111,51 @@ public sealed class SweptRegionBuilderTests
     }
 
     [Fact]
+    public void DisjointRegionsAreAllKeptEachWithItsOwnHole()
+    {
+        // Two separate roundabout circulations: two regions, one island each -- not one region
+        // carrying both islands and a second one counted and thrown away.
+        var outlines = CircularSweep(15.0, 720)
+            .Concat(CircularSweep(10.0, 480).Select(outline =>
+                (IReadOnlyList<Point2>)outline.Select(point => point + new Point2(100.0, 0.0)).ToArray()))
+            .ToArray();
+
+        var result = SweptRegionBuilder.FromOutlines(outlines);
+
+        Assert.Equal(SweptRegionStatus.Disjoint, result.Status);
+        Assert.Equal(2, result.RegionCount);
+        Assert.Equal(2, result.Regions.Count);
+        Assert.Same(result.Region, result.Regions[0]);
+        Assert.All(result.Regions, region => Assert.Single(region.Holes));
+        Assert.All(result.Regions[1].Holes[0], point => Assert.True(Geometry2D.Contains(result.Regions[1].OuterBoundary, point)));
+    }
+
+    [Fact]
+    public void AnIslandInsideAHoleIsItsOwnRegionWithoutTheHole()
+    {
+        // A footprint parked on the island of a circulation is a separate area inside the hole. It
+        // must not take the hole it stands in, and the ring must keep it.
+        var outlines = CircularSweep(15.0, 720).Append(Footprint(new Point2(0.0, 0.0), 0.0)).ToArray();
+
+        var result = SweptRegionBuilder.FromOutlines(outlines);
+
+        Assert.Equal(2, result.Regions.Count);
+        var ring = result.Regions[0];
+        var island = result.Regions[1];
+        Assert.Single(ring.Holes);
+        Assert.Empty(island.Holes);
+        Assert.Equal(4.0 * HalfLength * HalfWidth, island.AreaSquareMetres, 3);
+    }
+
+    [Fact]
+    public void SuccessfulResultListsItsSingleRegion()
+    {
+        var result = SweptRegionBuilder.FromOutlines(StraightSweep(10.0, 100));
+
+        Assert.Same(result.Region, Assert.Single(result.Regions));
+    }
+
+    [Fact]
     public void ClearanceInflatesTheRegionAndShrinksItsHoles()
     {
         const double radius = 15.0;

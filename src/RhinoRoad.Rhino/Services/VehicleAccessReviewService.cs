@@ -27,9 +27,12 @@ internal static class VehicleAccessReviewService
 
     public static VehicleAccessReview Build(RhinoDoc document, PreparedVehicleAccess run)
     {
-        var obstacleMargins = MarginsToObstacles(document, run);
-        var allowedMargins = MarginsToAllowedArea(document, run);
-        var roadMargins = MarginsToRoad(run);
+        // The site check already measured every pose when the run was prepared; measure again only
+        // for a run that somehow skipped it.
+        var fit = run.Geometry.SiteFit ?? SiteFit(document, run);
+        var obstacleMargins = Optional(run.Definition.CheckObstacles ? fit.ObstacleMargins : null);
+        var allowedMargins = Optional(run.Definition.CheckAllowedArea ? fit.AllowedAreaMargins : null);
+        var roadMargins = Optional(fit.RoadMargins);
         var profileMargins = Enumerable.Range(0, run.Route.Count)
             .Select(index => Minimum(obstacleMargins?[index], allowedMargins?[index], roadMargins?[index]))
             .ToArray();
@@ -73,6 +76,7 @@ internal static class VehicleAccessReviewService
                 Degrees(run.Analysis.MaximumSteeringRateRadiansPerSecond), Degrees(mode.MaximumSteeringRateRadiansPerSecond), "Maximum steering rate"),
             Check(ReviewCheckKind.TangentContinuity,
                 !Has(run, ViolationKind.TangentDiscontinuity), true, null, null, "Route tangent continuity"),
+            ArticulationCheck(run),
             GradeCheck(run),
             MarginCheck(ReviewCheckKind.FixedWidthRoadFit, run, road,
                 run.Definition.RoadEdgeMethod is RoadEdgeMethod.Both or RoadEdgeMethod.FixedWidth,
@@ -81,7 +85,21 @@ internal static class VehicleAccessReviewService
                 ViolationKind.OutsideAllowedArea, "Allowed-area fit"),
             MarginCheck(ReviewCheckKind.ObstacleClearance, run, obstacle, run.Definition.CheckObstacles,
                 ViolationKind.ObstacleClearance, "Obstacle clearance")
-        };
+        }.Where(check => check is not null).Select(check => check!).ToArray();
+    }
+
+    /// <summary>
+    /// The fold of an articulated combination against its jackknife limit. A rigid vehicle has no
+    /// joint, so it gets no row rather than an "Off" one it could never turn on.
+    /// </summary>
+    private static VehicleAccessReviewCheck? ArticulationCheck(PreparedVehicleAccess run)
+    {
+        if (run.Analysis.Vehicle.TowedUnits.Count == 0) return null;
+        var fold = run.Analysis.MaximumArticulationAnglesRadians.DefaultIfEmpty(0.0).Max();
+        var limit = VehicleAccessReviewAnalyzer.FoldLimitRadians(run.Analysis.Vehicle);
+        return Check(ReviewCheckKind.ArticulationAngle,
+            !Has(run, ViolationKind.ArticulationAngle) && fold <= limit + 1e-8, true,
+            Degrees(fold), Degrees(limit), "Maximum fold angle");
     }
 
     private static VehicleAccessReviewCheck MarginCheck(
@@ -171,16 +189,26 @@ internal static class VehicleAccessReviewService
             ReviewCheckKind.TangentContinuity, samples, (_, _) => 1.0,
             (_, index) => run.Route[index].IsTangentDiscontinuous,
             null, "The route is not tangent-continuous here."));
+        if (run.Analysis.Vehicle.TowedUnits.Count > 0)
+        {
+            var fold = VehicleAccessReviewAnalyzer.FoldLimitRadians(run.Analysis.Vehicle);
+            result.AddRange(VehicleAccessReviewAnalyzer.GroupFailures(
+                ReviewCheckKind.ArticulationAngle, samples, sample => Degrees(sample.FoldAngleRadians ?? 0.0),
+                sample => (sample.FoldAngleRadians ?? 0.0) > fold + 1e-8,
+                Degrees(fold), "The combination folds past the jackknife limit."));
+        }
         AddMarginEvents(result, ReviewCheckKind.ObstacleClearance, samples, obstacle, "Clearance envelope reaches an obstacle.");
         AddMarginEvents(result, ReviewCheckKind.AllowedAreaFit, samples, allowed, "Vehicle clearance reaches outside the allowed area.");
         AddMarginEvents(result, ReviewCheckKind.FixedWidthRoadFit, samples, road, "Vehicle clearance does not fit the fixed-width road.");
 
+        // A violation only needs its own event where no per-sample metric already located that
+        // check. Each such violation now carries its own station range, so all of them are listed.
+        var located = result.Select(item => item.Check).ToHashSet();
         foreach (var violation in run.Violations)
         {
-            var check = CheckFor(violation.Kind);
-            if (result.Any(item => item.Check == check)) continue;
-            result.Add(VehicleAccessReviewAnalyzer.FallbackEvent(
-                check, samples, violation.PositionMetres, null, null, violation.Message));
+            var check = VehicleAccessReviewAnalyzer.CheckFor(violation.Kind);
+            if (located.Contains(check)) continue;
+            result.Add(VehicleAccessReviewAnalyzer.ViolationEvent(check, samples, violation));
         }
         return result.OrderBy(item => item.StartStationMetres).ThenBy(item => item.Check).ToArray();
     }
@@ -200,43 +228,24 @@ internal static class VehicleAccessReviewService
             0.0, message));
     }
 
-    private static IReadOnlyList<double?>? MarginsToObstacles(RhinoDoc document, PreparedVehicleAccess run)
+    /// <summary>
+    /// The per-pose margins come from Core (<see cref="SiteFitAnalyzer"/>), which tests containment
+    /// as well as distance: a bollard wholly under the body reads as overlap, not as clear.
+    /// </summary>
+    private static SiteFitOutcome SiteFit(RhinoDoc document, PreparedVehicleAccess run)
     {
-        if (!run.Definition.CheckObstacles || run.Obstacles.Count == 0) return null;
-        var obstaclePolylines = run.Obstacles.Select(curve => (Points: SampleCurve(curve, document.ModelUnitSystem), curve.IsClosed)).ToArray();
-        return run.Analysis.Poses.Select(pose => (double?)obstaclePolylines.Min(obstacle =>
-            pose.OccupiedOutlinesWorldMetres.Min(outline =>
-                Geometry2D.MinimumDistance(outline, obstacle.Points, true, obstacle.IsClosed)) - run.Definition.ClearanceMetres)).ToArray();
+        RhinoGeometryBuilder.CheckClearance(
+            run.Geometry,
+            run.Geometry.RoadCorridorRegion is null ? null : run.Geometry.FixedRoadBoundary,
+            run.Obstacles,
+            run.AllowedBoundaries,
+            run.Definition.ClearanceMetres,
+            document.ModelUnitSystem);
+        return run.Geometry.SiteFit!;
     }
 
-    private static IReadOnlyList<double?>? MarginsToAllowedArea(RhinoDoc document, PreparedVehicleAccess run)
-    {
-        if (!run.Definition.CheckAllowedArea || run.AllowedBoundaries.Count == 0) return null;
-        var polygons = run.AllowedBoundaries.Select(curve => SampleCurve(curve, document.ModelUnitSystem)).ToArray();
-        return run.Analysis.Poses.Select(pose =>
-        {
-            var outlines = pose.OccupiedOutlinesWorldMetres;
-            var inside = outlines.All(outline =>
-                outline.All(point => polygons.Any(polygon => Geometry2D.Contains(polygon, point))));
-            var distance = outlines.Min(outline => polygons.Min(polygon => Geometry2D.MinimumDistance(outline, polygon)));
-            return (double?)(inside ? distance - run.Definition.ClearanceMetres : -distance - run.Definition.ClearanceMetres);
-        }).ToArray();
-    }
-
-    private static IReadOnlyList<double?>? MarginsToRoad(PreparedVehicleAccess run)
-    {
-        var polygon = run.Geometry.RoadCorridorRegion?.OuterBoundary;
-        if (polygon is null) return null;
-        return run.Analysis.Poses.Select(pose =>
-        {
-            var outlines = pose.OccupiedOutlinesWorldMetres;
-            var inside = outlines.All(outline => outline.All(point => Geometry2D.Contains(polygon, point)));
-            var distance = outlines.Min(outline => Geometry2D.MinimumDistance(outline, polygon));
-            return (double?)(inside ? distance - run.Definition.ClearanceMetres : -distance - run.Definition.ClearanceMetres);
-        }).ToArray();
-    }
-
-    private static Point2[] SampleCurve(Curve curve, UnitSystem units) => CurveOutline.Points(curve, units);
+    private static IReadOnlyList<double?>? Optional(IReadOnlyList<double>? margins) =>
+        margins?.Select(value => (double?)value).ToArray();
 
     private static double? Minimum(params double?[] values)
     {
@@ -246,15 +255,4 @@ internal static class VehicleAccessReviewService
 
     private static bool Has(PreparedVehicleAccess run, ViolationKind kind) => run.Violations.Any(item => item.Kind == kind);
     private static double Degrees(double radians) => radians * 180.0 / Math.PI;
-    private static ReviewCheckKind CheckFor(ViolationKind kind) => kind switch
-    {
-        ViolationKind.SteeringAngle => ReviewCheckKind.SteeringAngle,
-        ViolationKind.SteeringRate => ReviewCheckKind.SteeringRate,
-        ViolationKind.TangentDiscontinuity => ReviewCheckKind.TangentContinuity,
-        ViolationKind.Grade => ReviewCheckKind.Grade,
-        ViolationKind.ObstacleClearance => ReviewCheckKind.ObstacleClearance,
-        ViolationKind.OutsideAllowedArea => ReviewCheckKind.AllowedAreaFit,
-        ViolationKind.FixedWidthRoad => ReviewCheckKind.FixedWidthRoadFit,
-        _ => ReviewCheckKind.EnvelopeGeneration
-    };
 }

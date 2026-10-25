@@ -226,7 +226,15 @@ public sealed record AnalysisViolation(
     ViolationKind Kind,
     double StationMetres,
     Point3 PositionMetres,
-    string Message);
+    string Message)
+{
+    /// <summary>
+    /// Last station of a violation that covers a stretch of the route, such as a site conflict;
+    /// <see cref="StationMetres"/> is then its first station and the position its worst point.
+    /// Null for a violation found at a single sample.
+    /// </summary>
+    public double? EndStationMetres { get; init; }
+}
 
 public sealed class VehicleAccessResult
 {

@@ -17,7 +17,10 @@ public enum ReviewCheckKind
     Grade,
     FixedWidthRoadFit,
     AllowedAreaFit,
-    ObstacleClearance
+    ObstacleClearance,
+
+    /// <summary>How far an articulated combination folds at its joints. Not reported for a rigid vehicle.</summary>
+    ArticulationAngle
 }
 
 public enum ReviewMetricKind
@@ -25,7 +28,10 @@ public enum ReviewMetricKind
     SteeringAngle,
     SteeringRate,
     ClearanceOrRoadMargin,
-    Grade
+    Grade,
+
+    /// <summary>The largest fold over the joints of an articulated combination.</summary>
+    FoldAngle
 }
 
 public sealed record VehicleAccessMetricSample(
@@ -35,7 +41,11 @@ public sealed record VehicleAccessMetricSample(
     double SteeringRateRadiansPerSecond,
     double Grade,
     double? ClearanceOrRoadMarginMetres,
-    TravelDirection Direction);
+    TravelDirection Direction)
+{
+    /// <summary>Largest fold over the joints at this sample, unsigned; null for a rigid vehicle.</summary>
+    public double? FoldAngleRadians { get; init; }
+}
 
 public sealed record VehicleAccessProblemEvent(
     ReviewCheckKind Check,
@@ -95,6 +105,7 @@ public static class VehicleAccessReviewAnalyzer
                     grade = (route[index].PositionMetres.Z - route[index - 1].PositionMetres.Z) / distance;
                 }
             }
+            var towed = result.Poses[index].TowedUnits;
             samples.Add(new VehicleAccessMetricSample(
                 route[index].StationMetres,
                 route[index].PositionMetres,
@@ -102,9 +113,64 @@ public static class VehicleAccessReviewAnalyzer
                 steeringRate,
                 grade,
                 clearanceOrRoadMargins?[index],
-                route[index].Direction));
+                route[index].Direction)
+            {
+                FoldAngleRadians = towed.Count == 0 ? null : towed.Max(unit => Math.Abs(unit.ArticulationAngleRadians))
+            });
         }
         return samples;
+    }
+
+    /// <summary>
+    /// The fold the review judges an articulated vehicle against. The one place that limit is chosen.
+    /// </summary>
+    /// <remarks>
+    /// For now this is the analyzer's jackknife floor for every vehicle, so the review fails exactly
+    /// where the analysis reports a jackknife. A per-unit limit belongs here when one is defined.
+    /// </remarks>
+    public static double FoldLimitRadians(VehicleDefinition vehicle)
+    {
+        ArgumentNullException.ThrowIfNull(vehicle);
+        return VehicleAccessAnalyzer.JackknifeFoldRadians;
+    }
+
+    /// <summary>The inspector check a violation is filed under.</summary>
+    public static ReviewCheckKind CheckFor(ViolationKind kind) => kind switch
+    {
+        ViolationKind.SteeringAngle => ReviewCheckKind.SteeringAngle,
+        ViolationKind.SteeringRate => ReviewCheckKind.SteeringRate,
+        ViolationKind.ArticulationAngle => ReviewCheckKind.ArticulationAngle,
+        ViolationKind.TangentDiscontinuity => ReviewCheckKind.TangentContinuity,
+        ViolationKind.Grade => ReviewCheckKind.Grade,
+        ViolationKind.ObstacleClearance => ReviewCheckKind.ObstacleClearance,
+        ViolationKind.OutsideAllowedArea => ReviewCheckKind.AllowedAreaFit,
+        ViolationKind.FixedWidthRoad => ReviewCheckKind.FixedWidthRoadFit,
+        _ => ReviewCheckKind.EnvelopeGeneration
+    };
+
+    /// <summary>
+    /// A problem event for a violation that no per-sample metric already describes, spanning the
+    /// violation's own station range and anchored at its worst point.
+    /// </summary>
+    public static VehicleAccessProblemEvent ViolationEvent(
+        ReviewCheckKind check,
+        IReadOnlyList<VehicleAccessMetricSample> samples,
+        AnalysisViolation violation)
+    {
+        if (samples.Count == 0) throw new ArgumentException("At least one sample is required.", nameof(samples));
+        var start = violation.StationMetres;
+        var end = Math.Max(start, violation.EndStationMetres ?? start);
+        var within = samples.Where(sample => sample.StationMetres >= start - 1e-9 && sample.StationMetres <= end + 1e-9).ToArray();
+        var worst = (within.Length > 0 ? within : samples).MinBy(sample => sample.PositionMetres.XY.DistanceTo(violation.PositionMetres.XY))!;
+        return new VehicleAccessProblemEvent(
+            check,
+            start,
+            end,
+            worst.StationMetres,
+            violation.PositionMetres,
+            null,
+            null,
+            violation.Message);
     }
 
     public static IReadOnlyList<VehicleAccessProblemEvent> GroupFailures(

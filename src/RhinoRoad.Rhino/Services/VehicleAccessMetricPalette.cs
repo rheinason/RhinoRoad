@@ -30,6 +30,7 @@ internal static class VehicleAccessMetricPalette
             ReviewMetricKind.SteeringAngle => Limit(review, ReviewCheckKind.SteeringAngle),
             ReviewMetricKind.SteeringRate => Limit(review, ReviewCheckKind.SteeringRate),
             ReviewMetricKind.Grade => Limit(review, ReviewCheckKind.Grade),
+            ReviewMetricKind.FoldAngle => Limit(review, ReviewCheckKind.ArticulationAngle),
             _ => null
         };
         if (limit is > 1e-9) return Risk(Math.Abs(value) / limit.Value);
@@ -51,6 +52,7 @@ internal static class VehicleAccessMetricPalette
         ReviewMetricKind.SteeringRate => sample.SteeringRateRadiansPerSecond * 180.0 / Math.PI,
         ReviewMetricKind.ClearanceOrRoadMargin => sample.ClearanceOrRoadMarginMetres ?? double.NaN,
         ReviewMetricKind.Grade => sample.Grade * 100.0,
+        ReviewMetricKind.FoldAngle => sample.FoldAngleRadians is { } fold ? fold * 180.0 / Math.PI : double.NaN,
         _ => double.NaN
     };
 

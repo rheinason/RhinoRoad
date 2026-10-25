@@ -347,7 +347,7 @@ internal static class ReferenceCertificationService
         }
         var analysis = new VehicleAccessAnalyzer().Analyze(vehicle, mode, route);
         var built = RhinoGeometryBuilder.Build(
-            analysis, route, UnitSystem.Meters, GeometryToleranceMetres, 0.0, 0.0, 0.0, false);
+            analysis, route, UnitSystem.Meters, 0.0, 0.0, 0.0, false);
         var generated = built.BodyEnvelope;
         if (generated is null || !built.BodyEnvelopeMerged)
         {
