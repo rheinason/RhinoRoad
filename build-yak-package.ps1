@@ -74,7 +74,7 @@ foreach ($name in $required) {
 # The Grasshopper components ship beside the plugin. Core and Clipper are already staged above and
 # are shared, so only the .gha and its own runtime metadata are added; Grasshopper.dll, GH_IO.dll
 # and RhinoCommon.dll come from Rhino and must never be staged.
-$grasshopperOutput = Join-Path $repoRoot "src\RhinoRoad.Grasshopperin\$Configuration"
+$grasshopperOutput = Join-Path $repoRoot "src\RhinoRoad.Grasshopperbin\$Configuration"
 foreach ($name in @("RhinoRoad.Grasshopper.gha", "RhinoRoad.Grasshopper.deps.json", "RhinoRoad.Grasshopper.runtimeconfig.json")) {
     $path = Join-Path $grasshopperOutput $name
     if (-not (Test-Path $path)) { throw "Missing required package file '$path'. Build first." }
