@@ -6,8 +6,11 @@ using RhinoRoad.Core;
 
 namespace RhinoRoad.Rhino.Services;
 
-/// <summary>A planned leg ready to draw: the leg, its sweep against the site, and the trailer's fold at its end.</summary>
-internal sealed record LegPreview(PlannedManoeuvreLeg Leg, SweepPreview Sweep, ArticulationChain? Chain);
+/// <summary>
+/// A planned leg ready to draw: the leg, its sweep against the site, the trailer's fold at its end,
+/// and the control that drove its last part, which says what a shortfall on it means.
+/// </summary>
+internal sealed record LegPreview(PlannedManoeuvreLeg Leg, SweepPreview Sweep, ArticulationChain? Chain, ManoeuvreControl Control);
 
 /// <summary>
 /// The committed part of the journey in model units, rebuilt only when a commit or undo changes it
@@ -114,19 +117,13 @@ internal static class InteractiveRouteDrawing
 
         if (planned.RequestedAngleExceeded)
         {
-            // Reversing a combination, the point means where the trailer should end up, so
-            // "steering limit" is the wrong thing to say when it does not get there: the wheel may
-            // be nowhere near its lock and the trailer still unable to be placed.
-            messages.Add(
-                InteractiveCapabilities.PointPlacesTrailer(vehicle, planned.EndState.Direction)
-                    ? "Trailer cannot reach that point from here — pull farther forward or change the turn-away point"
-                    : "Steering limit reached — adjust your aim",
-                Color.OrangeRed);
+            // Reversing a combination, the point means where the trailer should end up, and reversing
+            // into a bay any vehicle has to arrive on it square, so "steering limit" is the wrong thing
+            // to say when it does not get there: the wheel may be nowhere near its lock.
+            messages.Add(ReverseWording.ShortfallWarning(vehicle, preview.Control), Color.OrangeRed);
         }
         if (planned.ExitHeadingUnavailable)
-            messages.Add(
-                "This combination cannot be squared onto an exit direction in reverse — the trailer is aimed at the point instead",
-                Color.Goldenrod);
+            messages.Add(ReverseWording.ExitHeadingUnavailable, Color.Goldenrod);
         if (planned.AimedBehindTheBeam)
             messages.Add(
                 "That point is behind the vehicle — aiming stops at a half turn. Reverse, or hold Ctrl to turn further.",
@@ -240,12 +237,15 @@ internal static class InteractiveRouteDrawing
         }
     }
 
-    /// <summary>The trailer as it would stand docked in the bay being picked, and its axle.</summary>
-    public static void DrawDockedTrailer(
+    /// <summary>
+    /// The docking body -- the trailer, or a rigid vehicle itself -- as it would stand in the bay
+    /// being picked, and its axle.
+    /// </summary>
+    public static void DrawDockedBody(
         DisplayPipeline display, VehicleDefinition vehicle, Point3 axleMetres, double travelHeadingRadians, UnitSystem modelUnits)
     {
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
-        var outline = TrailerBay.DockedOutline(vehicle, axleMetres, travelHeadingRadians)
+        var outline = ReverseBay.DockedOutline(vehicle, axleMetres, travelHeadingRadians)
             .Select(point => new Point3d(point.X * scale, point.Y * scale, axleMetres.Z * scale))
             .ToList();
         if (outline.Count < 3) return;

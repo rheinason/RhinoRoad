@@ -20,6 +20,21 @@ namespace RhinoRoad.Core;
 /// </remarks>
 public static class ReverseBay
 {
+    /// <summary>
+    /// The last control of <paramref name="journey"/> when it is a reverse into a bay -- an aimed
+    /// reverse with a direction -- or null. A journey ending any other way has no bay: a Finish says
+    /// how the route ends rather than where a body stops, and without a direction the point is only
+    /// somewhere to back towards.
+    /// </summary>
+    public static ManoeuvreControl? FinalBay(ManoeuvreDefinition journey)
+    {
+        ArgumentNullException.ThrowIfNull(journey);
+        return journey.Controls.Count > 0 && journey.Controls[^1] is
+            { Direction: TravelDirection.Reverse, Kind: ManoeuvreControlKind.Aim, ExitHeadingRadians: not null } final
+            ? final
+            : null;
+    }
+
     /// <summary>The outline of the body that backs into the bay, in its own axle frame.</summary>
     public static IReadOnlyList<Point2> DockedBodyOutline(VehicleDefinition vehicle)
     {

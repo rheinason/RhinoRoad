@@ -125,13 +125,21 @@ public static class VehicleAccessReviewAnalyzer
     /// The fold the review judges an articulated vehicle against. The one place that limit is chosen.
     /// </summary>
     /// <remarks>
-    /// For now this is the analyzer's jackknife floor for every vehicle, so the review fails exactly
-    /// where the analysis reports a jackknife. A per-unit limit belongs here when one is defined.
+    /// The tightest of the per-unit limits (<see cref="TowedUnitDefinition.MaximumArticulationDegrees"/>),
+    /// which is where the analyzer files its fold-limit violation and where the generator, the planner
+    /// and the area search stop, so the inspector's check fails where the analysis does rather than
+    /// only at the jackknife floor past it. The profile carries the largest fold over all joints, so
+    /// one limit is drawn against it; with every unit on the same limit, as every preset is, that is
+    /// exactly each unit's own. A rigid vehicle has no joint and gets the jackknife floor, which
+    /// nothing it does can reach.
     /// </remarks>
     public static double FoldLimitRadians(VehicleDefinition vehicle)
     {
         ArgumentNullException.ThrowIfNull(vehicle);
-        return VehicleAccessAnalyzer.JackknifeFoldRadians;
+        return vehicle.TowedUnits.Count == 0
+            ? VehicleAccessAnalyzer.JackknifeFoldRadians
+            : Math.Min(VehicleAccessAnalyzer.JackknifeFoldRadians,
+                vehicle.TowedUnits.Min(unit => unit.MaximumArticulationRadians));
     }
 
     /// <summary>The inspector check a violation is filed under.</summary>

@@ -89,7 +89,7 @@ internal static class VehicleAccessReviewService
     }
 
     /// <summary>
-    /// The fold of an articulated combination against its jackknife limit. A rigid vehicle has no
+    /// The fold of an articulated combination against its fold limit. A rigid vehicle has no
     /// joint, so it gets no row rather than an "Off" one it could never turn on.
     /// </summary>
     private static VehicleAccessReviewCheck? ArticulationCheck(PreparedVehicleAccess run)
@@ -195,7 +195,7 @@ internal static class VehicleAccessReviewService
             result.AddRange(VehicleAccessReviewAnalyzer.GroupFailures(
                 ReviewCheckKind.ArticulationAngle, samples, sample => Degrees(sample.FoldAngleRadians ?? 0.0),
                 sample => (sample.FoldAngleRadians ?? 0.0) > fold + 1e-8,
-                Degrees(fold), "The combination folds past the jackknife limit."));
+                Degrees(fold), "The combination folds past its fold limit."));
         }
         AddMarginEvents(result, ReviewCheckKind.ObstacleClearance, samples, obstacle, "Clearance envelope reaches an obstacle.");
         AddMarginEvents(result, ReviewCheckKind.AllowedAreaFit, samples, allowed, "Vehicle clearance reaches outside the allowed area.");

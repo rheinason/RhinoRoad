@@ -32,9 +32,50 @@ public sealed class ReviewArticulationAndRangesTests
     }
 
     [Fact]
-    public void Fold_limit_is_the_analyzer_jackknife_floor()
+    public void Fold_limit_is_the_tightest_units_own_limit()
     {
-        Assert.Equal(VehicleAccessAnalyzer.JackknifeFoldRadians, VehicleAccessReviewAnalyzer.FoldLimitRadians(Catalog.Get("SVT")));
+        var svt = Catalog.Get("SVT");
+        Assert.Equal(svt.TowedUnits[0].MaximumArticulationRadians, VehicleAccessReviewAnalyzer.FoldLimitRadians(svt), 12);
+        Assert.Equal(65.0 * Math.PI / 180.0, VehicleAccessReviewAnalyzer.FoldLimitRadians(svt), 12);
+
+        var pvt = Catalog.Get("PVT");
+        var mixed = pvt with
+        {
+            TowedUnits = [pvt.TowedUnits[0] with { MaximumArticulationDegrees = 50.0 }, .. pvt.TowedUnits.Skip(1)]
+        };
+        Assert.Equal(50.0 * Math.PI / 180.0, VehicleAccessReviewAnalyzer.FoldLimitRadians(mixed), 12);
+        Assert.Equal(VehicleAccessAnalyzer.JackknifeFoldRadians, VehicleAccessReviewAnalyzer.FoldLimitRadians(Catalog.Get("PV")));
+    }
+
+    /// <summary>
+    /// The inspector's fold check and the analyzer's fold-limit violation are judged by one limit, so
+    /// a route past 65 degrees but short of a jackknife fails both rather than only the analysis.
+    /// Both kinds of fold violation are filed under the articulation check.
+    /// </summary>
+    [Fact]
+    public void A_fold_past_the_unit_limit_but_short_of_a_jackknife_fails_the_review_check_too()
+    {
+        var vehicle = Catalog.Get("SVT");
+        var limit = VehicleAccessReviewAnalyzer.FoldLimitRadians(vehicle);
+        RouteSample[] route = [];
+        VehicleAccessResult? result = null;
+        // Tighten a circle until the trailer folds past its limit but not past the jackknife floor.
+        for (var radius = 12.0; radius >= 4.0; radius -= 0.25)
+        {
+            route = Circle(radius, Math.PI, 0.1).ToArray();
+            result = new VehicleAccessAnalyzer().Analyze(vehicle, vehicle.DrivingModes["A"], route);
+            var fold = result.MaximumArticulationAnglesRadians.Max();
+            if (fold > limit && fold <= VehicleAccessAnalyzer.JackknifeFoldRadians) break;
+            result = null;
+        }
+
+        Assert.NotNull(result);
+        var folds = result!.Violations.Where(violation => violation.Kind == ViolationKind.ArticulationAngle).ToArray();
+        Assert.NotEmpty(folds);
+        Assert.All(folds, violation =>
+            Assert.Equal(ReviewCheckKind.ArticulationAngle, VehicleAccessReviewAnalyzer.CheckFor(violation.Kind)));
+        var samples = VehicleAccessReviewAnalyzer.MetricSamples(route, result);
+        Assert.Contains(samples, sample => sample.FoldAngleRadians > limit);
     }
 
     [Fact]

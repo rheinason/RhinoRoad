@@ -549,12 +549,13 @@ internal sealed class JourneyEditForm : Form
     }
 
     /// <summary>
-    /// Places the bay the way it is dimensioned on a site plan: the rear of the trailer, then the way
-    /// it reverses in. The journey stores the trailer axle, which follows from those two, and the
-    /// control line's last vertex moves to it as though its grip had been dragged. The direction is a
-    /// real pick from the rear, so Rhino's ortho and object snaps constrain it as they would a line.
+    /// Places the bay the way it is dimensioned on a site plan: the rear of the docking body -- the
+    /// trailer, or a rigid vehicle itself -- then the way it reverses in. The journey stores that
+    /// body's axle, which follows from those two (see <see cref="ReverseBay"/>), and the control
+    /// line's last vertex moves to it as though its grip had been dragged. The direction is a real
+    /// pick from the rear, so Rhino's ortho and object snaps constrain it as they would a line.
     /// </summary>
-    internal void PickTrailerBay(Action<string> report)
+    internal void PickBay(Action<string> report)
     {
         if (Read() is not { Manoeuvre: { } journey } definition ||
             _document.Objects.FindId(_sourceId)?.Geometry is not Curve controlCurve)
@@ -568,11 +569,8 @@ internal sealed class JourneyEditForm : Form
             return;
         }
         var vehicle = Catalog.Get(definition.VehicleId);
-        if (!vehicle.IsArticulated)
-        {
-            report("Bay placement is for articulated vehicles.");
-            return;
-        }
+        var body = ReverseWording.DockingBody(vehicle);
+        var bayRear = ReverseWording.BayRear(vehicle);
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, _document.ModelUnitSystem);
         var vertices = AccessDefinitionStore.PolylineVertices(controlCurve, _document.ModelUnitSystem);
         if (vertices.Count != journey.Controls.Count + 1)
@@ -582,9 +580,9 @@ internal sealed class JourneyEditForm : Form
         }
         var axleNow = vertices[^1];
         Point3? rearNow = final.ExitHeadingRadians is double headingNow
-            ? TrailerBay.RearFromAxle(vehicle, axleNow, headingNow) : null;
+            ? ReverseBay.RearFromAxle(vehicle, axleNow, headingNow) : null;
 
-        report("In the viewport: click the rear of the trailer at the bay"
+        report($"In the viewport: click {bayRear} at the bay"
             + (rearNow is null ? "." : " (Enter keeps it).")
             + " Then point the way it reverses in; ortho and snaps apply, or type an angle.");
         _document.Objects.UnselectAll();
@@ -592,8 +590,8 @@ internal sealed class JourneyEditForm : Form
         using (var rearPicker = new GetPoint())
         {
             rearPicker.SetCommandPrompt(rearNow is null
-                ? "Pick the rear of the trailer at the bay"
-                : "Pick the rear of the trailer at the bay; Enter keeps the current position");
+                ? $"Pick {bayRear} at the bay"
+                : $"Pick {bayRear} at the bay; Enter keeps the current position");
             rearPicker.AcceptNothing(rearNow is not null);
             if (rearNow is { } current)
                 rearPicker.SetBasePoint(new Point3d(current.X * scale, current.Y * scale, current.Z * scale), true);
@@ -607,39 +605,40 @@ internal sealed class JourneyEditForm : Form
             else
             {
                 RestoreEditSelection();
-                report("Trailer bay unchanged.");
+                report("Bay unchanged.");
                 return;
             }
         }
 
         var pivot = new Point3d(rear.X * scale, rear.Y * scale, rear.Z * scale);
         var picked = JourneyEditPicks.PickDirection(_document, pivot,
-            "Point the way the trailer reverses into the bay, or type an angle from the CPlane",
+            $"Point the way the {body} reverses into the bay, or type an angle from the CPlane",
             allowClear: false,
-            (display, heading) => JourneyEditPicks.DrawDockedTrailer(_document, display, vehicle,
-                TrailerBay.AxleFromRear(vehicle, rear, heading), heading),
+            (display, heading) => JourneyEditPicks.DrawDockedBody(_document, display, vehicle,
+                ReverseBay.AxleFromRear(vehicle, rear, heading), heading),
             out var bayHeading);
         if (picked != DirectionPick.Picked)
         {
             RestoreEditSelection();
-            report("Trailer bay unchanged.");
+            report("Bay unchanged.");
             return;
         }
 
-        var axle = TrailerBay.AxleFromRear(vehicle, rear, bayHeading);
+        var axle = ReverseBay.AxleFromRear(vehicle, rear, bayHeading);
         var controls = journey.Controls.ToArray();
         controls[^1] = final with { ExitHeadingRadians = bayHeading, Kind = ManoeuvreControlKind.Aim };
         _areaSearch.ClearSuggestions();
         var points = vertices.Take(vertices.Count - 1).Append(axle)
             .Select(point => new Point3d(point.X * scale, point.Y * scale, point.Z * scale));
-        if (WriteIntent(definition, journey with { Controls = controls }, "RhinoRoad set trailer bay", new PolylineCurve(points)))
-            report("Trailer bay set. Search to compare approaches, or Save.");
+        if (WriteIntent(definition, journey with { Controls = controls }, "RhinoRoad set bay", new PolylineCurve(points)))
+            report("Bay set. Search to compare approaches, or Save.");
     }
 
     /// <summary>
-    /// Changes the direction a control leaves along. The final reverse into a bay turns about the
-    /// trailer's rear, which stays where it is, so the bay is re-angled rather than moved; any other
-    /// control turns about its own point. Enter clears the direction, returning the leg to a plain aim.
+    /// Changes the direction a control leaves along. The final reverse into a bay turns about the rear
+    /// of the docking body -- the trailer, or a rigid vehicle itself -- which stays where it is, so the
+    /// bay is re-angled rather than moved; any other control turns about its own point. Enter clears
+    /// the direction, returning the leg to a plain aim.
     /// </summary>
     private void PickControlDirection(int index)
     {
@@ -664,28 +663,31 @@ internal sealed class JourneyEditForm : Form
             return;
         }
         var vehicle = Catalog.Get(definition.VehicleId);
-        var bay = index == journey.Controls.Count - 1 && control.Direction == TravelDirection.Reverse && vehicle.IsArticulated;
+        // A Finish says how the route ends rather than where a body stops, so it turns about its point.
+        var bay = index == journey.Controls.Count - 1 &&
+            control is { Direction: TravelDirection.Reverse, Kind: ManoeuvreControlKind.Aim };
         if (bay && control.ExitHeadingRadians is null)
         {
             // Without a direction the stored point is the axle, and the rear is not yet known.
-            PickTrailerBay(message => _controlsStatus.Text = message);
+            PickBay(message => _controlsStatus.Text = message);
             return;
         }
+        var body = ReverseWording.DockingBody(vehicle);
 
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, _document.ModelUnitSystem);
         var point = vertices[index + 1];
-        var rear = bay ? TrailerBay.RearFromAxle(vehicle, point, control.ExitHeadingRadians!.Value) : point;
+        var rear = bay ? ReverseBay.RearFromAxle(vehicle, point, control.ExitHeadingRadians!.Value) : point;
         _controlsStatus.Text = bay
-            ? "In the viewport: point the way the trailer reverses in; it turns about its rear. Ortho and snaps apply, or type an angle. Enter clears it."
+            ? $"In the viewport: point the way the {body} reverses in; it turns about its rear. Ortho and snaps apply, or type an angle. Enter clears it."
             : $"In the viewport: point the way to leave control {index + 1}. Ortho and snaps apply, or type an angle. Enter clears it.";
         _document.Objects.UnselectAll();
         var picked = JourneyEditPicks.PickDirection(_document, new Point3d(rear.X * scale, rear.Y * scale, rear.Z * scale),
             bay
-                ? "Point the way the trailer reverses into the bay, or type an angle from the CPlane; Enter clears it"
+                ? $"Point the way the {body} reverses into the bay, or type an angle from the CPlane; Enter clears it"
                 : $"Point the way to leave control {index + 1}, or type an angle from the CPlane; Enter clears it",
             allowClear: true,
-            bay ? (display, heading) => JourneyEditPicks.DrawDockedTrailer(_document, display, vehicle,
-                    TrailerBay.AxleFromRear(vehicle, rear, heading), heading)
+            bay ? (display, heading) => JourneyEditPicks.DrawDockedBody(_document, display, vehicle,
+                    ReverseBay.AxleFromRear(vehicle, rear, heading), heading)
                 : null,
             out var headingRadians);
         if (picked == DirectionPick.Cancelled)
@@ -700,7 +702,7 @@ internal sealed class JourneyEditForm : Form
         Curve? moved = null;
         if (bay && picked == DirectionPick.Picked)
         {
-            var axle = TrailerBay.AxleFromRear(vehicle, rear, headingRadians);
+            var axle = ReverseBay.AxleFromRear(vehicle, rear, headingRadians);
             moved = new PolylineCurve(vertices.Select((vertex, at) => at == vertices.Count - 1 ? axle : vertex)
                 .Select(vertex => new Point3d(vertex.X * scale, vertex.Y * scale, vertex.Z * scale)));
         }
