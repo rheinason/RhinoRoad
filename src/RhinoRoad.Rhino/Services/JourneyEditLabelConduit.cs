@@ -12,7 +12,7 @@ namespace RhinoRoad.Rhino.Services;
 /// </summary>
 internal sealed class JourneyEditLabelConduit : DisplayConduit
 {
-    private static readonly VehicleCatalog Catalog = VehicleCatalog.LoadEmbedded();
+    private static VehicleCatalog Catalog => RhinoRoadCatalog.Current;
 
     public Guid SourceId { get; set; }
     public int? Highlighted { get; set; }

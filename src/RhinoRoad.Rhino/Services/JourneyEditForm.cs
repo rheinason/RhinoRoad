@@ -29,7 +29,8 @@ namespace RhinoRoad.Rhino.Services;
 /// </remarks>
 internal sealed class JourneyEditForm : Form
 {
-    internal static readonly VehicleCatalog Catalog = VehicleCatalog.LoadEmbedded();
+    // Read at the point of use: the shared catalog reloads when user vehicles are imported.
+    internal static VehicleCatalog Catalog => RhinoRoadCatalog.Current;
 
     private const int PaletteWidth = 360;
     private const int CompactHeight = 600;
