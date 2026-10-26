@@ -30,6 +30,12 @@ internal sealed class VehicleAccessSettings
     public bool DrapeTerrain { get; set; }
     public bool ReplaceExisting { get; set; } = true;
 
+    /// <summary>Bake the wheel-edge traces of each axle-bearing unit.</summary>
+    public bool BakeWheelEdgePaths { get; set; } = true;
+
+    /// <summary>Widen the lead body's front by the mirror allowance; see <see cref="MirrorAllowance"/>.</summary>
+    public bool IncludeMirrorAllowance { get; set; }
+
     /// <summary>
     /// Whether to stop at a transient viewport preview before baking.
     /// </summary>
@@ -71,6 +77,8 @@ internal sealed class VehicleAccessSettings
             CheckAllowedArea = store.GetBool("Road.CheckAllowedArea", CheckAllowedArea);
             DrapeTerrain = store.GetBool("Road.DrapeTerrain", DrapeTerrain);
             ReplaceExisting = store.GetBool("Road.ReplaceExisting", ReplaceExisting);
+            BakeWheelEdgePaths = store.GetBool("Road.BakeWheelEdgePaths", BakeWheelEdgePaths);
+            IncludeMirrorAllowance = store.GetBool("Road.IncludeMirrorAllowance", IncludeMirrorAllowance);
             PreviewBeforeBaking = store.GetBool("Road.PreviewBeforeBaking", PreviewBeforeBaking);
             Footprints = ParseEnum(store.GetString("Road.Footprints", Footprints.ToString()), Footprints);
             FootprintIntervalMetres = store.GetDouble("Road.FootprintIntervalMetres", FootprintIntervalMetres);
@@ -101,6 +109,8 @@ internal sealed class VehicleAccessSettings
             store.SetBool("Road.CheckAllowedArea", CheckAllowedArea);
             store.SetBool("Road.DrapeTerrain", DrapeTerrain);
             store.SetBool("Road.ReplaceExisting", ReplaceExisting);
+            store.SetBool("Road.BakeWheelEdgePaths", BakeWheelEdgePaths);
+            store.SetBool("Road.IncludeMirrorAllowance", IncludeMirrorAllowance);
             store.SetBool("Road.PreviewBeforeBaking", PreviewBeforeBaking);
             store.SetString("Road.Footprints", Footprints.ToString());
             store.SetDouble("Road.FootprintIntervalMetres", FootprintIntervalMetres);

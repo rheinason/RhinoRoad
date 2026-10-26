@@ -101,7 +101,7 @@ internal static class VehicleAccessRunService
                 ? ResolveCurves(document, stored.AllowedBoundaryObjectIds)
                 : Array.Empty<Curve>();
             var analysis = new VehicleAccessAnalyzer().Analyze(
-                vehicle,
+                stored.IncludeMirrorAllowance ? MirrorAllowance.Apply(vehicle) : vehicle,
                 mode,
                 route,
                 stored.CheckMaximumGrade ? stored.MaximumGradePercent / 100.0 : null);
@@ -115,7 +115,9 @@ internal static class VehicleAccessRunService
                 stored.RightWidthMetres,
                 createFixedEdges,
                 stored.FootprintMode == FootprintMode.AtInterval ? stored.FootprintIntervalMetres : 0.0,
-                stored.FootprintMode == FootprintMode.EndsOnly);
+                stored.FootprintMode == FootprintMode.EndsOnly,
+                stored.BakeWheelEdgePaths,
+                stored.IncludeMirrorAllowance);
             if (stored.TerrainObjectId.HasValue)
                 geometry = TerrainDraper.WithDrapedRearTrack(geometry, route, document.ModelUnitSystem);
             var clearance = RhinoGeometryBuilder.CheckClearance(

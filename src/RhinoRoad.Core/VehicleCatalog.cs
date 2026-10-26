@@ -60,6 +60,7 @@ public sealed class VehicleCatalog
         public List<double[]> BodyOutline { get; init; } = [];
         public Dictionary<string, ModeDto> DrivingModes { get; init; } = new(StringComparer.OrdinalIgnoreCase);
         public List<TowedUnitDto> TowedUnits { get; init; } = [];
+        public List<ProtrusionDto> Protrusions { get; init; } = [];
         public VehicleSource Source { get; init; } = new(string.Empty, string.Empty, string.Empty, string.Empty, string.Empty);
         public ValidationStatus ValidationStatus { get; init; }
         public string ValidationNotes { get; init; } = string.Empty;
@@ -80,7 +81,8 @@ public sealed class VehicleCatalog
             ValidationStatus,
             ValidationNotes)
         {
-            TowedUnits = TowedUnits.Select(unit => unit.ToDefinition()).ToArray()
+            TowedUnits = TowedUnits.Select(unit => unit.ToDefinition()).ToArray(),
+            Protrusions = Protrusions.Select(protrusion => protrusion.ToDefinition()).ToArray()
         };
     }
 
@@ -94,6 +96,7 @@ public sealed class VehicleCatalog
         public double AxleTrackMetres { get; init; }
         public double TyreWidthMetres { get; init; }
         public List<double[]> BodyOutline { get; init; } = [];
+        public List<ProtrusionDto> Protrusions { get; init; } = [];
 
         public TowedUnitDefinition ToDefinition() => new(
             Id,
@@ -103,7 +106,26 @@ public sealed class VehicleCatalog
             WidthMetres,
             AxleTrackMetres,
             TyreWidthMetres,
-            BodyOutline.Select(point => new Point2(point[0], point[1])).ToArray());
+            BodyOutline.Select(point => new Point2(point[0], point[1])).ToArray())
+        {
+            Protrusions = Protrusions.Select(protrusion => protrusion.ToDefinition()).ToArray()
+        };
+    }
+
+    private sealed class ProtrusionDto
+    {
+        public string Id { get; init; } = string.Empty;
+        public string Name { get; init; } = string.Empty;
+        public List<double[]> Outline { get; init; } = [];
+        public double? MinHeightMetres { get; init; }
+        public double? MaxHeightMetres { get; init; }
+
+        public ProtrusionDefinition ToDefinition() => new(
+            Id,
+            Name,
+            Outline.Select(point => new Point2(point[0], point[1])).ToArray(),
+            MinHeightMetres,
+            MaxHeightMetres);
     }
 
     private sealed class ModeDto

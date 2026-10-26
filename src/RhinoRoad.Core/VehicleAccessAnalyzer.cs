@@ -93,7 +93,8 @@ public sealed class VehicleAccessAnalyzer
                 sample.Direction,
                 footprint)
             {
-                TowedUnits = towedPoses
+                TowedUnits = towedPoses,
+                ProtrusionOutlinesWorldMetres = ProtrusionOutlines(vehicle, rear, vehicleHeading, towedPoses)
             });
 
             maximumSteering = Math.Max(maximumSteering, Math.Abs(steering));
@@ -180,6 +181,24 @@ public sealed class VehicleAccessAnalyzer
             TowedAxleTracksMetres = towedTracks.Select(track => (IReadOnlyList<Point2>)track).ToArray(),
             MaximumArticulationAnglesRadians = maximumFolds
         };
+    }
+
+    /// <summary>World outlines of every unit's protrusions at one pose; empty when no unit declares any.</summary>
+    private static IReadOnlyList<IReadOnlyList<Point2>> ProtrusionOutlines(
+        VehicleDefinition vehicle,
+        Point2 rear,
+        double vehicleHeading,
+        IReadOnlyList<TowedUnitPose> towed)
+    {
+        var outlines = new List<IReadOnlyList<Point2>>();
+        foreach (var protrusion in vehicle.Protrusions)
+            outlines.Add(protrusion.Outline.Select(point => Geometry2D.Transform(point, rear, vehicleHeading)).ToArray());
+        for (var unit = 0; unit < towed.Count; unit++)
+            foreach (var protrusion in vehicle.TowedUnits[unit].Protrusions)
+                outlines.Add(protrusion.Outline
+                    .Select(point => Geometry2D.Transform(point, towed[unit].AxleCentreMetres, towed[unit].HeadingRadians))
+                    .ToArray());
+        return outlines;
     }
 
     private static IReadOnlyList<AnalysisViolation> CoalesceViolations(IReadOnlyList<AnalysisViolation> violations)

@@ -40,6 +40,9 @@ internal static class RhinoOutputWriter
             ids.Add(AddCurve(output, geometry.FrontAxleTrack, "WheelTracks", "Front axle track", Color.CornflowerBlue));
             foreach (var track in geometry.TowedAxleTracks)
                 ids.Add(AddCurve(output, track, "WheelTracks", "Towed axle track", Color.SteelBlue));
+            // Same layer and scheme as the axle tracks, so replacement and culling treat them alike.
+            foreach (var wheel in geometry.WheelEdgeTracks)
+                ids.Add(AddCurve(output, wheel.Curve, "WheelTracks", wheel.Name, Color.MediumSlateBlue));
             if (geometry.BodyEnvelope is not null)
                 ids.Add(AddCurve(output, geometry.BodyEnvelope, "Swept", "Body swept envelope", Color.DarkOrange));
             if (geometry.ClearanceEnvelope is not null)
@@ -221,6 +224,7 @@ internal static class RhinoOutputWriter
         lines.Add($"Vehicle: {result.Vehicle.Name} ({result.Vehicle.Id} v{result.Vehicle.Version})");
         lines.Add($"Mode: {result.DrivingMode.Name}");
         lines.Add($"Clearance: {output.ClearanceMetres:0.00} m");
+        if (geometry.MirrorAllowance) lines.Add(MirrorAllowance.Basis);
         lines.Add($"Validation: {status}");
         lines.Add($"Date: {DateTime.Now:yyyy-MM-dd}");
 

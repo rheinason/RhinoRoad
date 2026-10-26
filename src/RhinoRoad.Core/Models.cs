@@ -60,8 +60,12 @@ public sealed record TowedUnitDefinition(
     public double RearWheelInnerEdgeOffsetMetres => (AxleTrackMetres - TyreWidthMetres) * 0.5;
     public double WheelOuterEdgeOffsetMetres => (AxleTrackMetres + TyreWidthMetres) * 0.5;
 
+    /// <summary>Mirrors, steps and the like beyond the body outline, in this unit's frame. Optional.</summary>
+    public IReadOnlyList<ProtrusionDefinition> Protrusions { get; init; } = [];
+
     public void Validate(string vehicleId)
     {
+        foreach (var protrusion in Protrusions) protrusion.Validate($"{vehicleId}/{Id}");
         if (string.IsNullOrWhiteSpace(Id)) throw new InvalidDataException($"{vehicleId}: a towed unit is missing its id.");
         if (WheelbaseMetres <= 0.0) throw new InvalidDataException($"{vehicleId}/{Id}: wheelbase must be positive.");
         if (WidthMetres <= 0.0) throw new InvalidDataException($"{vehicleId}/{Id}: width must be positive.");
@@ -95,6 +99,9 @@ public sealed record VehicleDefinition(
     /// semitrailer, two for a drawbar combination whose dolly and body pivot separately.
     /// </summary>
     public IReadOnlyList<TowedUnitDefinition> TowedUnits { get; init; } = [];
+
+    /// <summary>Mirrors, steps and the like beyond the lead body outline, in its frame. Optional.</summary>
+    public IReadOnlyList<ProtrusionDefinition> Protrusions { get; init; } = [];
 
     public bool IsArticulated => TowedUnits.Count > 0;
 
@@ -158,6 +165,7 @@ public sealed record VehicleDefinition(
             }
         }
 
+        foreach (var protrusion in Protrusions) protrusion.Validate(Id);
         foreach (var unit in TowedUnits) unit.Validate(Id);
     }
 }
@@ -197,17 +205,20 @@ public sealed record VehiclePose(
     /// <summary>Towed units at this pose, nearest first. Empty for a rigid vehicle.</summary>
     public IReadOnlyList<TowedUnitPose> TowedUnits { get; init; } = [];
 
+    /// <summary>World outlines of the protrusions of every unit, when it has any.</summary>
+    public IReadOnlyList<IReadOnlyList<Point2>> ProtrusionOutlinesWorldMetres { get; init; } = [];
+
     /// <summary>
     /// Every closed outline this pose occupies. Clearance, containment and envelope work all read
     /// this rather than <see cref="BodyOutlineWorldMetres"/>: a trailer that is not in the list is
     /// a trailer the check silently drives through obstacles.
     /// </summary>
     public IReadOnlyList<IReadOnlyList<Point2>> OccupiedOutlinesWorldMetres =>
-        TowedUnits.Count == 0
+        TowedUnits.Count == 0 && ProtrusionOutlinesWorldMetres.Count == 0
             ? [BodyOutlineWorldMetres]
             : [BodyOutlineWorldMetres, .. TowedUnits
                 .Select(unit => unit.BodyOutlineWorldMetres)
-                .Where(outline => outline.Count >= 3)];
+                .Where(outline => outline.Count >= 3), .. ProtrusionOutlinesWorldMetres];
 }
 
 public enum ViolationKind

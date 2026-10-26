@@ -93,7 +93,9 @@ public sealed record VehicleAccessDefinition(
     IReadOnlyDictionary<Guid, string> ReferenceFingerprints,
     string SourceFingerprint,
     string AnalysisId,
-    Guid? TerrainObjectId = null)
+    Guid? TerrainObjectId = null,
+    bool BakeWheelEdgePaths = true,
+    bool IncludeMirrorAllowance = false)
 {
     public const int CurrentSchemaVersion = 1;
 }

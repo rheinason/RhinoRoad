@@ -30,6 +30,8 @@ internal static class AccessDefinitionSettings
         settings.FootprintIntervalMetres = definition.FootprintIntervalMetres;
         settings.PreviewBeforeBaking = definition.PreviewBeforeBaking;
         settings.ReplaceExisting = definition.ReplaceExisting;
+        settings.BakeWheelEdgePaths = definition.BakeWheelEdgePaths;
+        settings.IncludeMirrorAllowance = definition.IncludeMirrorAllowance;
     }
 
     public static VehicleAccessDefinition WithSettings(
@@ -59,7 +61,9 @@ internal static class AccessDefinitionSettings
             FootprintMode = settings.Footprints,
             FootprintIntervalMetres = settings.FootprintIntervalMetres,
             PreviewBeforeBaking = settings.PreviewBeforeBaking,
-            ReplaceExisting = settings.ReplaceExisting
+            ReplaceExisting = settings.ReplaceExisting,
+            BakeWheelEdgePaths = settings.BakeWheelEdgePaths,
+            IncludeMirrorAllowance = settings.IncludeMirrorAllowance
         };
     }
 }
