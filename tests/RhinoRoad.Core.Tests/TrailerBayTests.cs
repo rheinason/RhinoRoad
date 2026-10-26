@@ -45,4 +45,63 @@ public sealed class TrailerBayTests
         Assert.Throws<ArgumentException>(() => TrailerBay.RearOverhangMetres(bus));
         Assert.Empty(TrailerBay.DockedOutline(bus, new Point3(0, 0, 0), 0.0));
     }
+
+    /// <summary>
+    /// A rigid vehicle's bay is picked the same way, by the rear of its body, and stored by its rear
+    /// axle — the point the rigid reverse steers. The distance between them is the published rear
+    /// overhang.
+    /// </summary>
+    [Theory]
+    [InlineData("PV")]
+    [InlineData("REN")]
+    [InlineData("LV12")]
+    [InlineData("BUS12")]
+    [InlineData("BUS13")]
+    [InlineData("BUS15")]
+    public void ARigidBayIsTheRearOfTheBodyAndTheRearAxleBehindIt(string id)
+    {
+        var vehicle = VehicleCatalog.LoadEmbedded().Get(id);
+        var heading = -Math.PI / 2.0;
+        var rear = new Point3(7, -12, 0);
+
+        var axle = ReverseBay.AxleFromRear(vehicle, rear, heading);
+        var outline = ReverseBay.DockedOutline(vehicle, axle, heading);
+        var travel = new Point2(Math.Cos(heading), Math.Sin(heading));
+
+        Assert.Equal(vehicle.RearOverhangMetres, ReverseBay.RearOverhangMetres(vehicle), 9);
+        Assert.Equal(rear.Y + vehicle.RearOverhangMetres, axle.Y, 9);
+        Assert.Equal(0.0, rear.XY.DistanceTo(ReverseBay.RearFromAxle(vehicle, axle, heading).XY), 9);
+        Assert.Equal((rear.X * travel.X) + (rear.Y * travel.Y),
+            outline.Max(point => (point.X * travel.X) + (point.Y * travel.Y)), 9);
+    }
+
+    [Fact]
+    public void ForATrailerTheGeneralBayIsTheTrailerBay()
+    {
+        var rear = new Point3(50, -29, 0);
+
+        Assert.Equal(TrailerBay.AxleFromRear(Svt, rear, 0.4), ReverseBay.AxleFromRear(Svt, rear, 0.4));
+        Assert.Equal(TrailerBay.DockedOutline(Svt, rear, 0.4), ReverseBay.DockedOutline(Svt, rear, 0.4));
+    }
+
+    /// <summary>
+    /// Where the docking body stands at the end of a route: the trailer, placed from the route's
+    /// history, or for a rigid vehicle the end state itself.
+    /// </summary>
+    [Fact]
+    public void TheDockedPoseIsTheTrailerForACombinationAndTheBodyForARigidVehicle()
+    {
+        var bus = VehicleCatalog.LoadEmbedded().Get("BUS12");
+        var end = new VehicleState(new(3, 4, 0), 0.5, 0.0, TravelDirection.Reverse, 0.0);
+        var busRoute = new[] { ManoeuvreReplayService.StateSample(end, bus) };
+        Assert.Equal((new Point2(3, 4), 0.5), ReverseBay.DockedPose(bus, busRoute, end));
+        var miss = ReverseBay.Miss(bus, busRoute, end, new Point2(3, 5), 0.5 + Math.PI);
+        Assert.Equal(1.0, miss.PositionMetres, 9);
+        Assert.Equal(0.0, miss.HeadingRadians!.Value, 9);
+
+        var svtRoute = new[] { ManoeuvreReplayService.StateSample(end, Svt) };
+        var (axle, facing) = ReverseBay.DockedPose(Svt, svtRoute, end);
+        Assert.Equal(8.9 - 0.6, end.RearAxleCentreMetres.XY.DistanceTo(axle), 9);
+        Assert.Equal(0.5, facing, 9);
+    }
 }

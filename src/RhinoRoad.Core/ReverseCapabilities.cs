@@ -13,8 +13,9 @@ public static class ReverseCapabilities
 {
     /// <summary>
     /// Whether a reverse carrying an exit heading arrives on the point <em>and</em> square to it. True
-    /// for rigid vehicles and single-joint combinations. When false the reverse is aimed at the point
-    /// and the leg reports <see cref="PlannedManoeuvreLeg.ExitHeadingUnavailable"/>.
+    /// for rigid vehicles and for combinations of one or two joints (SVT, PVT). When false — a chain
+    /// of three joints or more — the reverse is aimed at the point and the leg reports
+    /// <see cref="PlannedManoeuvreLeg.ExitHeadingUnavailable"/>.
     /// </summary>
     public static bool CanDock(VehicleDefinition vehicle) => ReverseDocking.CanDock(vehicle);
 

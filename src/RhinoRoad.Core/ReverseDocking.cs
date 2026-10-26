@@ -25,8 +25,10 @@ public delegate ReverseLeg ReverseDockingSolver(
 /// Everything that docks goes through here — the interactive preview, the committed leg, the replay
 /// of a saved journey, the planner and the area search — so a vehicle gains docking everywhere at
 /// once by gaining a solver in <see cref="SolverFor"/>, and nothing else needs to know which one it
-/// got. A vehicle with no solver is aimed at the point instead, and the leg says the heading was not
-/// honoured rather than quietly dropping it.
+/// got: a rigid vehicle follows the approach line with its rear axle, a semitrailer with its
+/// trailer's, and a two-joint chain is planned by simulation. A vehicle with no solver is aimed at
+/// the point instead (<see cref="Aim"/>), and the leg says the heading was not honoured rather than
+/// quietly dropping it.
 /// </para>
 /// <para>
 /// Every solver here must be deterministic — no wall-clock budget, no randomness — because the leg
@@ -46,10 +48,39 @@ public static class ReverseDocking
             0 => static (rigid, mode, start, _, target, exit, step, standstill) =>
                 RigidReverseGenerator.DockInAvailableSpace(rigid, mode, start, target, exit, step, standstill),
             1 => TrailerReverseGenerator.DockTowedUnitInAvailableSpace,
-            // Two joints and more: see TrailerReverseGenerator.CanDock for why the single-joint law
-            // does not hold. A multi-joint solver plugs in here as one more arm.
+            // Two joints defeat the single-joint feedback cascade (see TrailerReverseGenerator.CanDock),
+            // so the leg is planned by simulation instead. Longer chains are not measured, so they
+            // are aimed rather than trusted to dock.
+            2 => MultiJointReverseDocking.Dock,
             _ => null
         };
+    }
+
+    /// <summary>
+    /// Reverses a combination until its last unit's axle reaches <paramref name="targetMetres"/>, at
+    /// whatever heading suits: the reverse without a heading, and the fallback for a heading this
+    /// vehicle cannot be docked onto. A rigid vehicle is aimed the ordinary way, by its own rear axle,
+    /// and does not come here.
+    /// </summary>
+    public static ReverseLeg Aim(
+        VehicleDefinition vehicle,
+        DrivingModeDefinition mode,
+        VehicleState start,
+        ArticulationChain chain,
+        Point2 targetMetres,
+        double maximumStepMetres = 0.10,
+        bool wheelSetAtStandstill = false)
+    {
+        ArgumentNullException.ThrowIfNull(vehicle);
+        if (!vehicle.IsArticulated)
+            throw new ArgumentException("A rigid vehicle is aimed by its own rear axle.", nameof(vehicle));
+        // More than one joint defeats the feedback cascade even for a point, so those chains are
+        // planned rather than steered.
+        return MultiJointReverseDocking.Handles(vehicle)
+            ? MultiJointReverseDocking.Aim(vehicle, mode, start, chain, targetMetres, maximumStepMetres,
+                wheelSetAtStandstill)
+            : TrailerReverseGenerator.AimTowedUnit(vehicle, mode, start, chain, targetMetres,
+                maximumStepMetres, wheelSetAtStandstill: wheelSetAtStandstill);
     }
 
     /// <summary>Whether a reverse with an exit heading arrives square for this vehicle.</summary>

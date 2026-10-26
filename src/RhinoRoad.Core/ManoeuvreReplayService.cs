@@ -97,7 +97,7 @@ public static class ManoeuvreReplayService
                 ? ReverseDocking.Dock(
                     vehicle, mode, state, chain, target, control.ExitHeadingRadians!.Value, StepMetres,
                     wheelSetAtStandstill: standstill)
-                : TrailerReverseGenerator.AimTowedUnit(
+                : ReverseDocking.Aim(
                     vehicle, mode, state, chain, target, StepMetres, wheelSetAtStandstill: standstill);
             return new PlannedManoeuvreLeg(
                 route.Count - 1,

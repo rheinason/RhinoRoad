@@ -93,6 +93,34 @@ public sealed class TrailerReverseTests
         Assert.DoesNotContain(analysis.Violations, item => item.Kind == ViolationKind.ArticulationAngle);
     }
 
+    /// <summary>
+    /// The trailer the cascade steers is the trailer the analyzer, the preview and replay walk, to
+    /// the last digit. It was not: the cascade advanced its chain from the step length and the raw
+    /// heading change, the trace from the sample positions and path headings, and reversing
+    /// amplified the rounding between them into centimetres for SVT and metres for PVT.
+    /// </summary>
+    [Theory]
+    [InlineData(40.0, 12.0, false)]
+    [InlineData(60.0, 8.0, false)]
+    [InlineData(60.0, 8.0, true)]
+    [InlineData(80.0, 12.0, true)]
+    public void TheSteeredChainIsTheChainTheAnalyzerWalks(double back, double across, bool dock)
+    {
+        var vehicle = Catalog.Get("SVT");
+        var mode = vehicle.DrivingModes["B"];
+        var start = new VehicleState(new(0, 0, 0), 0.0, 0.0, TravelDirection.Reverse, 0.0);
+        var target = new Point2(TrailerStart(vehicle) - back, across);
+        var chain = ArticulationChain.StartAligned(vehicle, 0.0);
+
+        var leg = dock
+            ? TrailerReverseGenerator.DockTowedUnit(vehicle, mode, start, chain, target, Math.PI)
+            : TrailerReverseGenerator.AimTowedUnit(vehicle, mode, start, chain, target);
+        var walked = ArticulationTrace.AtEndOf(vehicle, leg.Samples)!;
+
+        Assert.True(leg.Samples.Count > 100);
+        Assert.Equal(walked.HeadingsRadians, leg.EndChain.HeadingsRadians);
+    }
+
     [Fact]
     public void ReversingDeadStraightLeavesTheTrailerStraight()
     {
@@ -424,33 +452,37 @@ public sealed class TrailerReverseTests
     }
 
     /// <summary>
-    /// Docking is a single-joint capability, and the boundary is enforced rather than discovered.
-    /// A two-joint chain is aimed at the point instead, and says the heading was not honoured.
+    /// The line-following law docks one joint only, and the boundary is enforced rather than
+    /// discovered. A two-joint chain is docked by the planner instead, so the same control honours
+    /// the heading on both presets.
     /// </summary>
     [Fact]
-    public void ATwoJointCombinationIsAimedRatherThanDockedAndSaysSo()
+    public void ATwoJointCombinationIsDockedByThePlannerRatherThanTheLineFollowingLaw()
     {
         var svt = Catalog.Get("SVT");
         var pvt = Catalog.Get("PVT");
         Assert.True(TrailerReverseGenerator.CanDock(svt));
-        Assert.False(TrailerReverseGenerator.CanDock(pvt));
+        Assert.True(TrailerReverseGenerator.CanDock(pvt));
         Assert.Throws<ArgumentException>(() => DockAt(pvt, new Point2(-40, 8), 180.0));
 
         var mode = pvt.DrivingModes["B"];
         var start = new VehicleState(new(0, 0, 0), 0.0, 0.0, TravelDirection.Reverse, 0.0);
         var route = new List<RouteSample> { ManoeuvreReplayService.StateSample(start, pvt) };
+        var target = new Point2(pvt.StraightAxleOffsetsMetres[^1] - 35.0, 6.0);
         var control = new ManoeuvreControl(
-            new(pvt.StraightAxleOffsetsMetres[^1] - 35.0, 6.0, 0.0),
+            new(target.X, target.Y, 0.0),
             TravelDirection.Reverse,
             ManoeuvreControlKind.Aim,
             Math.PI);
 
         var planned = ManoeuvreReplayService.PlanControl(pvt, mode, route, 0, start, control);
+        var trailer = Analyzer.Analyze(pvt, mode, planned.Samples).Poses[^1].TowedUnits[^1];
 
-        Assert.True(planned.ExitHeadingUnavailable);
-        Assert.True(planned.Samples.Count > 1);
+        Assert.False(planned.ExitHeadingUnavailable);
+        Assert.False(planned.RequestedAngleExceeded);
+        Assert.True(trailer.AxleCentreMetres.DistanceTo(target) <= TrailerReversePlanner.ArrivalToleranceMetres);
+        Assert.True(SquarenessDegrees(trailer, 180.0) <= TrailerReversePlanner.ArrivalToleranceDegrees);
 
-        // The same control on a chain that can be docked honours the heading instead.
         var svtRoute = new List<RouteSample> { ManoeuvreReplayService.StateSample(start, svt) };
         var svtPlanned = ManoeuvreReplayService.PlanControl(
             svt, svt.DrivingModes["B"], svtRoute, 0, start,

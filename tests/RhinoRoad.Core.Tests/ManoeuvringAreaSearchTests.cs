@@ -91,6 +91,43 @@ public sealed class ManoeuvringAreaSearchTests
         Assert.True(result.OutsideYard > 0);
     }
 
+    /// <summary>
+    /// A rigid vehicle is searched the same way: a car turning away from a perpendicular bay and
+    /// backing in, moved around a yard for the least clear area, every suggestion still arriving in
+    /// the fixed bay and replaying as ordinary controls.
+    /// </summary>
+    [Fact]
+    public void ARigidVehicleIsSearchedLikeACombination()
+    {
+        var vehicle = VehicleCatalog.LoadEmbedded().Get("PV");
+        var mode = vehicle.DrivingModes["B"];
+        var start = new VehicleState(new(-15, 0, 0), 0, 0, TravelDirection.Forward, 0);
+        var turn = new ManoeuvreControl(new(5.5, 1.5, 0), TravelDirection.Forward);
+        var route = new List<RouteSample> { ManoeuvreReplayService.StateSample(start, vehicle) };
+        var forward = ManoeuvreReplayService.PlanControl(vehicle, mode, route, 0, start, turn);
+        route.AddRange(forward.Samples.Skip(1));
+        var bay = ReverseBay.AxleFromRear(vehicle, new Point3(0, -8.8, 0), -Math.PI / 2.0);
+        var reverse = ReversePlanner.Find(vehicle, mode, route, 0, forward.EndState, bay, -Math.PI / 2.0);
+        Assert.True(reverse.ReachedTarget);
+        var journey = new ManoeuvreDefinition(1, start.RearAxleCentreMetres, 0,
+            TravelDirection.Forward, new[] { turn }.Concat(reverse.Controls).ToArray());
+        Point2[] yard = [new(-30, -15), new(30, -15), new(30, 15), new(-30, 15)];
+
+        var result = ManoeuvringAreaSearch.Find(vehicle, mode, journey, 0, yard, [],
+            0.30, TimeSpan.FromSeconds(3));
+
+        Assert.NotNull(result.Current);
+        Assert.NotEmpty(result.Suggestions);
+        Assert.True(result.Suggestions[0].ClearAreaSquareMetres <= result.Current.ClearAreaSquareMetres + 1e-6);
+        foreach (var candidate in result.Suggestions)
+        {
+            Assert.True(candidate.PositionErrorMetres <= ReversePlanner.ArrivalToleranceMetres);
+            Assert.True(candidate.HeadingErrorDegrees <= ReversePlanner.ArrivalToleranceDegrees);
+            Assert.Equal(candidate.Route, ManoeuvreReplayService.Replay(vehicle, mode, candidate.Manoeuvre).Samples);
+            Assert.Equal(bay, candidate.Manoeuvre.Controls[^1].PositionMetres);
+        }
+    }
+
     [Fact]
     public void AreaMeasureClipsTheFootprintToTheSelectedYard()
     {
