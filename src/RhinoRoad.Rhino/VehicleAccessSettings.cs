@@ -25,6 +25,9 @@ internal sealed class VehicleAccessSettings
     public bool CheckObstacles { get; set; }
     public bool CheckAllowedArea { get; set; }
     public bool ReselectReferences { get; set; }
+
+    /// <summary>Whether the route's elevations are taken from a selected terrain.</summary>
+    public bool DrapeTerrain { get; set; }
     public bool ReplaceExisting { get; set; } = true;
 
     /// <summary>
@@ -66,6 +69,7 @@ internal sealed class VehicleAccessSettings
             MaximumGradePercent = store.GetDouble("Road.MaximumGradePercent", MaximumGradePercent);
             CheckObstacles = store.GetBool("Road.CheckObstacles", CheckObstacles);
             CheckAllowedArea = store.GetBool("Road.CheckAllowedArea", CheckAllowedArea);
+            DrapeTerrain = store.GetBool("Road.DrapeTerrain", DrapeTerrain);
             ReplaceExisting = store.GetBool("Road.ReplaceExisting", ReplaceExisting);
             PreviewBeforeBaking = store.GetBool("Road.PreviewBeforeBaking", PreviewBeforeBaking);
             Footprints = ParseEnum(store.GetString("Road.Footprints", Footprints.ToString()), Footprints);
@@ -95,6 +99,7 @@ internal sealed class VehicleAccessSettings
             store.SetDouble("Road.MaximumGradePercent", MaximumGradePercent);
             store.SetBool("Road.CheckObstacles", CheckObstacles);
             store.SetBool("Road.CheckAllowedArea", CheckAllowedArea);
+            store.SetBool("Road.DrapeTerrain", DrapeTerrain);
             store.SetBool("Road.ReplaceExisting", ReplaceExisting);
             store.SetBool("Road.PreviewBeforeBaking", PreviewBeforeBaking);
             store.SetString("Road.Footprints", Footprints.ToString());

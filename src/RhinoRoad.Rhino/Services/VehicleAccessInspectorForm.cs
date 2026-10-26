@@ -24,6 +24,17 @@ internal sealed class VehicleAccessInspectorForm : Form
     private readonly VehicleAccessReviewConduit _conduit = new();
     private readonly Label _readout = new() { Text = "Move across the graph to locate it on the road." };
     private readonly UITimer _timer = new() { Interval = 0.5 };
+    // Playback: a fast timer that only runs while playing, so the freshness poll stays at 0.5 s.
+    private readonly UITimer _playTimer = new() { Interval = 0.04 };
+    private readonly System.Diagnostics.Stopwatch _playClock = new();
+    private readonly Slider _scrub = new() { MinValue = 0, MaxValue = ScrubSteps, Value = 0 };
+    private readonly Button _play = new() { Text = "Play" };
+    private readonly DropDown _speed = new();
+    private double _scrubStation;
+    private bool _scrubActive;
+    private bool _settingScrub;
+    private double? _hoverStation;
+    private const int ScrubSteps = 1000;
     private RhinoObject? _source;
     private VehicleAccessDefinition? _definition;
     private VehicleAccessReviewSnapshot? _snapshot;
@@ -60,9 +71,43 @@ internal sealed class VehicleAccessInspectorForm : Form
         };
         _profile.HoverStationChanged += (_, station) =>
         {
+            _hoverStation = station;
             _conduit.HoveredStation = station;
-            _readout.Text = Readout(station);
+            _readout.Text = Readout(station ?? (_scrubActive ? _scrubStation : null));
             _document.Views.Redraw();
+        };
+        _profile.StationClicked += (_, station) =>
+        {
+            StopPlayback();
+            SetScrubStation(station);
+        };
+        foreach (var (key, text) in new[]
+                 { ("x1", "1× real time"), ("x5", "5× real time"), ("x20", "20× real time"), ("m2", "2 m/s"), ("m10", "10 m/s") })
+            _speed.Items.Add(new ListItem { Key = key, Text = text });
+        _speed.SelectedKey = "x5";
+        _scrub.ValueChanged += (_, _) =>
+        {
+            if (_settingScrub || _snapshot is null) return;
+            StopPlayback();
+            SetScrubStation(_scrub.Value / (double)ScrubSteps * _snapshot.Review.RouteLengthMetres);
+        };
+        _play.Click += (_, _) => TogglePlayback();
+        _playTimer.Elapsed += (_, _) => PlaybackTick();
+        var stepBack = new Button { Text = "◀ 1 m" };
+        stepBack.Click += (_, _) => { StopPlayback(); StepStation(-1.0); };
+        var stepForward = new Button { Text = "1 m ▶" };
+        stepForward.Click += (_, _) => { StopPlayback(); StepStation(1.0); };
+        var trailToggle = new CheckBox { Text = "Show swept trail" };
+        trailToggle.CheckedChanged += (_, _) =>
+        {
+            _conduit.ShowSweptTrail = trailToggle.Checked == true;
+            _document.Views.Redraw();
+        };
+        // Arrow keys step whenever the inspector has focus and no control claims them.
+        KeyDown += (_, e) =>
+        {
+            if (e.Key == Keys.Left) { StopPlayback(); StepStation(-1.0); e.Handled = true; }
+            else if (e.Key == Keys.Right) { StopPlayback(); StepStation(1.0); e.Handled = true; }
         };
 
         var pick = new Button { Text = "Pick" };
@@ -105,7 +150,21 @@ internal sealed class VehicleAccessInspectorForm : Form
                 {
                     Spacing = 5,
                     HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                    Items = { _metric, _profile, _readout }
+                    Items =
+                    {
+                        _metric,
+                        _profile,
+                        _scrub,
+                        new StackLayout
+                        {
+                            Orientation = Orientation.Horizontal,
+                            Spacing = 6,
+                            VerticalContentAlignment = VerticalAlignment.Center,
+                            Items = { stepBack, _play, stepForward, _speed }
+                        },
+                        trailToggle,
+                        _readout
+                    }
                 }),
                 new StackLayout { Orientation = Orientation.Horizontal, Spacing = 6, Items = { edit, measure } },
                 Group("Problem areas", _events),
@@ -143,6 +202,7 @@ internal sealed class VehicleAccessInspectorForm : Form
         Closed += (_, _) =>
         {
             _timer.Stop();
+            StopPlayback();
             _conduit.Enabled = false;
             _document.Views.Redraw();
         };
@@ -195,9 +255,18 @@ internal sealed class VehicleAccessInspectorForm : Form
     {
         _snapshot = snapshot;
         RebuildMetrics(snapshot?.Review.Samples.Any(sample => sample.FoldAngleRadians.HasValue) == true);
+        StopPlayback();
         _conduit.SetSnapshot(snapshot);
         _profile.SetReview(snapshot?.Review);
         _conduit.HoveredStation = null;
+        _hoverStation = null;
+        _conduit.ScrubStation = null;
+        _scrubActive = false;
+        _scrubStation = 0.0;
+        _settingScrub = true;
+        _scrub.Value = 0;
+        _settingScrub = false;
+        _scrub.Enabled = _play.Enabled = snapshot is not null;
         _readout.Text = snapshot is null
             ? "No review data."
             : "Move across the graph to locate it on the road.";
@@ -385,6 +454,8 @@ internal sealed class VehicleAccessInspectorForm : Form
     {
         if (item is null || _snapshot is null) return;
         _conduit.SelectedEvent = item;
+        StopPlayback();
+        SetScrubStation(item.WorstStationMetres);
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, _document.ModelUnitSystem);
         var poses = _snapshot.Run.Analysis.Poses.Where(pose =>
             pose.StationMetres >= item.StartStationMetres - 0.1 && pose.StationMetres <= item.EndStationMetres + 0.1).ToArray();
@@ -400,18 +471,80 @@ internal sealed class VehicleAccessInspectorForm : Form
         _document.Views.Redraw();
     }
 
+    /// <summary>Moves the slider's station: the marker, pose, trail and readout all follow it.</summary>
+    private void SetScrubStation(double station)
+    {
+        if (_snapshot is null) return;
+        var length = _snapshot.Review.RouteLengthMetres;
+        _scrubStation = StationPlayback.Clamp(station, length);
+        _scrubActive = true;
+        _conduit.ScrubStation = _scrubStation;
+        _profile.ScrubStation = _scrubStation;
+        _settingScrub = true;
+        _scrub.Value = length > 1e-9 ? (int)Math.Round(_scrubStation / length * ScrubSteps) : 0;
+        _settingScrub = false;
+        // Hover wins while the mouse is on the graph; the slider's station shows again when it leaves.
+        _readout.Text = Readout(_hoverStation ?? _scrubStation);
+        _document.Views.Redraw();
+    }
+
+    private void StepStation(double metres)
+    {
+        if (_snapshot is null) return;
+        SetScrubStation((_scrubActive ? _scrubStation : 0.0) + metres);
+    }
+
+    private void TogglePlayback()
+    {
+        if (_playTimer.Started) { StopPlayback(); return; }
+        if (_snapshot is null || _snapshot.Review.RouteLengthMetres <= 0.0) return;
+        // Playing from the end starts again rather than doing nothing.
+        if (!_scrubActive || _scrubStation >= _snapshot.Review.RouteLengthMetres - 1e-6) SetScrubStation(0.0);
+        _play.Text = "Pause";
+        _playClock.Restart();
+        _playTimer.Start();
+    }
+
+    private void StopPlayback()
+    {
+        if (_playTimer.Started) _playTimer.Stop();
+        _playClock.Reset();
+        _play.Text = "Play";
+    }
+
+    private void PlaybackTick()
+    {
+        if (_snapshot is null) { StopPlayback(); return; }
+        // Real elapsed time, capped so a stalled UI thread does not teleport the vehicle.
+        var elapsed = Math.Min(_playClock.Elapsed.TotalSeconds, 0.25);
+        _playClock.Restart();
+        var key = _speed.SelectedKey ?? "x5";
+        var modeSpeed = _snapshot.Run.Analysis.DrivingMode.SpeedMetresPerSecond;
+        var number = double.Parse(key[1..], System.Globalization.CultureInfo.InvariantCulture);
+        var (speed, multiplier) = key[0] == 'm' ? (number, 1.0) : (modeSpeed, number);
+        var (station, finished) = StationPlayback.Advance(
+            _scrubStation, _snapshot.Review.RouteLengthMetres, elapsed, speed, multiplier);
+        SetScrubStation(station);
+        if (finished) StopPlayback();
+    }
+
     /// <summary>Says in words what the viewport marker is pointing at, so the graph and the road agree.</summary>
     private string Readout(double? station)
     {
         if (_snapshot is null) return "No review data.";
         if (station is null) return "Move across the graph to locate it on the road.";
         var review = _snapshot.Review;
-        var sample = review.Samples.MinBy(item => Math.Abs(item.StationMetres - station.Value));
+        var sample = review.Samples.Count == 0 ? null : review.Samples[
+            StationPlayback.NearestIndex(review.Samples, item => item.StationMetres, station.Value)];
         if (sample is null) return "Move across the graph to locate it on the road.";
         var direction = sample.Direction == TravelDirection.Reverse ? "reversing" : "forward";
+        var text = $"Station {sample.StationMetres:0.0} m · {direction} · wheel {Degrees(sample.SteeringAngleRadians):0.0}°";
+        if (sample.FoldAngleRadians is { } fold) text += $" · fold {Degrees(fold):0.0}°";
         if (!Enum.TryParse(_metric.SelectedKey, out ReviewMetricKind metric)) metric = ReviewMetricKind.SteeringAngle;
-        var value = VehicleAccessMetricPalette.Value(metric, sample);
-        return $"Station {sample.StationMetres:0.0} m · {MetricName(metric)} {value:0.##} · {direction}";
+        // The wheel and fold are already named above; only add the graphed metric when it is something else.
+        if (metric != ReviewMetricKind.SteeringAngle && metric != ReviewMetricKind.FoldAngle)
+            text += $" · {MetricName(metric)} {VehicleAccessMetricPalette.Value(metric, sample):0.##}";
+        return text;
     }
 
     private CheckBox Toggle(string text, VehicleAccessOverlayParts part, bool initial)

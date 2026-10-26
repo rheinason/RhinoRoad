@@ -136,13 +136,13 @@ internal static class VehicleAccessReviewService
     {
         if (!run.Definition.CheckMaximumGrade)
             return new VehicleAccessReviewCheck(ReviewCheckKind.Grade, ReviewCheckState.Off, null, null, "Maximum grade");
-        if (run.Definition.SourceKind == PathSourceKind.Interactive)
+        if (!run.HasElevation)
             return new VehicleAccessReviewCheck(
                 ReviewCheckKind.Grade,
                 ReviewCheckState.Unavailable,
                 null,
                 run.Definition.MaximumGradePercent,
-                "Interactive routes currently use World XY elevation.");
+                "Interactive routes are planar unless draped onto terrain.");
         return Check(
             ReviewCheckKind.Grade,
             !Has(run, ViolationKind.Grade),
@@ -180,7 +180,7 @@ internal static class VehicleAccessReviewService
             ReviewCheckKind.SteeringRate, samples, sample => Degrees(sample.SteeringRateRadiansPerSecond),
             sample => sample.SteeringRateRadiansPerSecond > mode.MaximumSteeringRateRadiansPerSecond + 1e-8,
             Degrees(mode.MaximumSteeringRateRadiansPerSecond), "Steering changes faster than the selected driving mode."));
-        if (run.Definition.CheckMaximumGrade && run.Definition.SourceKind != PathSourceKind.Interactive)
+        if (run.Definition.CheckMaximumGrade && run.HasElevation)
             result.AddRange(VehicleAccessReviewAnalyzer.GroupFailures(
                 ReviewCheckKind.Grade, samples, sample => Math.Abs(sample.Grade) * 100.0,
                 sample => Math.Abs(sample.Grade) * 100.0 > run.Definition.MaximumGradePercent + 1e-8,
