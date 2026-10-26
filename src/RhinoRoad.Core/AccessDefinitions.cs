@@ -92,7 +92,9 @@ public sealed record VehicleAccessDefinition(
     IReadOnlyList<Guid> AllowedBoundaryObjectIds,
     IReadOnlyDictionary<Guid, string> ReferenceFingerprints,
     string SourceFingerprint,
-    string AnalysisId)
+    string AnalysisId,
+    bool BakeWheelEdgePaths = true,
+    bool IncludeMirrorAllowance = false)
 {
     public const int CurrentSchemaVersion = 1;
 }

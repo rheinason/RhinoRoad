@@ -201,7 +201,7 @@ public sealed class RRVehicleAccessCommand : Command
         try
         {
             analysis = new VehicleAccessAnalyzer().Analyze(
-                vehicle,
+                settings.IncludeMirrorAllowance ? MirrorAllowance.Apply(vehicle) : vehicle,
                 drivingMode,
                 route,
                 settings.CheckMaximumGrade ? settings.MaximumGradePercent / 100.0 : null);
@@ -222,7 +222,9 @@ public sealed class RRVehicleAccessCommand : Command
             settings.RightWidthMetres,
             createFixedEdges,
             settings.Footprints == FootprintMode.AtInterval ? settings.FootprintIntervalMetres : 0.0,
-            settings.Footprints == FootprintMode.EndsOnly);
+            settings.Footprints == FootprintMode.EndsOnly,
+            settings.BakeWheelEdgePaths,
+            settings.IncludeMirrorAllowance);
         var clearance = RhinoGeometryBuilder.CheckClearance(
             geometry,
             createFixedEdges ? geometry.FixedRoadBoundary : null,
@@ -481,7 +483,9 @@ public sealed class RRVehicleAccessCommand : Command
             id => id,
             id => AccessDefinitionStore.Fingerprint(document.Objects.FindId(id)!.Geometry)),
         AccessDefinitionStore.Fingerprint(source),
-        analysisId);
+        analysisId,
+        settings.BakeWheelEdgePaths,
+        settings.IncludeMirrorAllowance);
 
     // Loaded once from the plugin's persistent settings; the dialog and prompt save after a successful run.
     private static readonly VehicleAccessSettings _settings = LoadSettings();

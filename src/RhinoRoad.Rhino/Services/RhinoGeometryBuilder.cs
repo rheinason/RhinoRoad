@@ -19,6 +19,12 @@ internal sealed record RhinoAnalysisGeometry(
     /// <summary>Axle-centre track of each towed unit, nearest first. Empty for a rigid vehicle.</summary>
     public IReadOnlyList<Curve> TowedAxleTracks { get; init; } = [];
 
+    /// <summary>Wheel-edge traces of each axle-bearing unit; empty when the option is off.</summary>
+    public IReadOnlyList<NamedCurve> WheelEdgeTracks { get; init; } = [];
+
+    /// <summary>Whether the mirror allowance is part of the swept envelope; the bake says so in its note.</summary>
+    public bool MirrorAllowance { get; init; }
+
     /// <summary>Enclosed holes in the body envelope, e.g. the island of a roundabout circulation.</summary>
     public IReadOnlyList<Curve> BodyEnvelopeHoles { get; init; } = [];
 
@@ -56,6 +62,8 @@ internal sealed record RhinoAnalysisGeometry(
     public SiteFitOutcome? SiteFit { get; set; }
 }
 
+internal sealed record NamedCurve(string Name, Curve Curve);
+
 internal sealed record ClearanceOutcome(
     double? MinimumClearanceMetres,
     IReadOnlyList<AnalysisViolation> Violations);
@@ -72,7 +80,9 @@ internal static class RhinoGeometryBuilder
         double rightRoadWidthMetres,
         bool createFixedEdges,
         double footprintIntervalMetres = 0.0,
-        bool footprintEndsOnly = false) =>
+        bool footprintEndsOnly = false,
+        bool includeWheelEdges = false,
+        bool mirrorAllowance = false) =>
         Build(
             result,
             route,
@@ -82,7 +92,9 @@ internal static class RhinoGeometryBuilder
             rightRoadWidthMetres,
             createFixedEdges,
             footprintIntervalMetres,
-            footprintEndsOnly);
+            footprintEndsOnly,
+            includeWheelEdges,
+            mirrorAllowance);
 
     /// <summary>
     /// Builds against explicit model units. Certification uses this so its verdicts do not depend on
@@ -98,7 +110,9 @@ internal static class RhinoGeometryBuilder
         double rightRoadWidthMetres,
         bool createFixedEdges,
         double footprintIntervalMetres = 0.0,
-        bool footprintEndsOnly = false)
+        bool footprintEndsOnly = false,
+        bool includeWheelEdges = false,
+        bool mirrorAllowance = false)
     {
         var modelUnitsPerMetre = RhinoMath.UnitScale(UnitSystem.Meters, modelUnits);
         var elevationMetres = route[0].PositionMetres.Z;
@@ -162,6 +176,12 @@ internal static class RhinoGeometryBuilder
             RoadCorridorRegion = corridor?.Region,
             Poses = result.Poses,
             TowedAxleTracks = towedTracks,
+            MirrorAllowance = mirrorAllowance,
+            WheelEdgeTracks = includeWheelEdges
+                ? RhinoRoad.Core.WheelEdgeTracks.Compute(result)
+                    .Select(trace => new NamedCurve(trace.Name, TrackCurve(trace.PointsMetres, elevationModel, modelUnitsPerMetre)))
+                    .ToArray()
+                : [],
             Footprints = (footprintEndsOnly
                     ? PoseSampler.EndsOnly(result.Poses)
                     : PoseSampler.AtStationInterval(result.Poses, footprintIntervalMetres))

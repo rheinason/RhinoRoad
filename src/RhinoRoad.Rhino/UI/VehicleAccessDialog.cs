@@ -43,6 +43,8 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
     private readonly CheckBox _checkGrade = new() { Text = "Maximum grade" };
     private readonly CheckBox _reselectReferences = new() { Text = "Reselect obstacle and boundary curves" };
     private readonly CheckBox _replaceExisting = new() { Text = "Replace previous result for the same path" };
+    private readonly CheckBox _wheelEdgePaths = new() { Text = "Wheel-edge paths" };
+    private readonly CheckBox _mirrorAllowance = new() { Text = "Include mirror allowance" };
     private readonly CheckBox _previewBeforeBaking = new() { Text = "Preview and confirm before baking" };
 
     // Once the allowance has been typed or stepped, changing vehicle or mode must not overwrite it
@@ -80,6 +82,9 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         // (it stays in the enum for saved documents and maps to the first option here).
         _edgeMethod.Items.Add(new ListItem { Text = "Clearance footprint only", Key = nameof(RoadEdgeMethod.MinimumFootprint) });
         _edgeMethod.Items.Add(new ListItem { Text = "Clearance footprint + fixed-width road", Key = nameof(RoadEdgeMethod.Both) });
+        _wheelEdgePaths.ToolTip = "Bake the outer front-wheel and inner rear-wheel edge paths (left and right) of each axle-bearing unit.";
+        _mirrorAllowance.ToolTip = "Widen the lead body by 0.30 m each side over its front 1.0 m. The 0.30 m mirror width is published " +
+            "(Grundlag for udformning af trafikarealer 2023, p.37); the position is a RhinoRoad assumption.";
         _direction.ToolTip = "Starting direction for an interactive route, and the direction the vehicle faces along an existing curve.";
         if (configuringSavedSource)
         {
@@ -116,7 +121,7 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
                 Group("Road edges", Fields(("Output", _edgeMethod),
                     ("Left width (m)", _leftWidth), ("Right width (m)", _rightWidth))),
                 Group("Output", Stretched(Fields(("Vehicle footprints", _footprintMode),
-                    ("Interval (m)", _footprintInterval)), _previewBeforeBaking, _replaceExisting))
+                    ("Interval (m)", _footprintInterval)), _wheelEdgePaths, _mirrorAllowance, _previewBeforeBaking, _replaceExisting))
             }
         };
         var showAdvanced = new CheckBox { Text = "Advanced geometry and output" };
@@ -349,6 +354,8 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         _reselectReferences.Checked = settings.ReselectReferences;
         _checkGrade.Checked = settings.CheckMaximumGrade;
         _replaceExisting.Checked = settings.ReplaceExisting;
+        _wheelEdgePaths.Checked = settings.BakeWheelEdgePaths;
+        _mirrorAllowance.Checked = settings.IncludeMirrorAllowance;
         _previewBeforeBaking.Checked = settings.PreviewBeforeBaking;
         _maximumGrade.Enabled = settings.CheckMaximumGrade;
         RefreshReferenceChoice();
@@ -372,6 +379,8 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
         settings.ReselectReferences = _reselectReferences.Checked == true;
         settings.CheckMaximumGrade = _checkGrade.Checked == true;
         settings.ReplaceExisting = _replaceExisting.Checked == true;
+        settings.BakeWheelEdgePaths = _wheelEdgePaths.Checked == true;
+        settings.IncludeMirrorAllowance = _mirrorAllowance.Checked == true;
         settings.PreviewBeforeBaking = _previewBeforeBaking.Checked == true;
     }
 
