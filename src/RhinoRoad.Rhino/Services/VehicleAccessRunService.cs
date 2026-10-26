@@ -13,7 +13,17 @@ internal sealed record PreparedVehicleAccess(
     RhinoAnalysisGeometry Geometry,
     IReadOnlyList<AnalysisViolation> Violations,
     IReadOnlyList<Curve> Obstacles,
-    IReadOnlyList<Curve> AllowedBoundaries);
+    IReadOnlyList<Curve> AllowedBoundaries)
+{
+    /// <summary>Whether the route's elevations were taken from the terrain, so its grade is real.</summary>
+    public bool TerrainDraped { get; init; }
+
+    /// <summary>Stations that found no terrain below them and kept a neighbouring elevation.</summary>
+    public int TerrainMisses { get; init; }
+
+    /// <summary>The route has a real vertical profile: a curve with its own Z, or any route draped onto terrain.</summary>
+    public bool HasElevation => TerrainDraped || Definition.SourceKind != PathSourceKind.Interactive;
+}
 
 internal static class VehicleAccessRunService
 {
@@ -44,7 +54,8 @@ internal static class VehicleAccessRunService
         try
         {
             var requiredReferenceIds = (stored.CheckObstacles ? stored.ObstacleObjectIds : Array.Empty<Guid>())
-                .Concat(stored.CheckAllowedArea ? stored.AllowedBoundaryObjectIds : Array.Empty<Guid>());
+                .Concat(stored.CheckAllowedArea ? stored.AllowedBoundaryObjectIds : Array.Empty<Guid>())
+                .Concat(stored.TerrainObjectId.HasValue ? [stored.TerrainObjectId.Value] : Array.Empty<Guid>());
             var missing = requiredReferenceIds
                 .Where(id => document.Objects.FindId(id) is null)
                 .Distinct()
@@ -79,6 +90,10 @@ internal static class VehicleAccessRunService
                 route = RhinoRouteSampler.Sample(path, document.ModelUnitSystem, stored.ExistingCurveDirection);
             }
 
+            var terrainMisses = 0;
+            if (stored.TerrainObjectId is { } terrainId)
+                (route, terrainMisses) = TerrainDraper.Drape(document, terrainId, route);
+
             var obstacles = stored.CheckObstacles
                 ? ResolveCurves(document, stored.ObstacleObjectIds)
                 : Array.Empty<Curve>();
@@ -101,6 +116,8 @@ internal static class VehicleAccessRunService
                 createFixedEdges,
                 stored.FootprintMode == FootprintMode.AtInterval ? stored.FootprintIntervalMetres : 0.0,
                 stored.FootprintMode == FootprintMode.EndsOnly);
+            if (stored.TerrainObjectId.HasValue)
+                geometry = TerrainDraper.WithDrapedRearTrack(geometry, route, document.ModelUnitSystem);
             var clearance = RhinoGeometryBuilder.CheckClearance(
                 geometry,
                 createFixedEdges ? geometry.FixedRoadBoundary : null,
@@ -119,7 +136,11 @@ internal static class VehicleAccessRunService
                     .ToDictionary(id => id, id => AccessDefinitionStore.Fingerprint(document.Objects.FindId(id)!.Geometry)),
                 AnalysisId = analysisId
             };
-            prepared = new PreparedVehicleAccess(updated, source, route, analysis, geometry, violations, obstacles, boundaries);
+            prepared = new PreparedVehicleAccess(updated, source, route, analysis, geometry, violations, obstacles, boundaries)
+            {
+                TerrainDraped = stored.TerrainObjectId.HasValue,
+                TerrainMisses = terrainMisses
+            };
             error = string.Empty;
             return true;
         }

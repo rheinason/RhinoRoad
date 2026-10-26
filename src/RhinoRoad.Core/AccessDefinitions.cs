@@ -92,7 +92,8 @@ public sealed record VehicleAccessDefinition(
     IReadOnlyList<Guid> AllowedBoundaryObjectIds,
     IReadOnlyDictionary<Guid, string> ReferenceFingerprints,
     string SourceFingerprint,
-    string AnalysisId)
+    string AnalysisId,
+    Guid? TerrainObjectId = null)
 {
     public const int CurrentSchemaVersion = 1;
 }
