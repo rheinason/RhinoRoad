@@ -165,7 +165,11 @@ public sealed class RRReportRoadCommand : Command
             run.Geometry.SiteFit?.Conflicts ?? [],
             outOfDate,
             run.Geometry.BodyRegion is { } body ? [body] : [],
-            run.Geometry.ClearanceRegion is { } clearance ? [clearance] : []);
+            run.Geometry.ClearanceRegion is { } clearance ? [clearance] : [])
+        {
+            HasElevation = run.HasElevation,
+            TerrainDraped = run.TerrainDraped
+        };
     }
 
     /// <summary>The inspector's "Out of date" test: the source and every referenced curve still match the saved fingerprints.</summary>

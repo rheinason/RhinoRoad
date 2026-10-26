@@ -28,7 +28,14 @@ public sealed record RoadReportRoad(
     IReadOnlyList<SiteConflict> Conflicts,
     bool OutOfDate,
     IReadOnlyList<SweptRegion> BodyRegions,
-    IReadOnlyList<SweptRegion> ClearanceRegions);
+    IReadOnlyList<SweptRegion> ClearanceRegions)
+{
+    /// <summary>False when the route is flat (an interactive route without terrain), so grade figures are not meaningful.</summary>
+    public bool HasElevation { get; init; } = true;
+
+    /// <summary>True when the route's heights come from a terrain surface.</summary>
+    public bool TerrainDraped { get; init; }
+}
 
 public sealed record RoadReportDocument(
     string DocumentName,
@@ -209,7 +216,8 @@ public static class RoadReportBuilder
         Row(html, "Vehicle", $"{road.VehicleName} ({road.VehicleId}), preset version {road.PresetVersion}");
         Row(html, "Driving mode", $"{road.ModeName} ({road.ModeId}), {Number(road.SpeedKilometresPerHour, 1)} km/h, lock-to-lock {Number(road.LockToLockSeconds, 1)} s");
         Row(html, "Clearance allowance", $"{Number(road.ClearanceMetres)} m");
-        Row(html, "Source", road.SourceKind == PathSourceKind.Interactive ? "Interactive route (editable controls)" : "Existing curve");
+        Row(html, "Source", (road.SourceKind == PathSourceKind.Interactive ? "Interactive route (editable controls)" : "Existing curve") +
+            (road.TerrainDraped ? ", draped on terrain" : string.Empty));
         Row(html, "Travel length", $"{Number(review.RouteLengthMetres, 1)} m");
         Row(html, "Reversals", review.ReversalCount.ToString(Invariant));
         html.Append("</table>");
@@ -227,8 +235,8 @@ public static class RoadReportBuilder
         html.Append("<h3>Measurements</h3><table class=\"kv\">");
         Row(html, "Maximum wheel angle", $"{Number(Degrees(review.MaximumSteeringAngleRadians), 1)} deg");
         Row(html, "Maximum steering rate", $"{Number(Degrees(review.MaximumSteeringRateRadiansPerSecond), 1)} deg/s");
-        Row(html, "Maximum grade, point to point", $"{Number(review.MaximumAbsoluteGrade * 100.0)} %");
-        Row(html, "Maximum grade, windowed", road.MaximumWindowedGrade.HasValue ? $"{Number(road.MaximumWindowedGrade.Value * 100.0)} %" : "n/a");
+        Row(html, "Maximum grade, point to point", road.HasElevation ? $"{Number(review.MaximumAbsoluteGrade * 100.0)} %" : "n/a (flat route)");
+        Row(html, "Maximum grade, windowed", road.HasElevation && road.MaximumWindowedGrade.HasValue ? $"{Number(road.MaximumWindowedGrade.Value * 100.0)} %" : "n/a");
         Row(html, "Minimum clearance", review.MinimumClearanceMetres.HasValue ? $"{Number(review.MinimumClearanceMetres.Value)} m" : "n/a (no site curves checked)");
         for (var joint = 0; joint < road.MaximumFoldAnglesRadians.Count; joint++)
             Row(html, $"Maximum fold, joint {joint + 1}", $"{Number(Degrees(road.MaximumFoldAnglesRadians[joint]), 1)} deg");
