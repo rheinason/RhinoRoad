@@ -220,7 +220,9 @@ internal static class RhinoOutputWriter
         if (status != ValidationStatus.ReferenceValidated)
             lines.Add(status == ValidationStatus.ValidationFailed
                 ? "PRESET FAILED VALIDATION — DO NOT RELY ON THIS RESULT"
-                : "PRESET NOT REFERENCE-VALIDATED — SCREENING ONLY");
+                : status == ValidationStatus.UserDefined
+                    ? "USER-DEFINED VEHICLE — NOT VALIDATED, SCREENING ONLY"
+                    : "PRESET NOT REFERENCE-VALIDATED — SCREENING ONLY");
         lines.Add($"Vehicle: {result.Vehicle.Name} ({result.Vehicle.Id} v{result.Vehicle.Version})");
         lines.Add($"Mode: {result.DrivingMode.Name}");
         lines.Add($"Clearance: {output.ClearanceMetres:0.00} m");

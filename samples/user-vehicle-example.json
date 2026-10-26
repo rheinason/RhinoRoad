@@ -1,0 +1,58 @@
+{
+  "vehicles": [
+    {
+      "id": "MY-LORRY",
+      "name": "MY-LORRY - EXAMPLE user vehicle (copy of LV 12; edit me)",
+      "version": "example-1",
+      "widthMetres": 2.55,
+      "wheelbaseMetres": 6.8,
+      "frontOverhangMetres": 1.45,
+      "rearOverhangMetres": 3.75,
+      "axleTrackMetres": 2.195,
+      "tyreWidthMetres": 0.254,
+      "bodyOutline": [
+        [
+          -3.75,
+          -1.275
+        ],
+        [
+          8.25,
+          -1.275
+        ],
+        [
+          8.25,
+          1.275
+        ],
+        [
+          -3.75,
+          1.275
+        ]
+      ],
+      "drivingModes": {
+        "A": {
+          "name": "Køremåde A",
+          "speedKilometresPerHour": 15.0,
+          "maximumWheelAngleDegrees": 29.7,
+          "lockToLockSeconds": 6.0,
+          "defaultClearanceMetres": 0.3
+        },
+        "B": {
+          "name": "Køremåde B",
+          "speedKilometresPerHour": 5.0,
+          "maximumWheelAngleDegrees": 39.6,
+          "lockToLockSeconds": 6.0,
+          "defaultClearanceMetres": 0.3
+        }
+      },
+      "source": {
+        "title": "User-supplied example",
+        "publicationDate": "",
+        "url": "",
+        "figure": "",
+        "notes": "Example only: a copy of the LV 12 preset under a new id to show the file format. Replace every dimension with your own vehicle's."
+      },
+      "validationStatus": "UserDefined",
+      "validationNotes": "EXAMPLE user-defined vehicle. Not from the Vejregler source and not validated; RhinoRoad forces this status on any vehicle loaded from the user folder."
+    }
+  ]
+}

@@ -27,7 +27,7 @@ internal sealed record PreparedVehicleAccess(
 
 internal static class VehicleAccessRunService
 {
-    private static readonly VehicleCatalog Catalog = VehicleCatalog.LoadEmbedded();
+    private static VehicleCatalog Catalog => RhinoRoadCatalog.Current;
 
     public static bool TryPrepareUpdate(
         RhinoDoc document,
