@@ -10,7 +10,8 @@ public enum ValidationStatus
 {
     SourceTranscribed,
     ReferenceValidated,
-    ValidationFailed
+    ValidationFailed,
+    UserDefined
 }
 
 public sealed record VehicleSource(

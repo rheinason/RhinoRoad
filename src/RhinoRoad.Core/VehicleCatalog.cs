@@ -4,6 +4,9 @@ using System.Text.Json.Serialization;
 
 namespace RhinoRoad.Core;
 
+/// <summary>A catalog of built-ins plus user vehicles, and why any user vehicle or file was left out.</summary>
+public sealed record UserCatalogLoad(VehicleCatalog Catalog, IReadOnlyList<string> Errors);
+
 public sealed class VehicleCatalog
 {
     private readonly Dictionary<string, VehicleDefinition> _vehicles;
@@ -28,14 +31,98 @@ public sealed class VehicleCatalog
         return Load(stream);
     }
 
+    /// <summary>
+    /// Built-in presets plus the vehicles in <paramref name="userSources"/> (label, JSON text), each in the
+    /// same schema as the embedded catalog. User vehicles are always <see cref="ValidationStatus.UserDefined"/>
+    /// whatever the file says. A vehicle whose id collides with a built-in (or an earlier user vehicle) is
+    /// rejected, not renamed; a malformed file or invalid vehicle is skipped. Nothing here throws on bad
+    /// user input: the reasons are returned in <see cref="UserCatalogLoad.Errors"/>.
+    /// </summary>
+    public static UserCatalogLoad LoadWithUserVehicles(IEnumerable<KeyValuePair<string, string>> userSources)
+    {
+        var builtIn = LoadEmbedded();
+        var accepted = new Dictionary<string, VehicleDefinition>(StringComparer.OrdinalIgnoreCase);
+        foreach (var vehicle in builtIn.Vehicles) accepted[vehicle.Id] = vehicle;
+        var errors = new List<string>();
+        foreach (var (label, json) in userSources)
+        {
+            CatalogDocument? document;
+            try
+            {
+                document = JsonSerializer.Deserialize<CatalogDocument>(json, CreateOptions());
+            }
+            catch (Exception exception) when (exception is JsonException or NotSupportedException or InvalidOperationException)
+            {
+                errors.Add($"{label}: not a valid vehicle file ({exception.Message})");
+                continue;
+            }
+
+            if (document is null || document.Vehicles.Count == 0)
+            {
+                errors.Add($"{label}: contains no vehicles.");
+                continue;
+            }
+
+            foreach (var dto in document.Vehicles)
+            {
+                try
+                {
+                    var vehicle = dto.ToDefinition() with { ValidationStatus = ValidationStatus.UserDefined };
+                    vehicle.Validate();
+                    if (accepted.TryGetValue(vehicle.Id, out var existing))
+                    {
+                        errors.Add($"{label}: id '{vehicle.Id}' is already used by " +
+                                   (existing.ValidationStatus == ValidationStatus.UserDefined ? "another user vehicle" : "a built-in preset") +
+                                   "; choose a different id.");
+                        continue;
+                    }
+
+                    accepted[vehicle.Id] = vehicle;
+                }
+                catch (Exception exception) when (exception is InvalidDataException or IndexOutOfRangeException or ArgumentException)
+                {
+                    errors.Add($"{label}: vehicle '{dto.Id}' skipped ({exception.Message})");
+                }
+            }
+        }
+
+        return new UserCatalogLoad(new VehicleCatalog(accepted.Values), errors);
+    }
+
+    /// <summary>Loads built-ins plus every *.json in <paramref name="directory"/> (missing folder = none).</summary>
+    public static UserCatalogLoad LoadWithUserDirectory(string? directory)
+    {
+        var sources = new List<KeyValuePair<string, string>>();
+        var errors = new List<string>();
+        if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+        {
+            foreach (var path in Directory.EnumerateFiles(directory, "*.json").OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    sources.Add(new KeyValuePair<string, string>(Path.GetFileName(path), File.ReadAllText(path)));
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    errors.Add($"{Path.GetFileName(path)}: could not be read ({exception.Message})");
+                }
+            }
+        }
+
+        var load = LoadWithUserVehicles(sources);
+        return errors.Count == 0 ? load : new UserCatalogLoad(load.Catalog, [.. errors, .. load.Errors]);
+    }
+
+    private static JsonSerializerOptions CreateOptions() => new()
+    {
+        PropertyNameCaseInsensitive = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        Converters = { new JsonStringEnumConverter() }
+    };
+
     public static VehicleCatalog Load(Stream stream)
     {
-        var options = new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true,
-            ReadCommentHandling = JsonCommentHandling.Skip,
-            Converters = { new JsonStringEnumConverter() }
-        };
+        var options = CreateOptions();
         var document = JsonSerializer.Deserialize<CatalogDocument>(stream, options) ?? throw new InvalidDataException("Vehicle catalog is empty.");
         var vehicles = document.Vehicles.Select(dto => dto.ToDefinition()).ToArray();
         return new VehicleCatalog(vehicles);

@@ -16,7 +16,7 @@ namespace RhinoRoad.Rhino.Commands;
 [Guid("14708FCE-5B4E-484C-A540-6A0F3861B12A")]
 public sealed class RRVehicleAccessCommand : Command
 {
-    private static readonly VehicleCatalog Catalog = VehicleCatalog.LoadEmbedded();
+    private static VehicleCatalog Catalog => RhinoRoadCatalog.Current;
 
     public override string EnglishName => "RRRoad";
 

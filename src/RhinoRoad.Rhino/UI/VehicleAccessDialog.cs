@@ -66,7 +66,7 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
 
         foreach (var vehicle in catalog.Vehicles)
         {
-            _vehicle.Items.Add(new ListItem { Text = $"{vehicle.Name} ({vehicle.Id})", Key = vehicle.Id });
+            _vehicle.Items.Add(new ListItem { Text = $"{vehicle.Name} ({vehicle.Id})" + (vehicle.ValidationStatus == ValidationStatus.UserDefined ? " (user-defined)" : string.Empty), Key = vehicle.Id });
         }
 
         _footprintMode.Items.Add(new ListItem { Text = "None", Key = nameof(FootprintMode.None) });
@@ -322,6 +322,7 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
     {
         ValidationStatus.ReferenceValidated => "validated against the official curves",
         ValidationStatus.ValidationFailed => "FAILED validation — do not rely on this preset",
+        ValidationStatus.UserDefined => "user-defined — not from the Vejregler source, not validated",
         _ => "source-transcribed, not yet validated"
     };
 

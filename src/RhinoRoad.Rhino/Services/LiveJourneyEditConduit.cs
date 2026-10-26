@@ -37,7 +37,7 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
     }
 
     private static readonly LiveJourneyEditConduit Instance = new();
-    private static readonly VehicleCatalog Catalog = VehicleCatalog.LoadEmbedded();
+    private static VehicleCatalog Catalog => RhinoRoadCatalog.Current;
 
     // The session object listens to the document events that mark the source list dirty.
     public static void Initialize() => RoadDocumentSession.Initialize();
