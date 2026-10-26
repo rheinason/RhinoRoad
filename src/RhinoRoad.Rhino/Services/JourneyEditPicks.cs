@@ -108,10 +108,11 @@ internal static class JourneyEditPicks
         }
     }
 
-    public static void DrawDockedTrailer(RhinoDoc document, DisplayPipeline display, VehicleDefinition vehicle, Point3 axle, double heading)
+    /// <summary>The docking body -- the trailer, or a rigid vehicle itself -- as it would stand in the bay.</summary>
+    public static void DrawDockedBody(RhinoDoc document, DisplayPipeline display, VehicleDefinition vehicle, Point3 axle, double heading)
     {
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, document.ModelUnitSystem);
-        var outline = TrailerBay.DockedOutline(vehicle, axle, heading)
+        var outline = ReverseBay.DockedOutline(vehicle, axle, heading)
             .Select(point => new Point3d(point.X * scale, point.Y * scale, axle.Z * scale)).ToList();
         if (outline.Count == 0) return;
         outline.Add(outline[0]);

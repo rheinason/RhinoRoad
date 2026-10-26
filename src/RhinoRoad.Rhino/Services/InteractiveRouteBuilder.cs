@@ -282,14 +282,22 @@ internal sealed class InteractiveRouteBuilder
         var exitHeading = squared
             ? SnappedExitHeading(args.CurrentPoint, state, _units, orthoReference)
             : null;
-        if (_journey.PickingTrailerRear)
+        if (_journey.PickingBayRear)
         {
-            // Where the trailer's rear stops says nothing yet about where the axle goes, so no leg is
+            // Where the body's rear stops says nothing yet about where its axle goes, so no leg is
             // planned until the direction has been swung.
+            var rear = ReverseWording.BayRear(_vehicle);
             messages.Add(_journey.PlanReverseNext
-                    ? "Pick the rear of the trailer at the bay; its direction comes next, then the planner searches approaches"
-                    : "Pick the rear of the trailer at the bay; its reversing direction comes next",
+                    ? $"Pick {rear} at the bay; its direction comes next, then the planner searches approaches"
+                    : $"Pick {rear} at the bay; its reversing direction comes next",
                 Color.DarkBlue);
+            return;
+        }
+        if (_journey.PlanReverseNext)
+        {
+            // A chain that cannot be docked is planned to a point, which is its last trailer's axle;
+            // previewing a forward leg to that point would show something the planner will not do.
+            messages.Add($"Pick where the {ReverseWording.DockingAxle(_vehicle)} should stop; then the planner searches approaches", Color.DarkBlue);
             return;
         }
 
@@ -347,13 +355,10 @@ internal sealed class InteractiveRouteBuilder
 
     /// <summary>
     /// Whether planning this control is known to be too slow for a frame: a docking reverse tries
-    /// several correction strengths. Anything else is timed, and moves to the background if it
-    /// turns out slow too.
+    /// several correction strengths, whatever the vehicle. Anything else is timed, and moves to the
+    /// background if it turns out slow too.
     /// </summary>
-    private bool PlansSlowly(ManoeuvreControl control) =>
-        control.ExitHeadingRadians.HasValue
-        && control.Direction == TravelDirection.Reverse
-        && InteractiveCapabilities.DockingAvailable(_vehicle);
+    private bool PlansSlowly(ManoeuvreControl control) => InteractiveCapabilities.Docks(_vehicle, control);
 
     /// <summary>
     /// Plans a control and everything drawn from it. Pure apart from the sweep cache, which
@@ -367,7 +372,7 @@ internal sealed class InteractiveRouteBuilder
         ManoeuvreControl control)
     {
         var leg = ManoeuvreReplayService.PlanControl(_vehicle, _mode, route, legStartIndex, state, control);
-        return new LegPreview(leg, sweepPreview.Build(leg), ArticulationTrace.At(_vehicle, route, leg));
+        return new LegPreview(leg, sweepPreview.Build(leg), ArticulationTrace.At(_vehicle, route, leg), control);
     }
 
     /// <summary>
@@ -395,16 +400,17 @@ internal sealed class InteractiveRouteBuilder
             ? SnappedExitHeading(picked, state, _units, pickedReference)
             : null;
 
-        if (_journey.PickingTrailerRear)
+        if (_journey.PickingBayRear)
         {
-            // The rear of the trailer at the bay, then the way it backs in; the journey stores the
-            // axle that puts the rear there. Plan reverse always needs the direction.
+            // The rear of the docking body at the bay -- the trailer's, or a rigid vehicle's own --
+            // then the way it backs in; the journey stores the axle that puts the rear there. Plan
+            // reverse always needs the direction.
             pickedKind = ManoeuvreControlKind.Aim;
-            var swung = SwingExitDirection(pickedTarget, pickedKind, viewport, route, state, sweepPreview, trailerRear: true);
+            var swung = SwingExitDirection(pickedTarget, pickedKind, viewport, route, state, sweepPreview, bayRear: true);
             _journey.SpendPointExit();
             if (swung is not double bayHeading) return;
             pickedExit = bayHeading;
-            pickedTarget = TrailerBay.AxleFromRear(_vehicle, pickedTarget, bayHeading);
+            pickedTarget = ReverseBay.AxleFromRear(_vehicle, pickedTarget, bayHeading);
         }
         // A locked turn ends still turning by definition, so there is no exit direction to swing.
         else if (_journey.PointExitNext && !pickedLocked)
@@ -443,11 +449,12 @@ internal sealed class InteractiveRouteBuilder
     /// whatever angle the building is -- and those can be snapped to geometry or typed.
     /// </para>
     /// <para>
-    /// For a trailer bay the point placed is the trailer's rear, and the axle the journey stores
-    /// follows from it and the direction. The planned reverse is not previewed while swinging: the
-    /// planner tries dozens of approaches, and running it on every mouse move made the pick lag
-    /// behind the cursor. The docked trailer is drawn instead, and the proposal is reviewed once the
-    /// direction is picked. A plain docking reverse is previewed, in the background when it is slow.
+    /// For a bay the point placed is the rear of the docking body -- the trailer, or a rigid vehicle
+    /// itself -- and the axle the journey stores follows from it and the direction. The planned
+    /// reverse is not previewed while swinging: the planner tries dozens of approaches, and running
+    /// it on every mouse move made the pick lag behind the cursor. The docked body is drawn instead,
+    /// and the proposal is reviewed once the direction is picked. A plain docking reverse is
+    /// previewed, in the background when it is slow.
     /// </para>
     /// </remarks>
     private double? SwingExitDirection(
@@ -457,7 +464,7 @@ internal sealed class InteractiveRouteBuilder
         IReadOnlyList<RouteSample> route,
         VehicleState state,
         JourneySweepPreview sweepPreview,
-        bool trailerRear = false)
+        bool bayRear = false)
     {
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, _units);
         var pivot = new Point3d(targetMetres.X * scale, targetMetres.Y * scale, targetMetres.Z * scale);
@@ -469,8 +476,9 @@ internal sealed class InteractiveRouteBuilder
         using var swing = new GetPoint();
         using var preview = new LatestPreview<ManoeuvreControl, LegPreview>(
             _document, control => PlanPreview(route, legStartIndex, state, sweepPreview, control));
-        swing.SetCommandPrompt(trailerRear
-            ? "Point the way the trailer reverses into the bay, or type an angle from the CPlane"
+        var body = ReverseWording.DockingBody(_vehicle);
+        swing.SetCommandPrompt(bayRear
+            ? $"Point the way the {body} reverses into the bay, or type an angle from the CPlane"
             : "Swing the direction to leave along, or type an angle from the CPlane");
         swing.SetBasePoint(pivot, true);
         swing.DrawLineFromPoint(pivot, true);
@@ -485,15 +493,18 @@ internal sealed class InteractiveRouteBuilder
             try
             {
                 if (SwungHeading(pivot, drawn.CurrentPoint) is not double exit) return;
-                var axleMetres = trailerRear ? TrailerBay.AxleFromRear(_vehicle, targetMetres, exit) : targetMetres;
-                if (trailerRear)
+                var axleMetres = bayRear ? ReverseBay.AxleFromRear(_vehicle, targetMetres, exit) : targetMetres;
+                if (bayRear)
                 {
-                    DrawDockedTrailer(drawn.Display, _vehicle, axleMetres, exit, _units);
+                    DrawDockedBody(drawn.Display, _vehicle, axleMetres, exit, _units);
                     messages.Add(
-                        $"Trailer reverses in at {Degrees(exit - reference):0.#} deg from the CPlane; rear at the picked point",
+                        $"The {body} reverses in at {Degrees(exit - reference):0.#} deg from the CPlane; rear at the picked point",
                         Color.MediumPurple);
-                    if (planReverse) return;
                 }
+
+                // The planner runs once the direction is picked, and a leg previewed here would be
+                // the forward travel the vehicle is in, not the reverse it will plan.
+                if (planReverse) return;
 
                 DrawPreview(drawn.Display, messages, route, sweepPreview, preview,
                     new ManoeuvreControl(axleMetres, state.Direction, kind, exit, FromStandstill: stopFirst));
@@ -531,10 +542,10 @@ internal sealed class InteractiveRouteBuilder
         Point3 target,
         double? exitHeading)
     {
-        TrailerReversePlanner.Proposal proposal;
+        ReversePlanner.Proposal proposal;
         try
         {
-            proposal = TrailerReversePlanner.Find(
+            proposal = ReversePlanner.Find(
                 _vehicle, _mode, route, _journey.LegStartIndex, state, target, exitHeading);
         }
         catch (InvalidOperationException error)
@@ -545,12 +556,9 @@ internal sealed class InteractiveRouteBuilder
 
         // Planned once, not per frame: the review's cursor changes nothing about the proposal.
         var reviewed = new LegPreview(proposal.Leg, sweepPreview.Build(proposal.Leg),
-            ArticulationTrace.At(_vehicle, route, proposal.Leg));
+            ArticulationTrace.At(_vehicle, route, proposal.Leg), proposal.Controls[^1]);
         using var review = new GetPoint();
-        review.SetCommandPrompt(
-            $"Forward travel {proposal.PullUpMetres:0.#} m; trailer miss {proposal.TrailerMissMetres:0.00} m"
-            + (proposal.HeadingMissRadians is double miss
-                ? $", heading miss {miss * 180.0 / Math.PI:0.#} deg" : string.Empty)
+        review.SetCommandPrompt(ReverseWording.ProposalSummary(_vehicle, proposal)
             + "; Enter to accept, Esc to choose another destination");
         review.AcceptNothing(true);
         review.PermitObjectSnap(false);
@@ -563,9 +571,7 @@ internal sealed class InteractiveRouteBuilder
         if (review.Get() != GetResult.Nothing) return;
 
         _journey.Commit(proposal.Leg, proposal.Controls, sealLeg: true);
-        RhinoApp.WriteLine(proposal.ReachedTarget
-            ? "Planned forward pull-up and reverse committed."
-            : "Closest drivable reverse committed; the trailer did not reach the requested position and heading.");
+        RhinoApp.WriteLine(ReverseWording.ProposalCommitted(_vehicle, proposal));
         ReportCompletion();
     }
 
@@ -576,19 +582,12 @@ internal sealed class InteractiveRouteBuilder
         _journey.Commit(leg, [pickedControl]);
         if (leg.RequestedAngleExceeded)
         {
-            if (InteractiveCapabilities.PointPlacesTrailer(_vehicle, pickedControl.Direction))
-            {
-                var state = _journey.State;
-                var finalTrailer = ArticulationTrace.AtEndOf(_vehicle, _journey.Route)?.Poses(
-                    state.RearAxleCentreMetres.XY, state.VehicleHeadingRadians)[^1];
-                var miss = finalTrailer?.AxleCentreMetres.DistanceTo(pickedControl.PositionMetres.XY);
-                var target = pickedControl.ExitHeadingRadians.HasValue ? "the bay" : "the picked point";
-                RhinoApp.WriteLine($"Trailer stopped {miss:0.00} m from {target} (or not square to it); pull farther forward or move the turn-away point to improve the approach.");
-            }
-            else
-            {
-                RhinoApp.WriteLine("Requested turn exceeded wheel lock; the committed leg was clamped to the selected driving mode. Hold Ctrl to drive the tightest turn the mode allows.");
-            }
+            // Measured where the docking body actually stands, the trailer's axle or a rigid
+            // vehicle's rear axle, by the same reckoning the planner judges arrival with.
+            var miss = ReverseBay.Miss(_vehicle, _journey.Route, _journey.State,
+                pickedControl.PositionMetres.XY, null).PositionMetres;
+            RhinoApp.WriteLine(ReverseWording.CommittedShortfall(_vehicle, pickedControl, miss)
+                ?? "Requested turn exceeded wheel lock; the committed leg was clamped to the selected driving mode. Hold Ctrl to drive the tightest turn the mode allows.");
         }
 
         if (leg.AimedBehindTheBeam)
@@ -609,8 +608,8 @@ internal sealed class InteractiveRouteBuilder
     {
         _journey.ToggleDirection();
         RhinoApp.WriteLine($"Travel direction: {_journey.State.Direction}");
-        if (InteractiveCapabilities.PointPlacesTrailer(_vehicle, _journey.State.Direction))
-            RhinoApp.WriteLine("Pick where the trailer axle should stop, or choose Direction to pick the rear of the trailer at the bay and the way it reverses in; the preview shows the full reverse sweep.");
+        if (ReverseWording.ReverseGuidance(_vehicle, _journey.State.Direction) is { } guidance)
+            RhinoApp.WriteLine(guidance);
     }
 
     private void ToggleStop()
@@ -627,7 +626,7 @@ internal sealed class InteractiveRouteBuilder
         RhinoApp.WriteLine(_journey.PointExitNext
             ? InteractiveCapabilities.DockingAvailable(_vehicle)
               && (_journey.State.Direction == TravelDirection.Reverse || _journey.PlanReverseNext)
-                ? "Pick the rear of the trailer at the bay, then point the way it reverses in."
+                ? $"Pick {ReverseWording.BayRear(_vehicle)} at the bay, then point the way it reverses in."
                 : "Place the point, then swing the direction to leave along."
             : "Exit direction released.");
     }
@@ -635,8 +634,11 @@ internal sealed class InteractiveRouteBuilder
     private void TogglePlanReverse()
     {
         _journey.TogglePlanReverse();
-        if (_journey.PlanReverseNext)
-            RhinoApp.WriteLine("Pick the rear of the trailer at the bay, then point the way it reverses in. The planner will try forward pull-ups and reverse approaches, then show its proposal before you accept it.");
+        if (!_journey.PlanReverseNext) return;
+        RhinoApp.WriteLine((InteractiveCapabilities.DockingAvailable(_vehicle)
+                ? $"Pick {ReverseWording.BayRear(_vehicle)} at the bay, then point the way it reverses in."
+                : $"Pick where the {ReverseWording.DockingAxle(_vehicle)} should stop; this combination cannot be squared onto a bay, so it is aimed at the point.")
+            + " The planner will try forward pull-ups and reverse approaches, then show its proposal before you accept it.");
     }
 
     /// <summary>
@@ -664,8 +666,11 @@ internal sealed class InteractiveRouteBuilder
 
     private string Prompt(VehicleState state)
     {
-        if (_journey.PlanReverseNext) return "Plan reverse: pick the rear of the trailer at the bay";
-        if (_journey.PickingTrailerRear) return $"Pick the rear of the trailer at the bay ({state.Direction})";
+        if (_journey.PickingBayRear)
+            return _journey.PlanReverseNext
+                ? $"Plan reverse: pick {ReverseWording.BayRear(_vehicle)} at the bay"
+                : $"Pick {ReverseWording.BayRear(_vehicle)} at the bay ({state.Direction})";
+        if (_journey.PlanReverseNext) return $"Plan reverse: pick where the {ReverseWording.DockingAxle(_vehicle)} should stop";
         var wheel = state.SteeringAngleRadians * 180.0 / Math.PI;
         if (_journey.Finishing) return $"Finish: pick the direction to end up travelling in (wheel {wheel:0.#} deg)";
         if (_journey.LockedTurn) return $"Full-lock turn: pick the side and heading, or type degrees ({state.Direction})";

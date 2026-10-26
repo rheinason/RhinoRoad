@@ -1,41 +1,71 @@
 namespace RhinoRoad.Core;
 
 /// <summary>
-/// What the click-to-drive loop may offer a vehicle. Every such gate is here, so that widening one
-/// -- reverse planning or docking for more than a single-trailer combination -- is one edit rather
-/// than a hunt through the pick loop.
+/// What the click-to-drive loop may offer a vehicle. Every such gate is here, and each one asks
+/// <see cref="ReverseCapabilities"/> rather than counting trailers, so a vehicle that gains docking
+/// there gains it in the pick loop without a hunt through it.
 /// </summary>
 public static class InteractiveCapabilities
 {
     /// <summary>
     /// Whether the PlanReverse option is offered: the planner searches pull-ups and reverse approaches
-    /// for one towed unit, and starts from forward travel.
+    /// for any vehicle (see <see cref="ReverseCapabilities.CanPlanReverse"/>), and starts from forward
+    /// travel.
     /// </summary>
     public static bool PlanReverseAvailable(VehicleDefinition vehicle, VehicleState state)
     {
         ArgumentNullException.ThrowIfNull(vehicle);
         ArgumentNullException.ThrowIfNull(state);
-        return vehicle.TowedUnits.Count == 1 && state.Direction == TravelDirection.Forward;
+        return ReverseCapabilities.CanPlanReverse(vehicle) && state.Direction == TravelDirection.Forward;
     }
 
     /// <summary>
-    /// Whether a bay is placed by the rear of the trailer and the direction it backs in, which is how
-    /// a site plan dimensions one. A rigid vehicle's point is its rear axle whatever the direction.
+    /// Whether a bay is placed by the rear of the docking body and the direction it backs in, which
+    /// is how a site plan dimensions one: the trailer's rear for a combination, the vehicle's own for
+    /// a rigid one (see <see cref="ReverseBay"/>). False only for a chain that cannot be squared onto
+    /// a bay, where there is no docked rear to speak of and the point stays the last trailer's axle.
     /// </summary>
     public static bool DockingAvailable(VehicleDefinition vehicle)
     {
         ArgumentNullException.ThrowIfNull(vehicle);
-        return vehicle.IsArticulated;
+        return ReverseCapabilities.CanDock(vehicle);
     }
 
     /// <summary>
     /// Whether a point picked while travelling this way says where the trailer axle goes rather than
-    /// the tractor's. Reversing a combination, the trailer is what is being placed.
+    /// the tractor's. Reversing a combination, the trailer is what is being placed. A rigid vehicle's
+    /// point is its rear axle either way, so this stays articulated-only.
     /// </summary>
     public static bool PointPlacesTrailer(VehicleDefinition vehicle, TravelDirection direction)
     {
         ArgumentNullException.ThrowIfNull(vehicle);
         return vehicle.IsArticulated && direction == TravelDirection.Reverse;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="control"/> is a reverse into a bay that this vehicle is docked onto --
+    /// on the point and square to it -- rather than aimed at. Mirrors the dispatch in
+    /// <see cref="ManoeuvreReplayService.PlanControl"/>: a Turn and a Finish go the ordinary way.
+    /// </summary>
+    public static bool Docks(VehicleDefinition vehicle, ManoeuvreControl control)
+    {
+        ArgumentNullException.ThrowIfNull(vehicle);
+        ArgumentNullException.ThrowIfNull(control);
+        return control is { Direction: TravelDirection.Reverse, Kind: ManoeuvreControlKind.Aim, ExitHeadingRadians: not null }
+            && ReverseCapabilities.CanDock(vehicle);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="control"/> places the docking body at its point rather than steering
+    /// the rear axle towards it: any aimed reverse of a combination, and a rigid vehicle's reverse
+    /// into a bay. A shortfall on such a leg is the body failing to get there, not the steering lock.
+    /// </summary>
+    public static bool PlacesDockingBody(VehicleDefinition vehicle, ManoeuvreControl control)
+    {
+        ArgumentNullException.ThrowIfNull(vehicle);
+        ArgumentNullException.ThrowIfNull(control);
+        return control is { Direction: TravelDirection.Reverse, Kind: ManoeuvreControlKind.Aim }
+            && (vehicle.IsArticulated || Docks(vehicle, control));
     }
 }
 
@@ -141,11 +171,11 @@ public sealed class InteractiveJourney
     public double LastSweepSign { get; private set; } = 1.0;
 
     /// <summary>
-    /// Whether this click places the rear of the trailer at a bay. That is the point a site plan
-    /// dimensions once a direction follows; without one there is no rear to speak of, and the pick
-    /// stays the trailer axle.
+    /// Whether this click places the rear of the docking body -- the trailer, or a rigid vehicle
+    /// itself -- at a bay. That is the point a site plan dimensions once a direction follows; without
+    /// one there is no rear to speak of, and the pick stays the docking axle.
     /// </summary>
-    public bool PickingTrailerRear => InteractiveCapabilities.DockingAvailable(Vehicle)
+    public bool PickingBayRear => InteractiveCapabilities.DockingAvailable(Vehicle)
         && (PlanReverseNext || (PointExitNext && State.Direction == TravelDirection.Reverse));
 
     /// <summary>The kind of control the next click makes.</summary>

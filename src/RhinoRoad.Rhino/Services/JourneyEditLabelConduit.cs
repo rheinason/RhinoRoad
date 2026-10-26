@@ -35,19 +35,20 @@ internal sealed class JourneyEditLabelConduit : DisplayConduit
             if (document.Objects.FindId(obstacleId)?.Geometry is Curve obstacle)
                 e.Display.DrawCurve(obstacle, Color.IndianRed, 3);
 
-        // The trailer as it stands in the bay at the control line's current end, rear marked.
-        if (definition.Manoeuvre.Controls.Count > 0 && vertices.Count > 1 &&
-            definition.Manoeuvre.Controls[^1] is { Direction: TravelDirection.Reverse, ExitHeadingRadians: double bayHeading } &&
-            Catalog.Get(definition.VehicleId) is { IsArticulated: true } bayVehicle)
+        // The docking body -- the trailer, or a rigid vehicle itself -- as it stands in the bay at the
+        // control line's current end, rear marked.
+        if (vertices.Count > 1 &&
+            ReverseBay.FinalBay(definition.Manoeuvre) is { ExitHeadingRadians: double bayHeading } &&
+            Catalog.Get(definition.VehicleId) is { } bayVehicle)
         {
             var axle = vertices[^1];
-            var docked = TrailerBay.DockedOutline(bayVehicle, axle, bayHeading)
+            var docked = ReverseBay.DockedOutline(bayVehicle, axle, bayHeading)
                 .Select(point => new Point3d(point.X * scale, point.Y * scale, axle.Z * scale)).ToList();
             if (docked.Count > 0)
             {
                 docked.Add(docked[0]);
                 e.Display.DrawDottedPolyline(docked, Color.MediumPurple, true);
-                var rear = TrailerBay.RearFromAxle(bayVehicle, axle, bayHeading);
+                var rear = ReverseBay.RearFromAxle(bayVehicle, axle, bayHeading);
                 e.Display.DrawDot(new Point3d(rear.X * scale, rear.Y * scale, rear.Z * scale),
                     "rear", Color.MediumPurple, Color.White);
             }

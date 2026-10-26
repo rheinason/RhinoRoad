@@ -30,6 +30,7 @@ internal sealed class AreaSearchPanel : Panel
     private readonly DropDown _searchTime = new();
     private readonly DropDown _suggestions = new();
     private readonly Button _searchButton = new() { Text = SearchText };
+    private readonly Button _bayButton = new() { Text = "Set bay…" };
     private VehicleDefinition? _vehicle;
     private bool _closed;
     private bool _suppressSuggestionEvent;
@@ -67,10 +68,9 @@ internal sealed class AreaSearchPanel : Panel
             }
             else StartAreaSearch();
         };
-        var bay = new Button { Text = "Set trailer bay…", ToolTip = "Pick the rear of the trailer at the bay, then point the way it reverses in." };
-        bay.Click += (_, _) =>
+        _bayButton.Click += (_, _) =>
         {
-            if (!Searching) _host.PickTrailerBay(message => _areaStatus.Text = message);
+            if (!Searching) _host.PickBay(message => _areaStatus.Text = message);
         };
         var pickYard = new Button { Text = "Pick yard…", ToolTip = "One closed curve around the area the vehicle may use." };
         pickYard.Click += (_, _) => PickYard();
@@ -100,8 +100,8 @@ internal sealed class AreaSearchPanel : Panel
                     Heading("1. Site"),
                     _yardLabel, pickYard,
                     _obstaclesLabel, pickObstacles,
-                    Heading("2. Trailer bay"),
-                    _bayLabel, bay,
+                    Heading("2. Bay"),
+                    _bayLabel, _bayButton,
                     Heading("3. Search"),
                     new Label { Text = "Keep the route as drawn up to, and let the search move from:", Wrap = WrapMode.Word },
                     _adjustFrom,
@@ -129,11 +129,11 @@ internal sealed class AreaSearchPanel : Panel
     }
 
     /// <summary>
-    /// Whether the clear-area search can plan for <paramref name="vehicle"/>. The single place the
-    /// palette asks; it mirrors the restriction <see cref="ManoeuvringAreaSearch.Find"/> enforces.
+    /// Whether the clear-area search can plan for <paramref name="vehicle"/>: any vehicle that can be
+    /// docked, rigid or articulated. The single place the palette asks, and the same capability
+    /// <see cref="ManoeuvringAreaSearch.Find"/> enforces.
     /// </summary>
-    public static bool AreaSearchSupported(VehicleDefinition vehicle) =>
-        vehicle.Id == "SVT" && vehicle.TowedUnits.Count == 1;
+    public static bool AreaSearchSupported(VehicleDefinition vehicle) => ReverseCapabilities.CanSearchArea(vehicle);
 
     /// <summary>Raised when the panel opens, closes, appears or disappears, so the palette can resize.</summary>
     public event Action? LayoutChanged;
@@ -152,6 +152,7 @@ internal sealed class AreaSearchPanel : Panel
     public void Refresh(VehicleAccessDefinition definition)
     {
         _vehicle = JourneyEditForm.Catalog.Get(definition.VehicleId);
+        _bayButton.ToolTip = $"Pick {ReverseWording.BayRear(_vehicle)} at the bay, then point the way it reverses in.";
         var supported = AreaSearchSupported(_vehicle);
         if (Visible != supported)
         {
@@ -196,11 +197,6 @@ internal sealed class AreaSearchPanel : Panel
             return;
         }
         var vehicle = JourneyEditForm.Catalog.Get(definition.VehicleId);
-        if (!vehicle.IsArticulated)
-        {
-            _bayLabel.Text = "Bay placement is for articulated vehicles.";
-            return;
-        }
         if (final.ExitHeadingRadians is not double heading)
         {
             _bayLabel.Text = "No reversing direction yet — required for the search.";
@@ -210,8 +206,9 @@ internal sealed class AreaSearchPanel : Panel
         var axle = _document.Objects.FindId(_sourceId)?.Geometry is Curve line
             ? AccessDefinitionStore.PolylineVertices(line, _document.ModelUnitSystem)[^1]
             : final.PositionMetres;
-        var rear = TrailerBay.RearFromAxle(vehicle, axle, heading);
-        _bayLabel.Text = $"Trailer rear at ({rear.X:0.##}, {rear.Y:0.##}) m, reversing in at {JourneyEditPicks.Degrees(heading):0.#}° (purple).";
+        var rear = ReverseBay.RearFromAxle(vehicle, axle, heading);
+        var body = ReverseWording.DockingBody(vehicle);
+        _bayLabel.Text = $"Rear of the {body} at ({rear.X:0.##}, {rear.Y:0.##}) m, reversing in at {JourneyEditPicks.Degrees(heading):0.#}° (purple).";
     }
 
     /// <summary>
@@ -269,7 +266,7 @@ internal sealed class AreaSearchPanel : Panel
         return $"Live clear area {readout.ClearAreaSquareMetres:0.0} m²{difference}{bay}. "
             + (readout.OutsideYard ? "Outside yard. " : string.Empty)
             + (readout.ObstacleConflict ? "Fixed-object conflict. " : string.Empty)
-            + (readout.FoldLimitReached ? "Trailer fold limit. " : string.Empty)
+            + (readout.FoldLimitReached ? "Fold limit. " : string.Empty)
             + (readout.SteeringLimitReached ? "Steering limit. " : string.Empty)
             + (!readout.Passes ? "Adjust the controls before saving."
                 : readout.Bay is not null ? "Position, heading and site clear." : "Site clear.");
@@ -323,7 +320,7 @@ internal sealed class AreaSearchPanel : Panel
         _obstacleIds.Remove(picked[0]);
         ClearSuggestions();
         RefreshSite();
-        _areaStatus.Text = "Yard picked. Pick obstacles, check the trailer bay, then search.";
+        _areaStatus.Text = "Yard picked. Pick obstacles, check the bay, then search.";
     }
 
     private void PickObstacles()
@@ -373,7 +370,7 @@ internal sealed class AreaSearchPanel : Panel
         var vehicle = JourneyEditForm.Catalog.Get(definition.VehicleId);
         if (!AreaSearchSupported(vehicle))
         {
-            _areaStatus.Text = $"The clear-area search does not support {vehicle.Name} yet.";
+            _areaStatus.Text = $"{vehicle.Name} cannot be squared onto a bay in reverse, so the clear-area search cannot hold the bay's direction for it.";
             return;
         }
         if (!int.TryParse(_adjustFrom.SelectedKey, out var first))
@@ -386,7 +383,7 @@ internal sealed class AreaSearchPanel : Panel
         if (journey.Controls[^1] is not { Direction: TravelDirection.Reverse,
             Kind: ManoeuvreControlKind.Aim, ExitHeadingRadians: not null })
         {
-            _areaStatus.Text = "Set the trailer bay first (step 2): the road must end reversing into a bay with a direction.";
+            _areaStatus.Text = "Set the bay first (step 2): the road must end reversing into a bay with a direction.";
             return;
         }
         RefreshSite();

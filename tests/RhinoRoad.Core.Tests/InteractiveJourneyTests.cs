@@ -92,7 +92,7 @@ public sealed class InteractiveJourneyTests
         journey.TogglePlanReverse();
         Assert.True(journey.PlanReverseNext);
         Assert.False(journey.Finishing);
-        Assert.True(journey.PickingTrailerRear);
+        Assert.True(journey.PickingBayRear);
     }
 
     [Fact]
@@ -109,25 +109,113 @@ public sealed class InteractiveJourneyTests
         Assert.False(journey.PlanReverseNext);
     }
 
-    [Fact]
-    public void Plan_reverse_is_offered_to_a_single_trailer_travelling_forward_only()
+    /// <summary>A chain of three joints: nothing in the catalogue, and nothing that can be docked.</summary>
+    private static VehicleDefinition ThreeJoints
     {
+        get
+        {
+            var pvt = Catalog.Get("PVT");
+            return pvt with
+            {
+                Id = "PVT3",
+                TowedUnits = [.. pvt.TowedUnits, pvt.TowedUnits[^1] with { Id = "SECOND", HitchOffsetMetres = -1.15 }]
+            };
+        }
+    }
+
+    [Theory]
+    [InlineData("PV")]
+    [InlineData("REN")]
+    [InlineData("LV12")]
+    [InlineData("BUS12")]
+    [InlineData("BUS13")]
+    [InlineData("BUS15")]
+    [InlineData("SVT")]
+    [InlineData("PVT")]
+    public void Plan_reverse_and_bay_docking_are_offered_to_every_preset_travelling_forward(string id)
+    {
+        var vehicle = Catalog.Get(id);
         var forward = new VehicleState(new Point3(0, 0, 0), 0.0, 0.0, TravelDirection.Forward, 0.0);
-        Assert.True(InteractiveCapabilities.PlanReverseAvailable(Catalog.Get("SVT"), forward));
-        Assert.False(InteractiveCapabilities.PlanReverseAvailable(Catalog.Get("SVT"), forward with { Direction = TravelDirection.Reverse }));
-        Assert.False(InteractiveCapabilities.PlanReverseAvailable(Catalog.Get("PV"), forward));
-        Assert.False(InteractiveCapabilities.PlanReverseAvailable(Catalog.Get("PVT"), forward));
-        Assert.True(InteractiveCapabilities.DockingAvailable(Catalog.Get("PVT")));
-        Assert.False(InteractiveCapabilities.DockingAvailable(Catalog.Get("REN")));
+
+        Assert.True(InteractiveCapabilities.PlanReverseAvailable(vehicle, forward));
+        Assert.False(InteractiveCapabilities.PlanReverseAvailable(vehicle, forward with { Direction = TravelDirection.Reverse }));
+        Assert.True(InteractiveCapabilities.DockingAvailable(vehicle));
+        // A rigid reverse point is its own rear axle; only a combination's point moves to the trailer.
+        Assert.Equal(vehicle.IsArticulated, InteractiveCapabilities.PointPlacesTrailer(vehicle, TravelDirection.Reverse));
+        Assert.False(InteractiveCapabilities.PointPlacesTrailer(vehicle, TravelDirection.Forward));
     }
 
     [Fact]
-    public void Rigid_vehicle_arming_plan_reverse_has_no_effect()
+    public void A_chain_that_cannot_be_docked_plans_to_its_trailer_axle_rather_than_by_a_bay_rear()
     {
-        var (journey, _) = Start("PV");
+        var vehicle = ThreeJoints;
+        var journey = new InteractiveJourney(vehicle, new VehicleState(new Point3(0, 0, 0), 0.0, 0.0, TravelDirection.Forward, 0.0));
+
         journey.TogglePlanReverse();
-        Assert.False(journey.PlanReverseNext);
-        Assert.False(journey.PickingTrailerRear);
+
+        Assert.True(journey.PlanReverseNext);
+        Assert.False(InteractiveCapabilities.DockingAvailable(vehicle));
+        Assert.False(journey.PickingBayRear);
+    }
+
+    [Fact]
+    public void A_rigid_vehicle_plans_a_reverse_into_a_bay_picked_by_its_rear()
+    {
+        var (journey, _) = Start("REN");
+        journey.TogglePlanReverse();
+        Assert.True(journey.PlanReverseNext);
+        Assert.True(journey.PickingBayRear);
+        journey.TogglePlanReverse();
+        Assert.False(journey.PickingBayRear);
+
+        // Reversing with Direction armed is a bay too, picked by the rear of the vehicle.
+        journey.ToggleDirection();
+        journey.TogglePointExit();
+        Assert.True(journey.PickingBayRear);
+    }
+
+    /// <summary>
+    /// The gate that says a control docks agrees with what replay actually does with it: a docked
+    /// rigid reverse arrives on its point and square, and does not report the heading as unavailable.
+    /// </summary>
+    [Fact]
+    public void A_control_said_to_dock_is_docked_by_replay()
+    {
+        var vehicle = Catalog.Get("REN");
+        var mode = vehicle.DrivingModes["B"];
+        var state = new VehicleState(new Point3(0, 0, 0), 0.0, 0.0, TravelDirection.Reverse, 0.0);
+        var route = new[] { ManoeuvreReplayService.StateSample(state, vehicle) };
+        var bay = new ManoeuvreControl(new Point3(-25, 0, 0), TravelDirection.Reverse, ManoeuvreControlKind.Aim, Math.PI);
+
+        Assert.True(InteractiveCapabilities.Docks(vehicle, bay));
+        Assert.True(InteractiveCapabilities.PlacesDockingBody(vehicle, bay));
+        var leg = ManoeuvreReplayService.PlanControl(vehicle, mode, route, 0, state, bay);
+        Assert.False(leg.ExitHeadingUnavailable);
+        Assert.False(leg.RequestedAngleExceeded);
+        var miss = ReverseBay.Miss(vehicle, route.Concat(leg.Samples.Skip(1)).ToArray(), leg.EndState,
+            bay.PositionMetres.XY, bay.ExitHeadingRadians);
+        Assert.True(miss.PositionMetres <= ReversePlanner.ArrivalToleranceMetres);
+        Assert.True(miss.HeadingRadians!.Value <= ReversePlanner.ArrivalToleranceDegrees * Math.PI / 180.0);
+    }
+
+    [Fact]
+    public void Only_an_aimed_reverse_with_a_direction_docks_and_a_rigid_aim_without_one_steers()
+    {
+        var rigid = Catalog.Get("REN");
+        var svt = Catalog.Get("SVT");
+        var point = new Point3(-20, 0, 0);
+        var aim = new ManoeuvreControl(point, TravelDirection.Reverse);
+        var finish = new ManoeuvreControl(point, TravelDirection.Reverse, ManoeuvreControlKind.Finish, Math.PI);
+        var forward = new ManoeuvreControl(point, TravelDirection.Forward, ExitHeadingRadians: Math.PI);
+
+        Assert.False(InteractiveCapabilities.Docks(rigid, aim));
+        Assert.False(InteractiveCapabilities.Docks(rigid, finish));
+        Assert.False(InteractiveCapabilities.Docks(rigid, forward));
+        Assert.False(InteractiveCapabilities.PlacesDockingBody(rigid, aim));
+        // A combination's reverse places its trailer whether or not it has a direction.
+        Assert.True(InteractiveCapabilities.PlacesDockingBody(svt, aim));
+        Assert.False(InteractiveCapabilities.Docks(ThreeJoints, aim with { ExitHeadingRadians = Math.PI }));
+        Assert.True(InteractiveCapabilities.PlacesDockingBody(ThreeJoints, aim with { ExitHeadingRadians = Math.PI }));
     }
 
     [Fact]

@@ -1,33 +1,29 @@
 namespace RhinoRoad.Core;
 
-/// <summary>How far a reversed trailer stopped from its bay.</summary>
+/// <summary>How far a reversed docking body -- the trailer, or a rigid vehicle -- stopped from its bay.</summary>
 public sealed record BayArrival(double PositionErrorMetres, double HeadingErrorDegrees)
 {
     /// <summary>Within the tolerance the reverse planner and the area search accept as arrived.</summary>
     public bool Arrived =>
-        PositionErrorMetres <= TrailerReversePlanner.ArrivalToleranceMetres &&
-        HeadingErrorDegrees <= TrailerReversePlanner.ArrivalToleranceDegrees;
+        PositionErrorMetres <= ReversePlanner.ArrivalToleranceMetres &&
+        HeadingErrorDegrees <= ReversePlanner.ArrivalToleranceDegrees;
 
     /// <summary>
-    /// Measures the last towed unit against the final control, or returns null when the journey
-    /// has no bay to measure: a rigid vehicle, or a last control that is not a reverse with a
-    /// direction. The palette once measured a synthesised SVT on whatever road was open and printed
-    /// an infinite heading error for a car; a bay is only defined where the trailer reverses into one.
+    /// Measures the docking body against the final control, or returns null when the journey has no
+    /// bay to measure: a last control that is not an aimed reverse with a direction (see
+    /// <see cref="ReverseBay.FinalBay"/>). The palette once measured a synthesised SVT on whatever road
+    /// was open and printed an infinite heading error for a car; a car reversing into a bay is now
+    /// measured by its own rear axle, through the same <see cref="ReverseBay.Miss"/> the planner uses.
     /// </summary>
     public static BayArrival? Measure(VehicleDefinition vehicle, ManoeuvreDefinition journey, ReplayedManoeuvre replay)
     {
         ArgumentNullException.ThrowIfNull(vehicle);
         ArgumentNullException.ThrowIfNull(journey);
         ArgumentNullException.ThrowIfNull(replay);
-        if (!vehicle.IsArticulated || journey.Controls.Count == 0 ||
-            journey.Controls[^1] is not { Direction: TravelDirection.Reverse, ExitHeadingRadians: double heading } final ||
-            ArticulationTrace.AtEndOf(vehicle, replay.Samples) is not { } chain)
-            return null;
-        var end = replay.EndState;
-        var trailer = chain.Poses(end.RearAxleCentreMetres.XY, end.VehicleHeadingRadians)[^1];
-        // The bay heading is the way the trailer travels in, so its body faces the other way.
-        var headingError = Math.Abs(Geometry2D.NormalizeAngle(trailer.HeadingRadians - heading - Math.PI)) * 180.0 / Math.PI;
-        return new BayArrival(trailer.AxleCentreMetres.DistanceTo(final.PositionMetres.XY), headingError);
+        if (ReverseBay.FinalBay(journey) is not { } final) return null;
+        var miss = ReverseBay.Miss(vehicle, replay.Samples, replay.EndState, final.PositionMetres.XY,
+            final.ExitHeadingRadians);
+        return new BayArrival(miss.PositionMetres, miss.HeadingRadians!.Value * 180.0 / Math.PI);
     }
 }
 
@@ -44,9 +40,6 @@ public sealed record ClearAreaReadout(
     bool FoldLimitReached,
     bool SteeringLimitReached)
 {
-    /// <summary>The fold the area search and the reverse planner reject a route at.</summary>
-    public const double FoldLimitDegrees = 65.0;
-
     public bool Passes =>
         !OutsideYard && !ObstacleConflict && !FoldLimitReached && !SteeringLimitReached && (Bay?.Arrived ?? true);
 
@@ -64,17 +57,13 @@ public sealed record ClearAreaReadout(
             throw new ArgumentException("The preview has no clearance region to measure.", nameof(preview));
 
         var footprint = preview.Clearance.Region!;
-        var foldLimit = FoldLimitDegrees * Math.PI / 180.0;
-        // Every joint counts: a fold anywhere in the chain is the jackknife the search rejects.
-        var foldExceeded = vehicle.IsArticulated && ArticulationTrace.Follow(vehicle, preview.Journey.Samples)
-            .Any(step => step.Chain is { } chain && Enumerable.Range(0, chain.Count)
-                .Any(joint => Math.Abs(chain.ArticulationAngleRadians(joint, step.VehicleHeadingRadians)) >= foldLimit));
         return new ClearAreaReadout(
             AccessFootprint.IntersectionArea(footprint, yard),
             AccessFootprint.Outside(footprint, new[] { yard }) is not null,
             obstacles.Any(polygon => AccessFootprint.ConflictPoint(footprint, polygon, true) is not null),
             BayArrival.Measure(vehicle, preview.Definition, preview.Journey),
-            foldExceeded,
+            // Every joint against its own unit's limit, as the search and the planner judge it.
+            FoldLimit.IsReached(vehicle, preview.Journey.Samples),
             preview.Journey.RequestedAngleExceeded);
     }
 }
