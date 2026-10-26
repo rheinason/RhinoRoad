@@ -116,17 +116,9 @@ internal static class AccessDerivedService
         var movements = new List<string>();
         foreach (var id in definition.Sources)
         {
-            var source = FindSource(document, id) ?? throw new InvalidOperationException($"Journey {id} is missing.");
-            if (!AccessDefinitionStore.TryRead(source, out var saved, out _) || saved is null)
-                throw new InvalidDataException("A journey definition cannot be read.");
-            if (AccessDefinitionStore.Fingerprint(source) != saved.SourceFingerprint || saved.ReferenceFingerprints.Any(pair =>
-                    document.Objects.FindId(pair.Key) is not { } reference || AccessDefinitionStore.Fingerprint(reference) != pair.Value))
-                throw new InvalidOperationException("A journey is out of date. Update that journey first, then update this sizing result.");
-            if (!VehicleAccessRunService.TryPrepareUpdate(document, source, out var run, out var error) || run is null)
-                throw new InvalidOperationException(error);
-            if (!run.Geometry.BodyEnvelopeMerged || run.Geometry.ClearanceRegion is null || run.Geometry.Warnings.Count > 0)
-                throw new InvalidOperationException("A journey has no complete clearance envelope.");
-            regions.Add(run.Geometry.ClearanceRegion);
+            var (source, saved, run) = PrepareJourney(document, id,
+                "Update that journey first, then update this sizing result.");
+            regions.Add(run.Geometry.ClearanceRegion!);
             signatures[id] = Signature(document, source);
             movements.Add($"{run.Analysis.Vehicle.Name}: {MovementFit.Describe(true, run.Violations.Count == 0,
                 run.Obstacles.Count + run.AllowedBoundaries.Count > 0)}; {run.Analysis.Vehicle.ValidationStatus}");
@@ -244,6 +236,26 @@ internal static class AccessDerivedService
             definition.SectionStart.HasValue != definition.SectionEnd.HasValue)
             throw new InvalidDataException("The sizing definition is invalid or uses an unsupported version.");
         return definition;
+    }
+
+    /// <summary>
+    /// The current, complete clearance run of one saved journey. Throws when the journey is missing,
+    /// unreadable, out of date or has no complete clearance envelope.
+    /// </summary>
+    internal static (RhinoObject Source, VehicleAccessDefinition Saved, PreparedVehicleAccess Run) PrepareJourney(
+        RhinoDoc document, Guid id, string outOfDateAdvice)
+    {
+        var source = FindSource(document, id) ?? throw new InvalidOperationException($"Journey {id} is missing.");
+        if (!AccessDefinitionStore.TryRead(source, out var saved, out _) || saved is null)
+            throw new InvalidDataException("A journey definition cannot be read.");
+        if (AccessDefinitionStore.Fingerprint(source) != saved.SourceFingerprint || saved.ReferenceFingerprints.Any(pair =>
+                document.Objects.FindId(pair.Key) is not { } reference || AccessDefinitionStore.Fingerprint(reference) != pair.Value))
+            throw new InvalidOperationException($"A journey is out of date. {outOfDateAdvice}");
+        if (!VehicleAccessRunService.TryPrepareUpdate(document, source, out var run, out var error) || run is null)
+            throw new InvalidOperationException(error);
+        if (!run.Geometry.BodyEnvelopeMerged || run.Geometry.ClearanceRegion is null || run.Geometry.Warnings.Count > 0)
+            throw new InvalidOperationException("A journey has no complete clearance envelope.");
+        return (source, saved, run);
     }
 
     private static RhinoObject? FindSource(RhinoDoc document, Guid id) => DocumentObjects.All(document)

@@ -114,7 +114,7 @@ public static class TrailerReverseGenerator
 
         var state = start;
         var working = chain.Clone();
-        var samples = new List<RouteSample> { Seed(state, vehicle) };
+        var samples = new List<RouteSample> { ManoeuvreReplayService.StateSample(state, vehicle) };
 
         // The chain is advanced from the samples, exactly as ArticulationTrace.Follow advances it for
         // the analyzer, the preview and replay -- heading from the sample's path heading, distance
@@ -317,7 +317,7 @@ public static class TrailerReverseGenerator
 
         var state = start;
         var working = chain.Clone();
-        var samples = new List<RouteSample> { Seed(state, vehicle) };
+        var samples = new List<RouteSample> { ManoeuvreReplayService.StateSample(state, vehicle) };
 
         // The chain is advanced from the samples, exactly as ArticulationTrace.Follow advances it for
         // the analyzer, the preview and replay -- heading from the sample's path heading, distance
@@ -472,14 +472,6 @@ public static class TrailerReverseGenerator
         }
 
         return false;
-    }
-
-    private static RouteSample Seed(VehicleState state, VehicleDefinition vehicle)
-    {
-        var pathHeading = Geometry2D.NormalizeAngle(
-            state.VehicleHeadingRadians + (state.Direction == TravelDirection.Reverse ? Math.PI : 0.0));
-        var curvature = (double)state.Direction * Math.Tan(state.SteeringAngleRadians) / vehicle.WheelbaseMetres;
-        return new RouteSample(state.StationMetres, state.RearAxleCentreMetres, pathHeading, curvature, state.Direction);
     }
 }
 

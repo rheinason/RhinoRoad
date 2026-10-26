@@ -63,7 +63,8 @@ $required = @(
     "RhinoRoad.Core.dll",
     "Clipper2Lib.dll",
     "RhinoRoad.Rhino.deps.json",
-    "RhinoRoad.Rhino.runtimeconfig.json"
+    "RhinoRoad.Rhino.runtimeconfig.json",
+    "RhinoRoad.Rhino.rui"
 )
 foreach ($name in $required) {
     $path = Join-Path $pluginOutput $name
