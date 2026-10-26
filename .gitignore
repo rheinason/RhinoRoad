@@ -9,3 +9,6 @@ TestResults/
 artifacts/
 .artifacts/
 .tmp/
+
+# Claude Code agent worktrees
+.claude/worktrees/

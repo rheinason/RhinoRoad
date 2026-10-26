@@ -13,7 +13,37 @@ public sealed record AccessRun(
 /// <summary>The shared analysis pipeline behind the manoeuvre and path components.</summary>
 public static class AccessRunner
 {
-    private static readonly Lazy<VehicleCatalog> Catalog = new(VehicleCatalog.LoadEmbedded);
+    // Same Rhino plug-in GUID as RhinoRoad.Rhino's AssemblyInfo; this assembly cannot reference that project.
+    private static readonly Guid RhinoPluginId = new("E5473B43-CAB5-469E-9F58-0D90AD315F5B");
+    private static readonly object CatalogGate = new();
+    private static VehicleCatalog? _catalog;
+
+    private static VehicleCatalog Catalog
+    {
+        get
+        {
+            lock (CatalogGate) return _catalog ??= VehicleCatalog.LoadWithUserDirectory(UserVehicleFolder()).Catalog;
+        }
+    }
+
+    /// <summary>Drops the cached catalog so the next analysis re-reads the user vehicles folder.</summary>
+    public static void ReloadCatalog()
+    {
+        lock (CatalogGate) _catalog = null;
+    }
+
+    /// <summary>
+    /// The folder the Rhino plug-in reads user vehicles from: its settings directory when loaded,
+    /// otherwise the equivalent %APPDATA% location.
+    /// </summary>
+    private static string UserVehicleFolder()
+    {
+        var settings = Rhino.PlugIns.PlugIn.Find(RhinoPluginId)?.SettingsDirectory;
+        if (!string.IsNullOrWhiteSpace(settings)) return Path.Combine(settings, "vehicles");
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "McNeel", "Rhinoceros", "8.0", "Plug-ins", "RhinoRoad", "vehicles");
+    }
 
     public static bool TryResolve(
         string? vehicleId,
@@ -25,11 +55,11 @@ public static class AccessRunner
         vehicle = null!;
         mode = null!;
         var id = string.IsNullOrWhiteSpace(vehicleId) ? "PV" : vehicleId.Trim();
-        var found = Catalog.Value.Vehicles.FirstOrDefault(
+        var found = Catalog.Vehicles.FirstOrDefault(
             candidate => string.Equals(candidate.Id, id, StringComparison.OrdinalIgnoreCase));
         if (found is null)
         {
-            error = $"Unknown vehicle '{id}'. Available: {string.Join(", ", Catalog.Value.Vehicles.Select(item => item.Id))}.";
+            error = $"Unknown vehicle '{id}'. Available: {string.Join(", ", Catalog.Vehicles.Select(item => item.Id))}.";
             return false;
         }
 

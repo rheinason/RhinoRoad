@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RhinoUI major_ver="3" minor_ver="0" guid="1e0b99b2-d8f6-5135-a89e-ad7c5bf6ff85" localize="False" default_language_id="1033" dpi_scale="100">
+  <extend_rhino_menus />
+  <menus />
+  <tool_bar_groups>
+    <tool_bar_group guid="a137716c-bc9a-5d03-bc91-92734cb4cd7c" dock_bar_guid32="de9a04c1-126a-5ab8-a38c-376f51cbec1a" dock_bar_guid64="95f775dc-19a6-50dc-af87-ad02dd296c48" active_tool_bar_group="cd1b0cc8-b47a-55f6-a457-323087e5eaea" single_file="False" hide_single_tab="False" point_floating="0,0">
+      <text><locale_1033>RhinoRoad</locale_1033></text>
+      <tool_bar_group_item guid="cd1b0cc8-b47a-55f6-a457-323087e5eaea" major_version="1" minor_version="1">
+        <text><locale_1033>RhinoRoad</locale_1033></text>
+        <tool_bar_id>f9964835-07c4-5e60-aa17-b302d7e4e609</tool_bar_id>
+        <floating>False</floating>
+      </tool_bar_group_item>
+    </tool_bar_group>
+  </tool_bar_groups>
+  <tool_bars>
+    <tool_bar guid="f9964835-07c4-5e60-aa17-b302d7e4e609" item_display_style="text">
+      <text><locale_1033>RhinoRoad</locale_1033></text>
+      <tool_bar_item guid="80153971-56e0-5b2b-8ad5-cb7940a6b614">
+        <left_macro_id>e3f1f5ac-5187-5836-b393-bb0158b5b71d</left_macro_id>
+      </tool_bar_item>
+      <tool_bar_item guid="a52720ef-3031-5cb3-86cf-45c0e1677da1">
+        <left_macro_id>44beeb68-bd7b-5924-bfbb-bebdaad8979d</left_macro_id>
+      </tool_bar_item>
+      <tool_bar_item guid="dc4e0f94-d22a-57d8-9a54-32386d82ea65">
+        <left_macro_id>7bb17fdd-df59-551f-902d-2c1bdd9a3934</left_macro_id>
+      </tool_bar_item>
+      <tool_bar_item guid="5c9d218c-ea5e-56ca-a3a3-1a8c78bdf2c8">
+        <left_macro_id>9fa92fe9-797c-5941-b220-37f38b6ebcb7</left_macro_id>
+      </tool_bar_item>
+      <tool_bar_item guid="1dd386a9-a12c-5a99-ae4a-7b4c77283ef7">
+        <left_macro_id>c7d8621a-f6e1-57a3-afcc-e7eda8b81e1e</left_macro_id>
+      </tool_bar_item>
+      <tool_bar_item guid="e300a4b2-0180-57de-92e0-9bc68dfd17f5">
+        <left_macro_id>118ea4a4-7ca9-5483-8350-078e88ff31f1</left_macro_id>
+      </tool_bar_item>
+      <tool_bar_item guid="75b2b1af-4304-50af-be8b-a9cc00b1240d">
+        <left_macro_id>62848154-4504-58c9-85c8-619bcbc44b82</left_macro_id>
+      </tool_bar_item>
+      <tool_bar_item guid="f58146c3-4f87-5dd7-afc9-6de906a2a41e">
+        <left_macro_id>10184bf2-f21f-56fb-bfc0-4ecc3d313828</left_macro_id>
+      </tool_bar_item>
+      <tool_bar_item guid="fb6b974e-d257-5b41-9ffd-1aa6f62fea29">
+        <left_macro_id>442a7b67-adb1-5895-93a7-823a13993dfa</left_macro_id>
+      </tool_bar_item>
+      <tool_bar_item guid="30b1fbab-21f6-5b9a-a627-cf5b6ff638bd">
+        <left_macro_id>64448bff-2133-594e-8920-891dec369fea</left_macro_id>
+      </tool_bar_item>
+    </tool_bar>
+  </tool_bars>
+  <macros>
+    <macro_item guid="e3f1f5ac-5187-5836-b393-bb0158b5b71d">
+      <text><locale_1033>RRRoad</locale_1033></text>
+      <tooltip><locale_1033>Drive a vehicle along a path or follow a curve and create swept and clearance envelopes</locale_1033></tooltip>
+      <button_text><locale_1033>Road</locale_1033></button_text>
+      <menu_text><locale_1033>RRRoad</locale_1033></menu_text>
+      <help_text><locale_1033>Drive a vehicle along a path or follow a curve and create swept and clearance envelopes</locale_1033></help_text>
+      <script>! _RRRoad</script>
+    </macro_item>
+    <macro_item guid="44beeb68-bd7b-5924-bfbb-bebdaad8979d">
+      <text><locale_1033>RREditRoad</locale_1033></text>
+      <tooltip><locale_1033>Edit a saved road journey: vehicle, mode, route and checks</locale_1033></tooltip>
+      <button_text><locale_1033>Edit</locale_1033></button_text>
+      <menu_text><locale_1033>RREditRoad</locale_1033></menu_text>
+      <help_text><locale_1033>Edit a saved road journey: vehicle, mode, route and checks</locale_1033></help_text>
+      <script>! _RREditRoad</script>
+    </macro_item>
+    <macro_item guid="7bb17fdd-df59-551f-902d-2c1bdd9a3934">
+      <text><locale_1033>RRUpdateRoad</locale_1033></text>
+      <tooltip><locale_1033>Re-run a saved road journey after the geometry changed</locale_1033></tooltip>
+      <button_text><locale_1033>Update</locale_1033></button_text>
+      <menu_text><locale_1033>RRUpdateRoad</locale_1033></menu_text>
+      <help_text><locale_1033>Re-run a saved road journey after the geometry changed</locale_1033></help_text>
+      <script>! _RRUpdateRoad</script>
+    </macro_item>
+    <macro_item guid="9fa92fe9-797c-5941-b220-37f38b6ebcb7">
+      <text><locale_1033>RRInspectRoad</locale_1033></text>
+      <tooltip><locale_1033>Inspect a result: hover for the vehicle pose and checks</locale_1033></tooltip>
+      <button_text><locale_1033>Inspect</locale_1033></button_text>
+      <menu_text><locale_1033>RRInspectRoad</locale_1033></menu_text>
+      <help_text><locale_1033>Inspect a result: hover for the vehicle pose and checks</locale_1033></help_text>
+      <script>! _RRInspectRoad</script>
+    </macro_item>
+    <macro_item guid="c7d8621a-f6e1-57a3-afcc-e7eda8b81e1e">
+      <text><locale_1033>RRMeasureRoad</locale_1033></text>
+      <tooltip><locale_1033>Measure the width the combined journeys need along a section line</locale_1033></tooltip>
+      <button_text><locale_1033>Measure</locale_1033></button_text>
+      <menu_text><locale_1033>RRMeasureRoad</locale_1033></menu_text>
+      <help_text><locale_1033>Measure the width the combined journeys need along a section line</locale_1033></help_text>
+      <script>! _RRMeasureRoad</script>
+    </macro_item>
+    <macro_item guid="118ea4a4-7ca9-5483-8350-078e88ff31f1">
+      <text><locale_1033>RRCombineRoads</locale_1033></text>
+      <tooltip><locale_1033>Combine several journeys into one access footprint</locale_1033></tooltip>
+      <button_text><locale_1033>Combine</locale_1033></button_text>
+      <menu_text><locale_1033>RRCombineRoads</locale_1033></menu_text>
+      <help_text><locale_1033>Combine several journeys into one access footprint</locale_1033></help_text>
+      <script>! _RRCombineRoads</script>
+    </macro_item>
+    <macro_item guid="62848154-4504-58c9-85c8-619bcbc44b82">
+      <text><locale_1033>RRCompareRoads</locale_1033></text>
+      <tooltip><locale_1033>Compare the footprints of two journeys and show the extra space</locale_1033></tooltip>
+      <button_text><locale_1033>Compare</locale_1033></button_text>
+      <menu_text><locale_1033>RRCompareRoads</locale_1033></menu_text>
+      <help_text><locale_1033>Compare the footprints of two journeys and show the extra space</locale_1033></help_text>
+      <script>! _RRCompareRoads</script>
+    </macro_item>
+    <macro_item guid="10184bf2-f21f-56fb-bfc0-4ecc3d313828">
+      <text><locale_1033>RRReportRoad</locale_1033></text>
+      <tooltip><locale_1033>Write a report of checks, maxima and validation status</locale_1033></tooltip>
+      <button_text><locale_1033>Report</locale_1033></button_text>
+      <menu_text><locale_1033>RRReportRoad</locale_1033></menu_text>
+      <help_text><locale_1033>Write a report of checks, maxima and validation status</locale_1033></help_text>
+      <script>! _RRReportRoad</script>
+    </macro_item>
+    <macro_item guid="442a7b67-adb1-5895-93a7-823a13993dfa">
+      <text><locale_1033>RRImportVehicle</locale_1033></text>
+      <tooltip><locale_1033>Import a custom vehicle from a JSON file</locale_1033></tooltip>
+      <button_text><locale_1033>Import</locale_1033></button_text>
+      <menu_text><locale_1033>RRImportVehicle</locale_1033></menu_text>
+      <help_text><locale_1033>Import a custom vehicle from a JSON file</locale_1033></help_text>
+      <script>! _RRImportVehicle</script>
+    </macro_item>
+    <macro_item guid="64448bff-2133-594e-8920-891dec369fea">
+      <text><locale_1033>RRVehicles</locale_1033></text>
+      <tooltip><locale_1033>List the available vehicles and their validation status</locale_1033></tooltip>
+      <button_text><locale_1033>Vehicles</locale_1033></button_text>
+      <menu_text><locale_1033>RRVehicles</locale_1033></menu_text>
+      <help_text><locale_1033>List the available vehicles and their validation status</locale_1033></help_text>
+      <script>! _RRVehicles</script>
+    </macro_item>
+  </macros>
+  <scripts />
+  <bitmaps />
+  <accelerators />
+</RhinoUI>

@@ -69,20 +69,8 @@ public sealed class RRCompareRoadsCommand : Command
         var descriptions = new List<string>();
         foreach (var id in ids)
         {
-            var source = DocumentObjects.All(document).FirstOrDefault(o =>
-                o.Attributes.GetUserString(AccessDefinitionStore.DefinitionKey) is not null &&
-                o.Attributes.GetUserString(AccessDefinitionStore.SourceIdKey) == id.ToString("D"))
-                ?? throw new InvalidOperationException($"Journey {id} is missing.");
-            if (!AccessDefinitionStore.TryRead(source, out var saved, out _) || saved is null)
-                throw new InvalidDataException("A journey definition cannot be read.");
-            if (AccessDefinitionStore.Fingerprint(source) != saved.SourceFingerprint || saved.ReferenceFingerprints.Any(pair =>
-                    document.Objects.FindId(pair.Key) is not { } reference || AccessDefinitionStore.Fingerprint(reference) != pair.Value))
-                throw new InvalidOperationException("A journey is out of date. Update that journey first.");
-            if (!VehicleAccessRunService.TryPrepareUpdate(document, source, out var run, out var error) || run is null)
-                throw new InvalidOperationException(error);
-            if (!run.Geometry.BodyEnvelopeMerged || run.Geometry.ClearanceRegion is null || run.Geometry.Warnings.Count > 0)
-                throw new InvalidOperationException("A journey has no complete clearance envelope.");
-            regions.Add(run.Geometry.ClearanceRegion);
+            var (_, saved, run) = AccessDerivedService.PrepareJourney(document, id, "Update that journey first.");
+            regions.Add(run.Geometry.ClearanceRegion!);
             descriptions.Add($"{run.Analysis.Vehicle.Name} ({saved.VehicleId}), mode {saved.ModeId}");
         }
         return new Side(AccessFootprint.Combine(regions), string.Join(" + ", descriptions));
