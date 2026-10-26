@@ -233,6 +233,90 @@
       },
       "validationStatus": "SourceTranscribed",
       "validationNotes": "Dimensions are source-transcribed. The 2026-09-01 official-DWG certification run passed 0 of 6 required cases; wheel-trace extraction also remains ambiguous for some cases."
+    },
+    {
+      "id": "SK",
+      "name": "SK - Specialkøretøj (22 m, fast bagaksel)",
+      "version": "VD-GUT-2023.09",
+      "widthMetres": 2.55,
+      "wheelbaseMetres": 4.80,
+      "frontOverhangMetres": 1.20,
+      "rearOverhangMetres": 1.705,
+      "axleTrackMetres": 2.196,
+      "tyreWidthMetres": 0.254,
+      "bodyOutline": [[-1.705,-1.275],[6.00,-1.275],[6.00,1.275],[-1.705,1.275]],
+      "towedUnits": [
+        {
+          "id": "SEMITRAILER",
+          "name": "Sættevogn",
+          "hitchOffsetMetres": 0.60,
+          "wheelbaseMetres": 14.00,
+          "widthMetres": 2.55,
+          "axleTrackMetres": 2.196,
+          "tyreWidthMetres": 0.254,
+          "bodyOutline": [[-2.60,-1.275],[15.44,-1.275],[15.44,1.275],[-2.60,1.275]]
+        }
+      ],
+      "drivingModes": {
+        "A": { "name": "Køremåde A", "speedKilometresPerHour": 5.0, "maximumWheelAngleDegrees": 29.7, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 },
+        "B": { "name": "Køremåde B", "speedKilometresPerHour": 5.0, "maximumWheelAngleDegrees": 45.0, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 }
+      },
+      "source": {
+        "title": "Grundlag for udformning af trafikarealer",
+        "publicationDate": "2023-09 (corrected 2025-12-18)",
+        "url": "https://vejregler.dk/api/Portals(6a8179a8-e164-4fc9-a59b-191699ffa1ee)/Documents/Variant(Pdf)/Content/h/7e0fba84-06dd-483b-898a-c7b3e3affaa1/3deb992b9b50496684f2c807e0300a6e",
+        "figure": "Type vehicle diagram, PDF page 44; modes, Figures 6.3 and 6.5 (PDF pages 46-47), PDF page 48 and Figure 6.7 (PDF page 49); official curve sheet reference/vejdirektoratet-koerekurver/02-koeremaade-b/SKT_B.dwg",
+        "notes": "The 22 m variant with a fixed rear axle -- the only one the source dimensions; the 26 m and 30 m variants of PDF page 48 have force-steered axles the model does not represent. Dimension chain 1,2 + 4,8 + 13,4 + 2,6 = 22 m, with the kingpin dimensioned 0,6 m ahead of the tractor's axle reference; the semitrailer wheelbase is therefore 0,6 + 13,4 = 14,0 m, as for SVT (0,6 + 8,3). The chain is drawn to a reference point in each axle group, not to a single axle: the vector copy of the same figure in SKT_B.dwg (block with the same seven dimensions, at true scale in metres) places the tractor's tandem axles 0,614 m either side of the 4,8 m point and the trailer's tri-axle 1,2 m either side of the 13,4 m point, so each reference is its group's centre, the effective-axle convention for fixed axle groups that the official SKT B sheet's own vehicle also uses (kingpin to middle trailer axle 14,0 m, middle axle to tail 2,6 m). The raster figure on PDF page 44 draws both groups ending at those points instead -- same dimensions, axles shifted forward by half the tandem spacing and one tri-axle spacing; the model is unaffected because it carries one effective axle per unit. Not dimensioned in the plan view, so taken from the side view of the same vector figure: the tractor chassis ends 7,705 m behind the bumper, 1,705 m behind its axle reference, and the trailer headboard is 3,96 m behind the bumper, 1,44 m ahead of the kingpin and 15,44 m ahead of the trailer axle (the official SKT B sheet's 18,0 m trailer puts it at 1,40). Body width 2,55 m excludes mirrors; the SKT B sheet's own vehicle is drawn 2,50 m wide. Axle track and tyre width are measured from the vector plan view, as PV and BUS 12 are: every wheel is 0,254 m wide with edges 0,971 m and 1,225 m off the centreline, identical to BUS 12. Mode A uses 33 gon, the general rule of PDF page 48, represented as 29.7 degrees; its speed is 5 km/h, because Figures 6.3 and 6.5 exclude SK from the 15 km/h rows (footnote 1: 'Gælder ikke specialkøretøjer, da der ønskes en lav svinghastighed for disse') and the source publishes no SK mode-A curves at all. Mode B: Figure 6.7 prints '-' for SK with the footnote 'Kørekurver findes for hjuldrejning 11,1/16,7 og 50 gon' and does not say which lock belongs to which variant; 50 gon, 45.0 degrees, is assigned to this 22 m vehicle because the official SKT B sheet, whose vehicle is this one, holds a sustained 8,52 m outer arc at 120 and 140 gon, which a 4,8 m wheelbase and 1,2 m front overhang produce only at that lock (the other two published locks would give about 20 m and 29 m). The 11,1 and 16,7 gon locks are presumed to belong to the force-steered variants and are not offered. lockToLockSeconds 6.0 is a RhinoRoad assumption, as for every preset; the source publishes no steering rate."
+      },
+      "validationStatus": "SourceTranscribed",
+      "validationNotes": "Dimensions are source-transcribed. The official-DWG certification matrix has no articulated case, so SK is absent from certification-plan.json. The tractor is partly corroborated: the official SKT B sheet (SKT_B.dwg) holds a sustained 8,52 m outer arc about one centre over 4 to 6 m of its 120 and 140 gon envelopes, against 8,52 m predicted for its own 2,50 m-wide vehicle and 8,54 m for this 2,55 m preset at 45.0 degrees. The semitrailer is not corroborated: at 45.0 degrees the tractor's 4,8 m rear-axle radius is far below the 13,99 m a 14,0 m semitrailer on a 0,6 m kingpin needs for a steady state, so no sheet shows it in a steady turn. Two figures are measured rather than dimensioned -- the tractor tail and the trailer nose, see the notes -- and both sit inside the trailer footprint or ahead of the kingpin by under 1,5 m."
+    },
+    {
+      "id": "MVT",
+      "name": "MVT - Modulvogntog",
+      "version": "VD-GUT-2023.09",
+      "widthMetres": 2.55,
+      "wheelbaseMetres": 3.22,
+      "frontOverhangMetres": 1.42,
+      "rearOverhangMetres": 1.47,
+      "axleTrackMetres": 2.195,
+      "tyreWidthMetres": 0.254,
+      "bodyOutline": [[-1.47,-1.275],[4.64,-1.275],[4.64,1.275],[-1.47,1.275]],
+      "towedUnits": [
+        {
+          "id": "LINKTRAILER",
+          "name": "Link-sættevogn",
+          "hitchOffsetMetres": 0.03,
+          "wheelbaseMetres": 7.52,
+          "widthMetres": 2.55,
+          "axleTrackMetres": 2.195,
+          "tyreWidthMetres": 0.254,
+          "bodyOutline": [[-1.418,-1.275],[9.12,-1.275],[9.12,1.275],[-1.418,1.275]]
+        },
+        {
+          "id": "SEMITRAILER",
+          "name": "Sættevogn",
+          "hitchOffsetMetres": -0.96,
+          "wheelbaseMetres": 7.78,
+          "widthMetres": 2.55,
+          "axleTrackMetres": 2.195,
+          "tyreWidthMetres": 0.254,
+          "bodyOutline": [[-4.31,-1.275],[9.28,-1.275],[9.28,1.275],[-4.31,1.275]]
+        }
+      ],
+      "drivingModes": {
+        "A": { "name": "Køremåde A", "speedKilometresPerHour": 15.0, "maximumWheelAngleDegrees": 29.7, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 },
+        "B": { "name": "Køremåde B", "speedKilometresPerHour": 5.0, "maximumWheelAngleDegrees": 38.0, "lockToLockSeconds": 6.0, "defaultClearanceMetres": 0.30 }
+      },
+      "source": {
+        "title": "Grundlag for udformning af trafikarealer",
+        "publicationDate": "2023-09 (corrected 2025-12-18)",
+        "url": "https://vejregler.dk/api/Portals(6a8179a8-e164-4fc9-a59b-191699ffa1ee)/Documents/Variant(Pdf)/Content/h/7e0fba84-06dd-483b-898a-c7b3e3affaa1/3deb992b9b50496684f2c807e0300a6e",
+        "figure": "Type vehicle diagram, PDF page 43; steering table Figure 6.7, PDF page 49; official curve sheet reference/vejdirektoratet-koerekurver/01-koeremaade-a/Koerekurve_MVT_vifte_11042019_VD.dwg (vehicle 'VEJREGLER 2018 (DK) MVT')",
+        "notes": "The most space-demanding MVT the source names: a three-axle tractor, a link semitrailer whose own two axles carry a second fifth wheel, and a tri-axle semitrailer -- a B-double, three units and two fifth-wheel joints. The figure alone does not settle that: its raster draws the link trailer's axles like a separate dolly, and three of its references sit a few centimetres off one another. The unit split and every articulation point are therefore taken from the vehicle definition in Vejdirektoratet's own MVT curve sheet, which prints the chain 1,42 + 3,19 + 8,48 + 7,78 + 4,31 = 25,18 m (bumper, front axle, tractor fifth wheel, link fifth wheel, semitrailer middle axle, tail) and draws each unit at true scale; the published figure is checked against it link by link. Tractor: 1,42 m front overhang (figure 1,42); its tandem axles sit 2,53 and 3,91 m behind the front axle, so the effective rear axle at the tandem centre is 3,22 m back (figure 3,22 to the same point, with 0,69 m half-spacing); the fifth wheel is 3,19 m behind the front axle, 0,03 m ahead of that centre (the figure dimensions 0,03 but draws it 0,03 behind, a 0,06 m disagreement in the sheet's favour); the tail is the figure's 0,69 + 0,78 = 1,47 m behind the axle reference, because the sheet draws only a narrow chassis there. Link trailer: front 1,60 m ahead of its kingpin, 3,01 m behind the bumper (not dimensioned in the figure, whose side view measures 3,05 m); axles 6,61 and 8,43 m behind the kingpin (figure spacing 1,82), so its effective axle at their centre is 7,52 m from the kingpin; its fifth wheel is 8,48 m behind the kingpin, 0,05 m behind the rear axle (figure 0,05) and so 0,96 m behind the effective axle; its outline runs full width to the tail of the rear tyres, 1,418 m behind the effective axle, because the box ends 6,2 m behind the kingpin (figure 6,21 from the tractor tandem centre) and the tyres fill the 0,78 m between box and semitrailer. Semitrailer: front 1,5 m ahead of its kingpin and middle axle 7,78 m behind it (the figure prints the same 1,5 and 7,78 but draws both from the link's rear axle, 0,05 m ahead of the kingpin), tri-axle spacing 1,31 (figure 1,31), tail 4,31 m behind the middle axle (figure 4,33; 4,31 is what closes the chain on the published 25,18 m). Body width 2,55 m excludes mirrors. Axle track and tyre width are measured from the published plan-view figure at its own scale -- tyre edges about 0,97 and 1,23 m off the centreline -- and taken as SVT's and PVT's 2,195 and 0,254 m, within the method's 0,01 m uncertainty. Mode A uses 33 gon, represented as 29.7 degrees, as every preset does, although the official MVT 15 km/h sheet states a 30.0 degree lock. Mode B uses 38.0 degrees: Figure 6.7 prints 43 gon and 38 degrees, and the official sheet's 5 km/h run states 'STEERING LOCK ANGLE = 38.0 deg.', so here, unlike for SVT and PVT, the rounded figure is the one the curves were drawn with. PDF page 49 says no mode-B curves were drawn for MVT; the 5 km/h run sits in the mode-A folder of the curve download. lockToLockSeconds 6.0 is a RhinoRoad assumption, as for every preset; the source publishes no steering rate."
+      },
+      "validationStatus": "SourceTranscribed",
+      "validationNotes": "Dimensions are source-transcribed. The official-DWG certification matrix has no articulated case, so MVT is absent from certification-plan.json, and the legacy curve library holds no MVT sheet that can be identified. The tractor is corroborated by the radii the official MVT sheet prints: at 30.0 degrees an 8,28 m front-corner and 6,44 m front-axle radius, at 38.0 degrees 7,12 m and 5,23 m, all of which this preset's 3,22 m wheelbase, 1,42 m front overhang and 2,55 m width reproduce to 0,005 m -- which also confirms the tandem centre as the tractor's effective axle. The sheet's front-wheel radii (7,57 and 6,28 m) put the tyre's outer edge flush with the body, 0,05 m wider than this preset's measured 1,225 m. Neither trailer is corroborated: no steady turn exists at either lock."
     }
   ]
 }

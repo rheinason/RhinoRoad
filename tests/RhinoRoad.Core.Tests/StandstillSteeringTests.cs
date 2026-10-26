@@ -8,9 +8,10 @@ namespace RhinoRoad.Core.Tests;
 /// <remarks>
 /// The steering rate is a rate per second, and the leg generators spend it per metre travelled, so a
 /// wheel movement always costs distance — 12.5 m from centre to full lock in mode A and 4.17 m in
-/// mode B, the same for every preset, because the rate and the lock scale together. Standing still,
-/// that cost is zero, and the manoeuvres where it matters are exactly the tight ones: a shuffle in a
-/// turning area spends most of its length on the wheel rather than on the turn.
+/// mode B (and in SK's 5 km/h mode A), the same for every preset, because the rate and the lock
+/// scale together. Standing still, that cost is zero, and the manoeuvres where it matters are exactly
+/// the tight ones: a shuffle in a turning area spends most of its length on the wheel rather than on
+/// the turn.
 /// </remarks>
 public sealed class StandstillSteeringTests
 {
@@ -25,21 +26,26 @@ public sealed class StandstillSteeringTests
 
     /// <summary>
     /// The rate limit is what makes a wheel movement cost distance, and it is that cost — not the
-    /// lock angle — that a standstill removes.
+    /// lock angle — that a standstill removes. The cost depends on the speed alone, so it is the same
+    /// for every mode driven at the same speed: every mode B, and SK's mode A, run at 5 km/h.
     /// </summary>
     [Theory]
-    [InlineData("A", 12.5)]
-    [InlineData("B", 4.17)]
-    public void ReachingFullLockCostsAFixedDistanceThatIsTheSameForEveryPreset(
-        string modeId, double expectedMetres)
+    [InlineData(15.0, 12.5)]
+    [InlineData(5.0, 4.17)]
+    public void ReachingFullLockCostsAFixedDistanceThatIsTheSameAtTheSameSpeed(
+        double speedKilometresPerHour, double expectedMetres)
     {
-        foreach (var vehicle in Catalog.Vehicles)
+        var compared = 0;
+        foreach (var mode in Catalog.Vehicles.SelectMany(vehicle => vehicle.DrivingModes.Values))
         {
-            var mode = vehicle.DrivingModes[modeId];
+            if (mode.SpeedKilometresPerHour != speedKilometresPerHour) continue;
+            compared++;
             var metres = mode.MaximumWheelAngleRadians
                 / (mode.MaximumSteeringRateRadiansPerSecond / mode.SpeedMetresPerSecond);
             Assert.Equal(expectedMetres, metres, 2);
         }
+
+        Assert.True(compared >= Catalog.Vehicles.Count - 1);
     }
 
     [Fact]

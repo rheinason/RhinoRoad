@@ -274,6 +274,59 @@ public sealed class LegacyCurveAgreementTests
     }
 
     /// <summary>
+    /// SK's mode-B lock, which Figure 6.7 leaves open between "11,1/16,7 og 50 gon". The legacy plugin
+    /// does not name type 111, but it is the SKT B sheet: the only 2.50 m-wide set in the library,
+    /// drawn at 40-140 gon exactly as the official SKT_B.dwg is, whose 22 m vehicle is this preset at
+    /// 2.50 m wide, and its 120 and 140 gon envelopes hold the same 8.52 m arc measured on that DWG.
+    /// The arc is the tractor's front corner at full lock: 50 gon reproduces it, and the other two
+    /// published locks miss it by more than 11 m.
+    /// </summary>
+    [Fact]
+    public void TheSkTractorHoldsTheFiftyGonArc()
+    {
+        var vehicle = VehicleCatalog.LoadEmbedded().Get("SK");
+        var templates = Templates();
+        var mode = vehicle.DrivingModes["B"];
+        var predicted = TurningGeometryCalculator.AtFullLock(vehicle, mode);
+        Assert.False(predicted.SteadyStateAttainable, "the semitrailer never settles, so only the tractor can be compared");
+
+        // The sheet's own vehicle is 2.50 m wide, not the 2.55 m the type-vehicle figure dimensions;
+        // its front corner therefore rides 0.025 m nearer the centre than the preset's does.
+        var sheetHalfWidth = 1.25;
+        var rearAxleRadius = predicted.RearAxleRadiusMetres;
+        var reach = vehicle.WheelbaseMetres + vehicle.FrontOverhangMetres;
+        var predictedOnSheet = Math.Sqrt((reach * reach) + Math.Pow(rearAxleRadius + sheetHalfWidth, 2.0));
+
+        // Only the two longest turns hold the lock long enough to show it, and only for 4-6 m of
+        // boundary, which the library samples at six vertices -- so the run is sought at six points
+        // and a tighter 5 mm tolerance rather than the default ten and 15 mm.
+        foreach (var gon in new[] { 120, 140 })
+        {
+            var template = templates.Get(111, gon);
+            Assert.InRange(template.SourceWidthMetres, 2.49, 2.51);
+            Assert.True(LegacyCurveCheck.Inspect(template, 2 * sheetHalfWidth).IsUsable);
+            var arc = LegacyCurveCheck.TightestCircularRun(
+                LegacyCurveCheck.Boundaries(template)!.Value.Outer, toleranceMetres: 0.005, minimumPoints: 6)!;
+            Assert.True(arc.FitDeviationMetres <= 0.001, $"{gon} gon: fit deviation {arc.FitDeviationMetres:0.0000} m");
+            Assert.True(
+                Math.Abs(arc.RadiusMetres - predictedOnSheet) <= ToleranceMetres,
+                $"SK B {gon} gon: the sheet holds a {arc.RadiusMetres:0.000} m outer radius against " +
+                $"{predictedOnSheet:0.000} m predicted at 50 gon.");
+            Assert.True(
+                Math.Abs(arc.RadiusMetres - predicted.OuterRadiusMetres) <= ToleranceMetres,
+                $"SK B {gon} gon: {arc.RadiusMetres:0.000} m against the preset's {predicted.OuterRadiusMetres:0.000} m.");
+
+            // The other two locks the footnote publishes put the same corner 11 m and more further out.
+            foreach (var otherGon in new[] { 11.1, 16.7 })
+            {
+                var radius = vehicle.WheelbaseMetres / Math.Tan(otherGon * 0.9 * Math.PI / 180.0);
+                var corner = Math.Sqrt((reach * reach) + Math.Pow(radius + sheetHalfWidth, 2.0));
+                Assert.True(corner - arc.RadiusMetres > 11.0, $"{otherGon} gon would put the corner on {corner:0.00} m");
+            }
+        }
+    }
+
+    /// <summary>
     /// Why the trailers are not validated here, recorded as a fact rather than left as a gap: neither
     /// combination ever reaches a steady turn on these sheets. For SVT that is what the model itself
     /// predicts — its semitrailer has no steady state at any lock either mode allows — and for PVT
