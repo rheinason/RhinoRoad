@@ -38,14 +38,15 @@ namespace RhinoRoad.Core;
 /// </remarks>
 public static class MultiJointReverseDocking
 {
-    /// <summary>The largest fold the inner cascade will ask any joint for, as in the single-joint law.</summary>
-    private const double MaximumCommandedFoldRadians = 55.0 * Math.PI / 180.0;
-
     /// <summary>
-    /// Where a leg stops, as for a semitrailer: short of the right angle, at the fold a driver would
-    /// stop and pull forward from. The leg returned never contains a sample past it.
+    /// The largest fold the inner cascade will ask any joint for, as a share of that unit's fold
+    /// limit — 55 degrees against the default 65, as in the single-joint law.
     /// </summary>
-    private const double MaximumSafeFoldRadians = 65.0 * Math.PI / 180.0;
+    private const double CommandedShareOfFoldLimit = 55.0 / 65.0;
+
+    // A leg stops, as for a semitrailer, at each unit's own fold limit
+    // (TowedUnitDefinition.MaximumArticulationDegrees): short of the right angle, at the fold a
+    // driver would stop and pull forward from. The leg returned never contains a sample past it.
 
     /// <summary>Fold from which the search starts paying for it — gently, because tight docks need it.</summary>
     private const double SoftFoldRadians = 50.0 * Math.PI / 180.0;
@@ -521,7 +522,7 @@ public static class MultiJointReverseDocking
                 }
 
                 largestFold = Math.Max(largestFold, maximumFold);
-                if (maximumFold >= (record ? MaximumSafeFoldRadians : SearchFoldStopRadians))
+                if (record ? FoldsPastLimit(working, traceHeading) : maximumFold >= SearchFoldStopRadians)
                 {
                     folded = true;
                     break;
@@ -544,7 +545,7 @@ public static class MultiJointReverseDocking
                     traceHeading,
                     Geometry2D.NormalizeAngle(sampleHeading - traceHeading),
                     samplePosition.DistanceTo(tracePosition) * (double)advanced.Sample.Direction);
-                if (before is not null && FoldsPast(working, sampleHeading, MaximumSafeFoldRadians))
+                if (before is not null && FoldsPastLimit(working, sampleHeading))
                 {
                     // The leg ends on the last sample short of the stop, not the first one past it.
                     working = before;
@@ -585,11 +586,12 @@ public static class MultiJointReverseDocking
             return new Outcome(residuals, converged, leg);
         }
 
-        private static bool FoldsPast(ArticulationChain chain, double leadHeading, double limit)
+        private bool FoldsPastLimit(ArticulationChain chain, double leadHeading)
         {
             for (var index = 0; index < chain.Count; index++)
             {
-                if (Math.Abs(chain.ArticulationAngleRadians(index, leadHeading)) >= limit) return true;
+                if (Math.Abs(chain.ArticulationAngleRadians(index, leadHeading))
+                    >= vehicle.TowedUnits[index].MaximumArticulationRadians) return true;
             }
 
             return false;
@@ -608,10 +610,11 @@ public static class MultiJointReverseDocking
             {
                 var unit = vehicle.TowedUnits[index];
                 var fold = working.ArticulationAngleRadians(index, leadHeading);
+                var commandedLimit = unit.MaximumArticulationRadians * CommandedShareOfFoldLimit;
                 var commandedFold = Math.Clamp(
                     Math.Atan(desired * unit.WheelbaseMetres),
-                    -MaximumCommandedFoldRadians,
-                    MaximumCommandedFoldRadians);
+                    -commandedLimit,
+                    commandedLimit);
                 var denominator = 1.0 - (unit.HitchOffsetMetres * Math.Cos(fold) / unit.WheelbaseMetres);
                 desired = ((Math.Sin(fold) / unit.WheelbaseMetres)
                     + (directionSign * FoldGain * (commandedFold - fold))) / denominator;

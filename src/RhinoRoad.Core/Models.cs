@@ -57,6 +57,26 @@ public sealed record TowedUnitDefinition(
     double TyreWidthMetres,
     IReadOnlyList<Point2> BodyOutline)
 {
+    /// <summary>
+    /// The fold limit used when a preset states none, which is every preset: the source publishes no
+    /// articulation limit for any combination. It is a RhinoRoad default, not a vehicle figure — real
+    /// contact typically comes somewhere past 60 degrees, and 65 is where the reverse controller has
+    /// always stopped a leg, so one number now governs the generator, the planner, the search and the
+    /// analyzer instead of three.
+    /// </summary>
+    public const double DefaultMaximumArticulationDegrees = 65.0;
+
+    /// <summary>
+    /// The largest fold, against the unit towing it, this unit is assumed to reach before it stops
+    /// being a drivable configuration. Optional in the catalogue; when absent it is
+    /// <see cref="DefaultMaximumArticulationDegrees"/>, which is assumed rather than published. It
+    /// cannot exceed the right angle the analyzer treats as jackknife whatever is stated here,
+    /// because that is a kinematic floor rather than a property of the vehicle.
+    /// </summary>
+    public double MaximumArticulationDegrees { get; init; } = DefaultMaximumArticulationDegrees;
+
+    public double MaximumArticulationRadians => MaximumArticulationDegrees * Math.PI / 180.0;
+
     public double RearWheelInnerEdgeOffsetMetres => (AxleTrackMetres - TyreWidthMetres) * 0.5;
     public double WheelOuterEdgeOffsetMetres => (AxleTrackMetres + TyreWidthMetres) * 0.5;
 
@@ -66,6 +86,8 @@ public sealed record TowedUnitDefinition(
     public void Validate(string vehicleId)
     {
         foreach (var protrusion in Protrusions) protrusion.Validate($"{vehicleId}/{Id}");
+        if (MaximumArticulationDegrees is <= 0.0 or > 90.0 || double.IsNaN(MaximumArticulationDegrees))
+            throw new InvalidDataException($"{vehicleId}/{Id}: the fold limit must be above zero and at most 90 degrees.");
         if (string.IsNullOrWhiteSpace(Id)) throw new InvalidDataException($"{vehicleId}: a towed unit is missing its id.");
         if (WheelbaseMetres <= 0.0) throw new InvalidDataException($"{vehicleId}/{Id}: wheelbase must be positive.");
         if (WidthMetres <= 0.0) throw new InvalidDataException($"{vehicleId}/{Id}: width must be positive.");
@@ -271,8 +293,9 @@ public sealed class VehicleAccessResult
 
     /// <summary>
     /// Largest fold reached at each articulation joint over the route. The source publishes no
-    /// per-vehicle fold limit, so any value below
-    /// <see cref="VehicleAccessAnalyzer.JackknifeFoldRadians"/> is reported rather than judged.
+    /// per-vehicle fold limit, so each unit is judged against the one RhinoRoad assumes for it,
+    /// <see cref="TowedUnitDefinition.MaximumArticulationDegrees"/>, as well as against the
+    /// <see cref="VehicleAccessAnalyzer.JackknifeFoldRadians"/> floor.
     /// </summary>
     public IReadOnlyList<double> MaximumArticulationAnglesRadians { get; init; } = [];
     public double? MinimumClearanceMetres { get; set; }

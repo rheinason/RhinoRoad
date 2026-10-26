@@ -78,28 +78,27 @@ public static class ManoeuvreReplayService
         // is taken to mean where the trailer should end up and the tractor is driven to put it
         // there. The corner-easing and exit-heading work below is all about where the *tractor*
         // leaves a bend, which is not the question being asked here.
-        if (vehicle.IsArticulated && control.Direction == TravelDirection.Reverse && !finishing)
+        //
+        // With a heading asked for, a reversing point is a bay rather than somewhere to end up near,
+        // for a rigid vehicle as much as a combination: the docking body has to arrive on the point
+        // and square to it, which is the approach line rather than the point that gets followed.
+        // Squaring the heading and then running straight, as a forward exit does, finishes parallel
+        // to the bay and beside it. ReverseDocking decides how each vehicle is docked; chains it
+        // cannot dock are aimed at the point instead, and say that the heading was not honoured
+        // rather than quietly dropping it. Finish keeps its meaning -- end travelling along the
+        // direction -- and goes the ordinary way below.
+        var reversing = control.Direction == TravelDirection.Reverse && !finishing;
+        var docking = reversing && control.ExitHeadingRadians.HasValue && ReverseDocking.CanDock(vehicle);
+        if (reversing && (vehicle.IsArticulated || docking))
         {
             var chain = ArticulationTrace.AtEndOf(vehicle, route)
                 ?? ArticulationChain.StartAligned(vehicle, state.VehicleHeadingRadians);
-            // With a heading asked for, the point is a dock rather than somewhere to end up near:
-            // the trailer has to arrive square to it, which is the approach line rather than the
-            // point that gets followed. Chains that cannot be docked are aimed at the point instead,
-            // and say that the heading was not honoured rather than quietly dropping it.
-            var docking = control.ExitHeadingRadians.HasValue && TrailerReverseGenerator.CanDock(vehicle);
-            // More than one joint defeats the feedback cascade, so those chains are planned instead.
-            var multiJoint = MultiJointReverseDocking.Handles(vehicle);
             var reversed = docking
-                ? multiJoint
-                    ? MultiJointReverseDocking.Dock(
-                        vehicle, mode, state, chain, target, control.ExitHeadingRadians!.Value, StepMetres, standstill)
-                    : TrailerReverseGenerator.DockTowedUnitInAvailableSpace(
-                        vehicle, mode, state, chain, target, control.ExitHeadingRadians!.Value, StepMetres,
-                        wheelSetAtStandstill: standstill)
-                : multiJoint
-                    ? MultiJointReverseDocking.Aim(vehicle, mode, state, chain, target, StepMetres, standstill)
-                    : TrailerReverseGenerator.AimTowedUnit(
-                        vehicle, mode, state, chain, target, StepMetres, wheelSetAtStandstill: standstill);
+                ? ReverseDocking.Dock(
+                    vehicle, mode, state, chain, target, control.ExitHeadingRadians!.Value, StepMetres,
+                    wheelSetAtStandstill: standstill)
+                : ReverseDocking.Aim(
+                    vehicle, mode, state, chain, target, StepMetres, wheelSetAtStandstill: standstill);
             return new PlannedManoeuvreLeg(
                 route.Count - 1,
                 reversed.Samples,

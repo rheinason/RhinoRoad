@@ -150,12 +150,19 @@ public sealed class ArticulationTests
         var result = Analyzer.Analyze(vehicle, mode, Circle(25.0, 40.0 / 25.0, 0.05, TravelDirection.Reverse));
 
         Assert.False(result.IsFeasible);
-        var violation = Assert.Single(result.Violations, item => item.Kind == ViolationKind.ArticulationAngle);
-        Assert.Contains("jackknifed", violation.Message, StringComparison.OrdinalIgnoreCase);
+        // Two markers, each once: the assumed fold limit where it is first passed, and then the
+        // jackknife floor -- the second is a different statement, not a repeat of the first.
+        var articulation = result.Violations.Where(item => item.Kind == ViolationKind.ArticulationAngle).ToArray();
+        Assert.Equal(2, articulation.Length);
+        var violation = Assert.Single(articulation,
+            item => item.Message.Contains("jackknifed", StringComparison.OrdinalIgnoreCase));
+        var limit = Assert.Single(articulation,
+            item => item.Message.Contains("assumed fold limit", StringComparison.OrdinalIgnoreCase));
         Assert.True(result.MaximumArticulationAnglesRadians[0] > VehicleAccessAnalyzer.JackknifeFoldRadians);
 
         // The station it is first reported at is where the fold crosses the limit, not the end.
         Assert.InRange(violation.StationMetres, 10.0, 25.0);
+        Assert.True(limit.StationMetres < violation.StationMetres);
     }
 
     /// <summary>

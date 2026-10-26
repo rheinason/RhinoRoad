@@ -93,6 +93,34 @@ public sealed class TrailerReverseTests
         Assert.DoesNotContain(analysis.Violations, item => item.Kind == ViolationKind.ArticulationAngle);
     }
 
+    /// <summary>
+    /// The trailer the cascade steers is the trailer the analyzer, the preview and replay walk, to
+    /// the last digit. It was not: the cascade advanced its chain from the step length and the raw
+    /// heading change, the trace from the sample positions and path headings, and reversing
+    /// amplified the rounding between them into centimetres for SVT and metres for PVT.
+    /// </summary>
+    [Theory]
+    [InlineData(40.0, 12.0, false)]
+    [InlineData(60.0, 8.0, false)]
+    [InlineData(60.0, 8.0, true)]
+    [InlineData(80.0, 12.0, true)]
+    public void TheSteeredChainIsTheChainTheAnalyzerWalks(double back, double across, bool dock)
+    {
+        var vehicle = Catalog.Get("SVT");
+        var mode = vehicle.DrivingModes["B"];
+        var start = new VehicleState(new(0, 0, 0), 0.0, 0.0, TravelDirection.Reverse, 0.0);
+        var target = new Point2(TrailerStart(vehicle) - back, across);
+        var chain = ArticulationChain.StartAligned(vehicle, 0.0);
+
+        var leg = dock
+            ? TrailerReverseGenerator.DockTowedUnit(vehicle, mode, start, chain, target, Math.PI)
+            : TrailerReverseGenerator.AimTowedUnit(vehicle, mode, start, chain, target);
+        var walked = ArticulationTrace.AtEndOf(vehicle, leg.Samples)!;
+
+        Assert.True(leg.Samples.Count > 100);
+        Assert.Equal(walked.HeadingsRadians, leg.EndChain.HeadingsRadians);
+    }
+
     [Fact]
     public void ReversingDeadStraightLeavesTheTrailerStraight()
     {

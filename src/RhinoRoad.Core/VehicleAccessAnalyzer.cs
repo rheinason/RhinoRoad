@@ -53,6 +53,11 @@ public sealed class VehicleAccessAnalyzer
         // first one did not.
         var jackknifed = new bool[vehicle.TowedUnits.Count];
 
+        // The assumed fold limit is reported the same way, and separately from the jackknife: it is
+        // where the generator, the planner and the area search all stop, so a route past it must not
+        // be baked as feasible when none of those would have produced it.
+        var pastFoldLimit = new bool[vehicle.TowedUnits.Count];
+
         var index = -1;
         foreach (var (sample, vehicleHeading, chain) in ArticulationTrace.Follow(vehicle, samples))
         {
@@ -69,6 +74,19 @@ public sealed class VehicleAccessAnalyzer
                 var fold = Math.Abs(towedPoses[unit].ArticulationAngleRadians);
                 towedTracks[unit].Add(towedPoses[unit].AxleCentreMetres);
                 maximumFolds[unit] = Math.Max(maximumFolds[unit], fold);
+                var towed = vehicle.TowedUnits[unit];
+                if (fold > towed.MaximumArticulationRadians && !pastFoldLimit[unit])
+                {
+                    pastFoldLimit[unit] = true;
+                    violations.Add(new AnalysisViolation(
+                        ViolationKind.ArticulationAngle,
+                        sample.StationMetres,
+                        sample.PositionMetres,
+                        $"The {towed.Name} is folded {ToDegrees(fold):0.0}° against the unit towing it, " +
+                        $"which exceeds the assumed fold limit of {towed.MaximumArticulationDegrees:0.#}°. " +
+                        "The source publishes no limit; this one is a RhinoRoad assumption."));
+                }
+
                 if (fold > JackknifeFoldRadians && !jackknifed[unit])
                 {
                     jackknifed[unit] = true;

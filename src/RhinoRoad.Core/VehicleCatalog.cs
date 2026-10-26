@@ -98,6 +98,12 @@ public sealed class VehicleCatalog
         public List<double[]> BodyOutline { get; init; } = [];
         public List<ProtrusionDto> Protrusions { get; init; } = [];
 
+        /// <summary>
+        /// Optional, because no source publishes one: absent, the unit takes the RhinoRoad default
+        /// in <see cref="TowedUnitDefinition.DefaultMaximumArticulationDegrees"/>.
+        /// </summary>
+        public double? MaximumArticulationDegrees { get; init; }
+
         public TowedUnitDefinition ToDefinition() => new(
             Id,
             Name,
@@ -108,7 +114,9 @@ public sealed class VehicleCatalog
             TyreWidthMetres,
             BodyOutline.Select(point => new Point2(point[0], point[1])).ToArray())
         {
-            Protrusions = Protrusions.Select(protrusion => protrusion.ToDefinition()).ToArray()
+            Protrusions = Protrusions.Select(protrusion => protrusion.ToDefinition()).ToArray(),
+            MaximumArticulationDegrees = MaximumArticulationDegrees
+                ?? TowedUnitDefinition.DefaultMaximumArticulationDegrees
         };
     }
 
