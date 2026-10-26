@@ -93,6 +93,7 @@ public sealed record VehicleAccessDefinition(
     IReadOnlyDictionary<Guid, string> ReferenceFingerprints,
     string SourceFingerprint,
     string AnalysisId,
+    Guid? TerrainObjectId = null,
     bool BakeWheelEdgePaths = true,
     bool IncludeMirrorAllowance = false)
 {

@@ -25,6 +25,7 @@ internal static class AccessDefinitionSettings
         settings.MaximumGradePercent = definition.MaximumGradePercent;
         settings.CheckObstacles = definition.CheckObstacles;
         settings.CheckAllowedArea = definition.CheckAllowedArea;
+        settings.DrapeTerrain = definition.TerrainObjectId.HasValue;
         settings.Footprints = definition.FootprintMode;
         settings.FootprintIntervalMetres = definition.FootprintIntervalMetres;
         settings.PreviewBeforeBaking = definition.PreviewBeforeBaking;
@@ -56,6 +57,7 @@ internal static class AccessDefinitionSettings
             CheckAllowedArea = settings.CheckAllowedArea,
             ObstacleObjectIds = settings.CheckObstacles ? definition.ObstacleObjectIds : Array.Empty<Guid>(),
             AllowedBoundaryObjectIds = settings.CheckAllowedArea ? definition.AllowedBoundaryObjectIds : Array.Empty<Guid>(),
+            TerrainObjectId = settings.DrapeTerrain ? definition.TerrainObjectId : null,
             FootprintMode = settings.Footprints,
             FootprintIntervalMetres = settings.FootprintIntervalMetres,
             PreviewBeforeBaking = settings.PreviewBeforeBaking,

@@ -73,9 +73,17 @@ public sealed class RRVehicleAccessCommand : Command
                 if (selected is null) return Result.Cancel;
                 configured = configured with { AllowedBoundaryObjectIds = selected.ObjectIds };
             }
+            if (settings.DrapeTerrain && (settings.ReselectReferences ||
+                    configured.TerrainObjectId is not { } storedTerrain || document.Objects.FindId(storedTerrain) is null))
+            {
+                var terrain = TerrainDraper.Pick(document);
+                if (terrain is null) return Result.Cancel;
+                configured = configured with { TerrainObjectId = terrain };
+            }
             configured = configured with
             {
                 ReferenceFingerprints = configured.ObstacleObjectIds.Concat(configured.AllowedBoundaryObjectIds)
+                    .Concat(configured.TerrainObjectId.HasValue ? [configured.TerrainObjectId.Value] : Array.Empty<Guid>())
                     .Distinct().Where(id => document.Objects.FindId(id) is not null)
                     .ToDictionary(id => id, id => AccessDefinitionStore.Fingerprint(document.Objects.FindId(id)!.Geometry))
             };
@@ -88,9 +96,10 @@ public sealed class RRVehicleAccessCommand : Command
             ShowReport(
                 configuredRun.Analysis,
                 configuredRun.Violations,
-                configuredRun.Geometry.Warnings,
+                WithTerrainWarning(configuredRun.Geometry.Warnings, configuredRun.TerrainMisses),
                 configuredRun.Route,
-                configuredRun.Definition.SourceKind, configuredRun.Obstacles.Count + configuredRun.AllowedBoundaries.Count > 0);
+                configuredRun.Definition.SourceKind, configuredRun.Obstacles.Count + configuredRun.AllowedBoundaries.Count > 0,
+                configuredRun.HasElevation, configuredRun.TerrainDraped);
             if (settings.PreviewBeforeBaking &&
                 !PreviewAndConfirm(document, configuredRun.Geometry, configuredRun.Violations))
                 return Result.Cancel;
@@ -105,6 +114,13 @@ public sealed class RRVehicleAccessCommand : Command
                 RhinoApp.WriteLine($"Vehicle access update failed: {exception.Message}");
                 return Result.Failure;
             }
+        }
+
+        Guid? terrainId = null;
+        if (settings.DrapeTerrain)
+        {
+            terrainId = TerrainDraper.Pick(document);
+            if (terrainId is null) return Result.Cancel;
         }
 
         var vehicle = Catalog.Get(settings.VehicleId);
@@ -197,6 +213,20 @@ public sealed class RRVehicleAccessCommand : Command
         if (boundarySelection is null) return Result.Cancel;
         settings.ReselectReferences = false;
 
+        var terrainMisses = 0;
+        if (terrainId is { } terrainToDrape)
+        {
+            try
+            {
+                (route, terrainMisses) = TerrainDraper.Drape(document, terrainToDrape, route);
+            }
+            catch (Exception exception)
+            {
+                RhinoApp.WriteLine($"Terrain draping failed: {exception.Message}");
+                return Result.Failure;
+            }
+        }
+
         VehicleAccessResult analysis;
         try
         {
@@ -225,6 +255,7 @@ public sealed class RRVehicleAccessCommand : Command
             settings.Footprints == FootprintMode.EndsOnly,
             settings.BakeWheelEdgePaths,
             settings.IncludeMirrorAllowance);
+        if (terrainId.HasValue) geometry = TerrainDraper.WithDrapedRearTrack(geometry, route, document.ModelUnitSystem);
         var clearance = RhinoGeometryBuilder.CheckClearance(
             geometry,
             createFixedEdges ? geometry.FixedRoadBoundary : null,
@@ -235,7 +266,8 @@ public sealed class RRVehicleAccessCommand : Command
         analysis.MinimumClearanceMetres = clearance.MinimumClearanceMetres;
         var allViolations = analysis.Violations.Concat(clearance.Violations).ToArray();
 
-        ShowReport(analysis, allViolations, geometry.Warnings, route, settings.Source, obstacleSelection.Curves.Count + boundarySelection.Curves.Count > 0);
+        ShowReport(analysis, allViolations, WithTerrainWarning(geometry.Warnings, terrainMisses), route, settings.Source,
+            obstacleSelection.Curves.Count + boundarySelection.Curves.Count > 0, settings.Source != PathSourceKind.Interactive || terrainId.HasValue, terrainId.HasValue);
         if (settings.PreviewBeforeBaking && !PreviewAndConfirm(document, geometry, allViolations))
         {
             return Result.Cancel;
@@ -258,9 +290,14 @@ public sealed class RRVehicleAccessCommand : Command
             manoeuvre,
             obstacleSelection.ObjectIds,
             boundarySelection.ObjectIds,
-            analysisId);
+            analysisId,
+            terrainId);
         var prepared = new PreparedVehicleAccess(definition, sourceObject, route, analysis, geometry, allViolations,
-            obstacleSelection.Curves, boundarySelection.Curves);
+            obstacleSelection.Curves, boundarySelection.Curves)
+        {
+            TerrainDraped = terrainId.HasValue,
+            TerrainMisses = terrainMisses
+        };
         IReadOnlyList<Guid> baked;
         try
         {
@@ -375,7 +412,7 @@ public sealed class RRVehicleAccessCommand : Command
         IReadOnlyList<AnalysisViolation> violations,
         IReadOnlyList<string> warnings,
         IReadOnlyList<RouteSample> route,
-        PathSourceKind source, bool siteChecked)
+        PathSourceKind source, bool siteChecked, bool hasElevation, bool terrainDraped)
     {
         var mode = analysis.DrivingMode;
         RhinoApp.WriteLine(string.Empty);
@@ -384,7 +421,9 @@ public sealed class RRVehicleAccessCommand : Command
         RhinoApp.WriteLine($"Mode: {mode.Name}, {mode.SpeedKilometresPerHour:0.#} km/h");
         RhinoApp.WriteLine($"Max wheel angle: {Degrees(analysis.MaximumSteeringAngleRadians):0.0}° / {mode.MaximumWheelAngleDegrees:0.0}°");
         RhinoApp.WriteLine($"Max steering rate: {Degrees(analysis.MaximumSteeringRateRadiansPerSecond):0.0}°/s / {Degrees(mode.MaximumSteeringRateRadiansPerSecond):0.0}°/s");
-        RhinoApp.WriteLine(source == PathSourceKind.Interactive ? "Grade unavailable — planar journey" : $"Max absolute grade: {analysis.MaximumAbsoluteGrade * 100.0:0.00}%");
+        RhinoApp.WriteLine(!hasElevation ? "Grade unavailable — planar journey" : $"Max absolute grade: {analysis.MaximumAbsoluteGrade * 100.0:0.00}%");
+        if (terrainDraped)
+            RhinoApp.WriteLine("Route draped onto terrain. The rear-axle track is baked in 3D; envelopes, footprints and edges stay planar at the start elevation.");
         // No published limit exists to judge a fold against, so it is reported rather than checked.
         // A combination approaching a right angle is jackknifing, and the reader is the one who
         // knows whether the manoeuvre it happened in is one a driver would actually attempt.
@@ -446,6 +485,9 @@ public sealed class RRVehicleAccessCommand : Command
             "driving mode: the wheel moves at the same rate but the vehicle covers less ground.");
     }
 
+    private static IReadOnlyList<string> WithTerrainWarning(IReadOnlyList<string> warnings, int terrainMisses) =>
+        TerrainDrape.MissWarning(terrainMisses) is { } warning ? warnings.Append(warning).ToArray() : warnings;
+
     private static double Degrees(double radians) => radians * 180.0 / Math.PI;
 
     private static VehicleAccessDefinition Definition(
@@ -456,7 +498,8 @@ public sealed class RRVehicleAccessCommand : Command
         ManoeuvreDefinition? manoeuvre,
         IReadOnlyList<Guid> obstacles,
         IReadOnlyList<Guid> boundaries,
-        string analysisId) => new(
+        string analysisId,
+        Guid? terrainId) => new(
         VehicleAccessDefinition.CurrentSchemaVersion,
         sourceId,
         source.Id,
@@ -479,11 +522,12 @@ public sealed class RRVehicleAccessCommand : Command
         settings.ReplaceExisting,
         obstacles,
         boundaries,
-        obstacles.Concat(boundaries).Distinct().ToDictionary(
+        obstacles.Concat(boundaries).Concat(terrainId.HasValue ? [terrainId.Value] : Array.Empty<Guid>()).Distinct().ToDictionary(
             id => id,
             id => AccessDefinitionStore.Fingerprint(document.Objects.FindId(id)!.Geometry)),
         AccessDefinitionStore.Fingerprint(source),
         analysisId,
+        terrainId,
         settings.BakeWheelEdgePaths,
         settings.IncludeMirrorAllowance);
 

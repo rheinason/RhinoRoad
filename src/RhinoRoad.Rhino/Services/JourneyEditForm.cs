@@ -759,6 +759,18 @@ internal sealed class JourneyEditForm : Form
             }
             configured = configured with { AllowedBoundaryObjectIds = boundaries };
         }
+        if (settings.DrapeTerrain && (settings.ReselectReferences || configured.TerrainObjectId is not { } storedTerrain ||
+                _document.Objects.FindId(storedTerrain) is null))
+        {
+            var terrain = TerrainDraper.Pick(_document);
+            JourneyEditPicks.RestoreEditSelection(_document, _sourceId);
+            if (terrain is null)
+            {
+                _status.Text = "Settings unchanged.";
+                return;
+            }
+            configured = configured with { TerrainObjectId = terrain };
+        }
         if (AccessDefinitionSerializer.Serialize(configured) == AccessDefinitionSerializer.Serialize(draft)) return;
         if (configured.VehicleId != draft.VehicleId) _areaSearch.ClearSuggestions();
         if (WriteDraft(null, configured, "RhinoRoad change road settings"))
