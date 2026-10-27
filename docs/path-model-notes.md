@@ -20,7 +20,7 @@ moves.
 In mode A no vehicle here can develop full lock in less than 12.5 m of travel. Any model that treats
 curvature as something the vehicle simply *has* — rather than something it takes metres to acquire —
 is describing a vehicle that does not exist. This single number kills two of the four approaches
-below, and it is why the handbook defines `LockToLockSeconds` at all.
+below, and it is why `LockToLockSeconds` exists at all. The handbook does not publish a steering rate for any preset: the 6.0 s lock-to-lock (3.0 s from centre to lock) is a RhinoRoad assumption, see [validation.md](validation.md#what-is-assumed-rather-than-published).
 
 ## 1. Aiming at a point, one leg per click — **in use**
 

@@ -13,7 +13,7 @@
          on a clean machine. -->
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <AssemblyTitle>RhinoRoad</AssemblyTitle>
-    <AssemblyDescription>Architect-friendly rigid vehicle access screening for Rhino 8.</AssemblyDescription>
+    <AssemblyDescription>Architect-friendly vehicle access screening for Rhino 8: rigid and articulated vehicles, reversing and docking, site checks and reports.</AssemblyDescription>
     <Company>RhinoRoad</Company>
     <Product>RhinoRoad</Product>
     <Version>$(RhinoRoadVersion)</Version>
