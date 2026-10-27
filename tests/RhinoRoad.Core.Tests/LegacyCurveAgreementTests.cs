@@ -12,7 +12,7 @@ namespace RhinoRoad.Core.Tests;
 /// envelopes needs the manoeuvre the sheets were drawn to — where the wheel starts moving and how
 /// fast — and that convention is not published. Reconstructing it as "straight in, full lock, straight
 /// out" reproduces the sheets only loosely: against PV, the one preset independently validated
-/// against the official DWGs to 0.052 m, that reconstruction disagrees by up to 1.2 m at 100 gon.
+/// against the official DWGs to 0.054 m, that reconstruction disagrees by up to 1.2 m at 100 gon.
 /// The disagreement is the assumed manoeuvre, not the preset, and a test built on it would report
 /// every preset as broken.
 /// </para>

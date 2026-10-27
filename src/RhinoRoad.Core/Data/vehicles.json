@@ -23,7 +23,7 @@
         "notes": "Body width excludes mirrors. Mode A uses 33 gon, represented as 29.7 degrees. Axle track and tyre width are measured from the official PV DWG vehicle block; they reproduce rear-inner and front-outer wheel-edge offsets of 0.704 m and 0.875 m."
       },
       "validationStatus": "ReferenceValidated",
-      "validationNotes": "Dimensions are source-transcribed and reference-validated. The 2026-09-02 official-DWG certification run passed 6 of 6 required cases, with a worst envelope deviation of 0.052 m against a 0.10 m tolerance; see reference/certification/reference-certification.json."
+      "validationNotes": "Dimensions are source-transcribed and reference-validated. The 2026-09-02 official-DWG certification run passed 6 of 6 required cases, with a worst envelope deviation of 0.054 m against a 0.10 m tolerance; see reference/certification/reference-certification.json."
     },
     {
       "id": "REN",

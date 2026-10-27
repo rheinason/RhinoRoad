@@ -17,20 +17,60 @@ public static class AccessRunner
     private static readonly Guid RhinoPluginId = new("E5473B43-CAB5-469E-9F58-0D90AD315F5B");
     private static readonly object CatalogGate = new();
     private static VehicleCatalog? _catalog;
+    private static string? _catalogStamp;
 
+    /// <summary>
+    /// The catalog, re-read whenever the user vehicles folder has changed since it was loaded: a file
+    /// imported with RRImportVehicle, dropped in by hand, edited or removed. The check is one listing
+    /// of a small folder per solve, which is cheaper than a watcher that would have to be disposed.
+    /// </summary>
     private static VehicleCatalog Catalog
     {
         get
         {
-            lock (CatalogGate) return _catalog ??= VehicleCatalog.LoadWithUserDirectory(UserVehicleFolder()).Catalog;
+            var folder = UserVehicleFolder();
+            var stamp = FolderStamp(folder);
+            lock (CatalogGate)
+            {
+                if (_catalog is null || !string.Equals(stamp, _catalogStamp, StringComparison.Ordinal))
+                {
+                    _catalog = VehicleCatalog.LoadWithUserDirectory(folder).Catalog;
+                    _catalogStamp = stamp;
+                }
+                return _catalog;
+            }
+        }
+    }
+
+    /// <summary>What the folder holds: each vehicle file's name, size and last write. Empty when absent.</summary>
+    private static string FolderStamp(string folder)
+    {
+        try
+        {
+            if (!Directory.Exists(folder)) return string.Empty;
+            return string.Join("|", new DirectoryInfo(folder).EnumerateFiles("*.json")
+                .OrderBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(file => $"{file.Name}:{file.Length}:{file.LastWriteTimeUtc.Ticks}"));
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // An unreadable folder keeps whatever was loaded rather than reloading every solve.
+            return _catalogStamp ?? string.Empty;
         }
     }
 
     /// <summary>Drops the cached catalog so the next analysis re-reads the user vehicles folder.</summary>
     public static void ReloadCatalog()
     {
-        lock (CatalogGate) _catalog = null;
+        lock (CatalogGate)
+        {
+            _catalog = null;
+            _catalogStamp = null;
+        }
     }
+
+    /// <summary>Every vehicle id the components accept, built-ins and user vehicles, for descriptions.</summary>
+    public static string VehicleIds() => string.Join(", ", Catalog.Vehicles.Select(item => item.Id));
 
     /// <summary>
     /// The folder the Rhino plug-in reads user vehicles from: its settings directory when loaded,
@@ -38,7 +78,7 @@ public static class AccessRunner
     /// </summary>
     private static string UserVehicleFolder()
     {
-        var settings = Rhino.PlugIns.PlugIn.Find(RhinoPluginId)?.SettingsDirectory;
+        var settings = global::Rhino.PlugIns.PlugIn.Find(RhinoPluginId)?.SettingsDirectory;
         if (!string.IsNullOrWhiteSpace(settings)) return Path.Combine(settings, "vehicles");
         return Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),

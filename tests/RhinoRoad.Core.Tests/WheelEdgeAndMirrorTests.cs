@@ -154,6 +154,25 @@ public sealed class WheelEdgeAndMirrorTests
     }
 
     [Fact]
+    public void Resolve_adds_the_allowance_only_when_asked_and_leaves_the_route_unchanged()
+    {
+        var vehicle = Catalog.Get("SVT");
+
+        Assert.Same(vehicle, MirrorAllowance.Resolve(vehicle, include: false));
+        var resolved = MirrorAllowance.Resolve(vehicle, include: true);
+        Assert.Equal(
+            MirrorAllowance.Apply(vehicle).Protrusions.Select(protrusion => protrusion.Id),
+            resolved.Protrusions.Select(protrusion => protrusion.Id));
+        // Protrusions are swept, not steered: the poses' axles agree sample for sample, which is
+        // why every preview may sweep the resolved vehicle without changing the route it shows.
+        var plain = Run(vehicle, Straight(10.0)).Poses;
+        var mirrored = Run(resolved, Straight(10.0)).Poses;
+        Assert.Equal(plain.Count, mirrored.Count);
+        for (var i = 0; i < plain.Count; i++)
+            Assert.Equal(plain[i].RearAxleCentreMetres, mirrored[i].RearAxleCentreMetres);
+    }
+
+    [Fact]
     public void Catalog_reads_optional_protrusions_for_a_unit()
     {
         const string json = """

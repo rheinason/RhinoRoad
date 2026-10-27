@@ -45,6 +45,20 @@ its new result, and review it before relying on it.
   route), and the mode's default clearance is applied when the field has not been edited.
 - A road saved by a **newer RhinoRoad** than the one installed is refused with an explicit message;
   older saved roads are upgraded by schema version when read.
+- **Editing a terrain marks its roads out of date.** A terrain (mesh, surface, polysurface, extrusion or
+  SubD) is fingerprinted by its vertices or control points, not only its bounding box, so moving an
+  interior vertex no longer leaves a road "current" with stale grades. Curve fingerprints are unchanged.
+  A road draped on a terrain and saved by an earlier build reads as **out of date once** after upgrading;
+  an Update records the new fingerprint.
+- **The mirror allowance is in every preview.** The live sweep while driving, the Edit Road preview and
+  the clear-area search and readout now sweep the same vehicle the bake does, so a road with the mirror
+  allowance no longer previews (or searches) narrower than it bakes.
+- **Remembered defaults come only from a new road.** Configuring a saved road (`RRRoad` on it, or the
+  palette's **Settings…**) no longer overwrites the settings the next new road starts from.
+- **Grasshopper `Analyse Path` samples a curve exactly as `RRRoad` does** (it compiles the plugin's own
+  sampler): curvature is taken from the curve and kinks are found on it, including those under 10°, so
+  its violations can differ from earlier builds. Plan outputs (envelopes, holes, towed tracks,
+  footprints) now sit at the route's start elevation instead of Z = 0.
 
 ### Added
 
@@ -74,12 +88,43 @@ its new result, and review it before relying on it.
 - A **RhinoRoad toolbar** (`.rui`), **persisted settings**, clearer dialog labels.
 - **Grasshopper components** (`Vehicle`, `Analyse Path`, `Drive Manoeuvre`) and a **CI workflow**.
 - The documentation is split into `docs/` (user guide, modelling, validation, developer notes).
+- `-RRRoad` options `DrapeTerrain`, `WheelEdges` and `MirrorAllowance`. In a scripted run the terrain
+  prompt accepts Enter for none, which turns draping off for that run instead of stalling the macro.
+- Grasshopper `Drive Manoeuvre` has an optional **Stops** input (last, so existing wiring is kept): per
+  control, true stops before that leg and turns the wheel at a standstill.
+- `-RRImportVehicle` reads the file path from the command line.
 
 ### Fixed or corrected
 
 - Documentation contradictions: the stored certification run passes **6 of 18** and PV is
   `ReferenceValidated`; the plugin is no longer described as rigid-only; the steering rate
   (`lockToLockSeconds` 6.0 s) is now stated to be a RhinoRoad assumption, not a handbook figure.
+- The baked note is **0.25 m tall whatever the annotation scaling**: with model-space scaling on and a
+  style scaled 100 it was drawn 25 m tall. The note overrides its own dimension scale to 1.
+- A road whose **user vehicle is no longer loaded** no longer throws in the Edit Road palette, its
+  viewport labels or the area search: they say "vehicle X not found — import it again (RRImportVehicle)
+  or change the road's vehicle", and `RRRoad` on such a road falls back to a loaded vehicle.
+- Palette and inspector buttons (Save, Discard, Settings, the picks, Update, Edit, Measure) pressed
+  while another Rhino command is running say **"Finish the running command first"** instead of nesting
+  into that command's undo step or prompt.
+- An edit palette or inspector queued to open is not shown if its document closed in the meantime, and
+  a closing document is no longer redrawn by the inspector.
+- The clear-area search no longer fills suggestions into a panel hidden because the vehicle became
+  unsupported, and abandoned searches and readouts no longer leave faults unobserved.
+- The interactive preview stops scheduling work once its pick ends, and an exception while planning a
+  leg in the frame is shown as the preview's error instead of escaping the draw.
+- The inspector's site-fit fallback keeps the fixed-width road check when the corridor region is
+  missing, measuring against the road boundary's outline as the run does.
+- `RRCompareRoads` draws its regions at each side's route elevation with the solid hatch pattern (it
+  used Z = 0 and pattern index 0).
+- `-RRReportRoad` defaults to the document's folder (Documents for an unsaved document) and takes a path
+  with spaces; a relative path is resolved against that folder rather than Rhino's working directory.
+- Grasshopper: `Clearance` and `Interval` are described as model units, which is how they were always
+  read (like every other length on the components); vehicle-id descriptions list the loaded catalogue;
+  the user vehicles folder is re-read when its files change; model units come from the definition's own
+  Rhino document.
+- PV's validation note and the Yak manifest quote the stored run's worst envelope deviation, 0.054 m,
+  and the manifest lists the ten presets and user vehicles.
 
 ## 0.5.0-beta (2026-09-17)
 

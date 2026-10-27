@@ -69,13 +69,28 @@ public sealed class RRReportRoadCommand : Command
     private static RhinoObject[] Selected(RhinoDoc document) =>
         document.Objects.GetSelectedObjects(includeLights: false, includeGrips: false).ToArray();
 
+    /// <summary>
+    /// The scripted path. A literal string, because a plain string ends at the first space and the
+    /// default name has spaces in it. The default, and any relative path typed, is resolved against
+    /// <see cref="DefaultFolder"/>; resolving it against the process directory could put the report
+    /// in Rhino's install folder.
+    /// </summary>
     private static string? ScriptedPath(RhinoDoc document)
     {
+        var folder = DefaultFolder(document);
         using var getter = new GetString();
         getter.SetCommandPrompt("Report file (.html)");
-        getter.SetDefaultString(DefaultFileName(document));
-        return getter.Get() == GetResult.String ? getter.StringResult().Trim().Trim('"') : null;
+        getter.SetDefaultString(Path.Combine(folder, DefaultFileName(document)));
+        if (getter.GetLiteralString() != GetResult.String) return null;
+        var text = getter.StringResult().Trim().Trim('"');
+        return string.IsNullOrWhiteSpace(text) ? null : Path.GetFullPath(text, folder);
     }
+
+    /// <summary>The document's folder, or Documents for a document that has not been saved.</summary>
+    private static string DefaultFolder(RhinoDoc document) =>
+        !string.IsNullOrEmpty(document.Path) && Path.GetDirectoryName(document.Path) is { Length: > 0 } folder
+            ? folder
+            : System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyDocuments);
 
     private static string? DialogPath(RhinoDoc document)
     {
@@ -86,7 +101,7 @@ public sealed class RRReportRoadCommand : Command
             DefaultExt = "html",
             FileName = DefaultFileName(document)
         };
-        if (!string.IsNullOrEmpty(document.Path)) dialog.InitialDirectory = Path.GetDirectoryName(document.Path);
+        dialog.InitialDirectory = DefaultFolder(document);
         return dialog.ShowSaveDialog() ? dialog.FileName : null;
     }
 

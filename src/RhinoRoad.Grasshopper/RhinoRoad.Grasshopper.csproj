@@ -27,4 +27,10 @@
     <PackageReference Include="RhinoCommon" Version="8.19.25132.1001" ExcludeAssets="runtime" />
     <PackageReference Include="Grasshopper" Version="8.19.25132.1001" ExcludeAssets="runtime" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The plugin's own curve sampler, compiled into this assembly as well (it is internal, so each
+         assembly gets its own copy of the type). One source means Analyse Path samples a curve exactly
+         as RRRoad does (curvature from the curve, kinks found on it), where a copy had drifted. -->
+    <Compile Include="..\RhinoRoad.Rhino\Services\RhinoRouteSampler.cs" Link="Conversion\RhinoRouteSampler.cs" />
+  </ItemGroup>
 </Project>

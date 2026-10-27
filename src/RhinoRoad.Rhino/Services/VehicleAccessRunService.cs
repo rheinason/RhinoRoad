@@ -68,7 +68,11 @@ internal static class VehicleAccessRunService
                 return false;
             }
 
-            var vehicle = Catalog.Get(stored.VehicleId);
+            if (!RhinoRoadCatalog.TryRoadVehicle(stored, out var vehicle, out var vehicleError))
+            {
+                error = $"Update stopped. {vehicleError} The previous result is unchanged.";
+                return false;
+            }
             if (!vehicle.DrivingModes.TryGetValue(stored.ModeId, out var mode))
                 throw new InvalidDataException($"Driving mode {stored.ModeId} no longer exists for {stored.VehicleId}.");
 
@@ -101,7 +105,7 @@ internal static class VehicleAccessRunService
                 ? ResolveCurves(document, stored.AllowedBoundaryObjectIds)
                 : Array.Empty<Curve>();
             var analysis = new VehicleAccessAnalyzer().Analyze(
-                stored.IncludeMirrorAllowance ? MirrorAllowance.Apply(vehicle) : vehicle,
+                vehicle,
                 mode,
                 route,
                 stored.CheckMaximumGrade ? stored.MaximumGradePercent / 100.0 : null);

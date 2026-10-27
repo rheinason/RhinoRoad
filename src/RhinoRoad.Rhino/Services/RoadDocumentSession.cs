@@ -179,7 +179,7 @@ internal sealed class RoadDocumentSession
         editor?.Abandon();
         var inspector = InspectorForm;
         InspectorForm = null;
-        if (inspector?.Visible == true) inspector.Close();
+        inspector?.Abandon();
         LiveJourneyEditConduit.RefreshEnabled();
     }
 }

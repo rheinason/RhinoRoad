@@ -30,11 +30,18 @@ Projects:
   grouping, metadata, the commands, the toolbar (`RhinoRoad.Rhino.rui`) and the `RRReferenceCertify` DWG
   harness. Rhino model units are converted at this adapter boundary.
 - `src/RhinoRoad.Grasshopper` — Grasshopper components (`.gha`) over Core: `Vehicle`, `Analyse Path`,
-  `Drive Manoeuvre`.
+  `Drive Manoeuvre`. It compiles the plugin's `RhinoRouteSampler.cs` in by a linked `<Compile>` item
+  (the class is internal, so each assembly gets its own copy of the type) rather than keeping a copy
+  that can drift; the `.gha` still loads without the `.rhp`.
 - `tests/RhinoRoad.Core.Tests` — deterministic geometry, vehicle, steering, grade, reverse, planner,
   reference-asset and stored-certification report tests.
 
-Generated Rhino objects remain ordinary curves, points, hatches, dimensions and text. Two design
+Generated Rhino objects remain ordinary curves, points, hatches, dimensions and text. A saved road
+records a fingerprint of its source and of each reference (obstacles, boundaries, terrain) to tell
+when it is out of date: a curve by its length and 65 sampled points, any other kind (a terrain) by a
+SHA-256 of its vertices or control points, so an interior edit is seen. The vehicle a road is swept
+with is resolved once, by `RhinoRoadCatalog.TryRoadVehicle` (catalogue lookup plus
+`MirrorAllowance.Resolve`), and passed to every preview and to the analysis alike. Two design
 rules recur: **one authority for a click** (`ManoeuvreReplayService.PlanControl` serves the live
 preview, the commit and the replay, and tests pin them sample for sample), and **deterministic
 planners** (anything replayed from a saved journey consults no clock and no randomness, so it comes
@@ -251,8 +258,8 @@ script throws if they are.
 Publishing is opt-in (`-Push`) because a push to the McNeel server is public and permanent: a version can
 be yanked, but the package name is claimed for good. The version carries a pre-release suffix
 (`0.5.0-beta`), so only people who ask for pre-releases receive it. The manifest text is written inside
-the script; **it still describes eight presets, so update it** when the release adds SK, MVT, user
-vehicles and the other new features, and keep its validation wording in step with
+the script; it describes the ten presets, user vehicles and the release's main features. Update it
+when a release changes those, and keep its validation wording in step with
 [validation.md](validation.md). Add a [CHANGELOG.md](../CHANGELOG.md) entry for every release.
 
 ## Machine-specific files

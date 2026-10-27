@@ -30,6 +30,13 @@ namespace RhinoRoad.Rhino.Services;
 /// Everything here except the computation itself runs on the UI thread. The computation must be
 /// safe to run beside the UI thread's own use of whatever it captures.
 /// </para>
+/// <para>
+/// Disposing cancels the token every computation is given, so a plan still running for a pick that
+/// has ended can stop early; a computation that does not take the token runs to completion, and its
+/// result is ignored. Nothing is scheduled after disposal. A computation that throws in the frame is
+/// reported through <see cref="Error"/>, as a failed background one is, rather than escaping the
+/// pick's draw handler.
+/// </para>
 /// </remarks>
 internal sealed class LatestPreview<TRequest, TResult> : IDisposable
     where TRequest : notnull
@@ -37,8 +44,9 @@ internal sealed class LatestPreview<TRequest, TResult> : IDisposable
 {
     private static readonly TimeSpan FrameBudget = TimeSpan.FromMilliseconds(40);
 
-    private readonly Func<TRequest, TResult> _compute;
+    private readonly Func<TRequest, CancellationToken, TResult> _compute;
     private readonly RhinoDoc _document;
+    private readonly CancellationTokenSource _cancellation = new();
     private Task<(TResult Result, TimeSpan Elapsed)>? _work;
     private TRequest? _workRequest;
     private TResult? _result;
@@ -49,6 +57,15 @@ internal sealed class LatestPreview<TRequest, TResult> : IDisposable
     private bool _disposed;
 
     public LatestPreview(RhinoDoc document, Func<TRequest, TResult> compute)
+        : this(document, (request, _) => compute(request))
+    {
+    }
+
+    /// <summary>
+    /// For a computation that can stop early: <paramref name="compute"/> is given a token that is
+    /// cancelled when this preview is disposed.
+    /// </summary>
+    public LatestPreview(RhinoDoc document, Func<TRequest, CancellationToken, TResult> compute)
     {
         _document = document;
         _compute = compute;
@@ -64,6 +81,7 @@ internal sealed class LatestPreview<TRequest, TResult> : IDisposable
     /// </summary>
     public (TResult? Result, bool Current) Get(TRequest request, bool slow)
     {
+        if (_disposed) return (_result, false);
         Harvest();
         if (_result is not null && Same(_resultRequest, request)) return (_result, true);
         if (Same(_failedRequest, request)) return (_result, false);
@@ -73,7 +91,19 @@ internal sealed class LatestPreview<TRequest, TResult> : IDisposable
         if (!slow && _lastElapsed <= FrameBudget)
         {
             var clock = Stopwatch.StartNew();
-            var computed = _compute(request);
+            TResult computed;
+            try
+            {
+                computed = _compute(request, _cancellation.Token);
+            }
+            catch (Exception error)
+            {
+                // The same outcome as a background failure: the last good preview stays on screen,
+                // faded, and the message says why this request has none.
+                _failedRequest = request;
+                Error = error.GetBaseException().Message;
+                return (_result, false);
+            }
             Store(request, computed, clock.Elapsed);
             // A task still running is for an older request, and must not replace this when it lands.
             _workSuperseded = _work is not null;
@@ -84,19 +114,27 @@ internal sealed class LatestPreview<TRequest, TResult> : IDisposable
         return (_result, false);
     }
 
-    public void Dispose() => _disposed = true;
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        // Cancelled, not disposed: a background computation may still be reading the token.
+        _cancellation.Cancel();
+    }
 
     private void Start(TRequest request)
     {
         _workRequest = request;
         _workSuperseded = false;
         var compute = _compute;
+        var token = _cancellation.Token;
         var work = Task.Run(() =>
         {
+            token.ThrowIfCancellationRequested();
             var clock = Stopwatch.StartNew();
-            var result = compute(request);
+            var result = compute(request, token);
             return (result, clock.Elapsed);
-        });
+        }, token);
         _work = work;
         _ = work.ContinueWith(completed =>
         {
