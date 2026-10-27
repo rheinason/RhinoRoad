@@ -1,3 +1,5 @@
+> **Historical.** Every finding below has been resolved. Kept for the reasoning; current behaviour is in [../user-guide.md](../user-guide.md) and [../modelling.md](../modelling.md).
+
 # Review — editable routes, interaction modes, and tweakability
 
 Reviewing the working tree on `feature/dialog-and-prompt-reduction` against `6aa776c`.
@@ -114,7 +116,7 @@ load.
 
 ## On tweakability specifically
 
-The split is right, and it matches rule 3 in `path-model-notes.md`: sparse controls are the
+The split is right, and it matches rule 3 in `docs/path-model-notes.md`: sparse controls are the
 authored intent, the polyline is the editable handle, and replay is deterministic.
 `ManoeuvreControlReconciler`'s cost design — gap cost above any possible match distance, so ordered
 controls are preserved through large grip moves — is a genuinely thoughtful choice, and the comment

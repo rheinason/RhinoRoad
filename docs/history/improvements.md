@@ -1,5 +1,30 @@
 # RhinoRoad — first-draft review and improvement list
 
+> **Status note (written after the improvements tranche; the review below is kept as it was written).**
+> Nearly every item in this list was implemented in the tranche that followed the review: the
+> correctness bugs (B1–B12), the modelling items (M1–M10: one per-unit fold limit, mirrors and
+> wheel-edge paths, per-leg speed, reversing for every vehicle, schema migration, windowed grade,
+> terrain draping), the UI items (U1–U14), the features (F1–F11), the performance items (P1–P5), the
+> architecture items (A1–A4), CI and regression tests (T2–T4), and the docs items D1–D3 and D5–D7 (D5 is
+> documented rather than moved: the tests parse `Previous Attempts/VehicleTurn_VD_v12.py`, so it stays
+> where it is). See `CHANGELOG.md` for what changed for users.
+>
+> **Still open:**
+>
+> - **F12** localisation (Danish UI strings), and **A5** centralising the user-facing strings.
+> - **D4** Git LFS for the reference DWG/ZIP/PDF data. Migrating rewrites history, so it needs a decision
+>   from the repository owner.
+> - **T5** transcribing the DWG axle tracks so REN and BUS 12 can pass the certification matrix.
+> - **T6** re-running the certification with the mode-A 30° lock before applying it.
+> - **T1** running the manual Rhino checklist (`tests/vehicle-access-rhino-checks.md`) in a live
+>   session and recording the result per release; the checklist has been updated, the run has not.
+> - `.codex/config.toml` still contains a machine-specific path (D3); whether it should be untracked is
+>   an open question.
+>
+> File references below point at the code as it stood at `d911fb4`; several of those lines have since
+> moved.
+
+
 Reviewed at `d911fb4` (0.5.0-beta), 2026-10-25. The build is clean (0 warnings, warnings are
 errors) and all 303 core tests pass. This review comes from reading the source. Nothing here was
 exercised in a live Rhino session. An item marked **(verify in Rhino)** is runtime behaviour
