@@ -441,7 +441,7 @@ public sealed class RRVehicleAccessCommand : Command
         // fit into is long enough. A driven route is drivable by construction and needs none of it.
         if (source == PathSourceKind.ExistingCurve)
         {
-            ReportTransitions(analysis, route);
+            ReportTransitions(analysis, route, violations);
         }
 
         foreach (var warning in warnings) RhinoApp.WriteLine($"WARNING: {warning}");
@@ -452,14 +452,20 @@ public sealed class RRVehicleAccessCommand : Command
     /// <summary>
     /// What the drawn alignment costs the steering wheel, stretch by stretch.
     /// </summary>
-    private static void ReportTransitions(VehicleAccessResult analysis, IReadOnlyList<RouteSample> route)
+    private static void ReportTransitions(
+        VehicleAccessResult analysis, IReadOnlyList<RouteSample> route, IReadOnlyList<AnalysisViolation> violations)
     {
         var runs = AlignmentTransitions.Runs(analysis.Vehicle, analysis.DrivingMode, route);
         if (runs.Count < 2) return;
 
         var tight = runs.Where(run => !run.Fits).ToArray();
+        // Steering-rate violations at a curvature jump come from drawing an arc straight onto a
+        // tangent, not from the vehicle; say so beside the list instead of beside a contradiction.
+        var joins = AlignmentTransitions.JoinsWithRateViolations(analysis.Vehicle, analysis.DrivingMode, runs, violations);
+        if (joins.Count > 0) RhinoApp.WriteLine(AlignmentTransitions.DescribeJoins(joins, tight.Length == 0));
         if (tight.Length == 0)
         {
+            if (joins.Count > 0) return;
             var worst = runs.MaxBy(run => run.RequiredTransitionMetres);
             RhinoApp.WriteLine(
                 $"Transitions: every stretch has room. The tightest is {worst!.RequiredTransitionMetres:0.00} m " +

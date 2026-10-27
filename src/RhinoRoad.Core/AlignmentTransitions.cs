@@ -17,6 +17,9 @@ public sealed record AlignmentRun(
         : 1.0 / Math.Abs(CurvaturePerMetre);
 }
 
+/// <summary>A place where the drawn curvature jumps, and the transition a vehicle would need there.</summary>
+public sealed record CurvatureJoin(double StationMetres, double RequiredTransitionMetres, int SteeringRateViolations);
+
 /// <summary>
 /// What a drawn alignment costs the steering wheel, and whether it has room for it.
 /// </summary>
@@ -115,5 +118,65 @@ public static class AlignmentTransitions
         }
 
         return runs;
+    }
+
+    /// <summary>How far from a join a steering-rate violation may sit and still be that join's.</summary>
+    public const double JoinToleranceMetres = 1.0;
+
+    /// <summary>
+    /// The joins between adjacent constant-curvature runs that carry a steering-rate violation.
+    /// </summary>
+    /// <remarks>
+    /// A drawn arc meeting a tangent changes curvature in no distance at all, so the analysis
+    /// reports the wheel moving at an impossible rate exactly there. That violation is inherent to
+    /// the drawing, not a sign the vehicle cannot make the turn, and the report should say so
+    /// rather than list it beside a claim that every stretch has room.
+    /// </remarks>
+    public static IReadOnlyList<CurvatureJoin> JoinsWithRateViolations(
+        VehicleDefinition vehicle,
+        DrivingModeDefinition mode,
+        IReadOnlyList<AlignmentRun> runs,
+        IReadOnlyList<AnalysisViolation> violations)
+    {
+        ArgumentNullException.ThrowIfNull(runs);
+        ArgumentNullException.ThrowIfNull(violations);
+        var joins = new List<CurvatureJoin>();
+        for (var index = 1; index < runs.Count; index++)
+        {
+            var station = runs[index].StartStationMetres;
+            var count = violations.Count(violation =>
+                violation.Kind == ViolationKind.SteeringRate &&
+                Math.Abs(violation.StationMetres - station) <= JoinToleranceMetres);
+            if (count == 0) continue;
+            joins.Add(new CurvatureJoin(
+                station,
+                RequiredLengthMetres(vehicle, mode, runs[index - 1].CurvaturePerMetre, runs[index].CurvaturePerMetre),
+                count));
+        }
+
+        return joins;
+    }
+
+    /// <summary>
+    /// The sentence that explains those joins to a reader, in the current culture's number format.
+    /// </summary>
+    /// <param name="joins">The result of <see cref="JoinsWithRateViolations"/>; must not be empty.</param>
+    /// <param name="everyStretchFits">Whether every run is long enough to hold the transitions at its ends.</param>
+    public static string DescribeJoins(IReadOnlyList<CurvatureJoin> joins, bool everyStretchFits)
+    {
+        ArgumentNullException.ThrowIfNull(joins);
+        if (joins.Count == 0) throw new ArgumentException("There are no joins to describe.", nameof(joins));
+        var stations = string.Join(", ", joins.Select(join => $"{join.StationMetres:0.0}"));
+        var shortest = joins.Min(join => join.RequiredTransitionMetres);
+        var longest = joins.Max(join => join.RequiredTransitionMetres);
+        var needed = Math.Abs(longest - shortest) < 0.05
+            ? $"{longest:0.0} m"
+            : $"{shortest:0.0} to {longest:0.0} m";
+        var lead =
+            $"The drawn line changes curvature instantly at {joins.Count} join(s) (stations {stations} m); " +
+            $"a vehicle needs a transition there of {needed}";
+        return everyStretchFits
+            ? lead + " — every stretch is long enough to fit one, so easing the joins with transitions would remove these steering-rate violations."
+            : lead + ", but some stretches are too short to hold one (listed below).";
     }
 }

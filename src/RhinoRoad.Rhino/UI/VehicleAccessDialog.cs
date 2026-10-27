@@ -318,13 +318,7 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
               "stops folding. Drive it round a real corner to see the sweep.";
     }
 
-    private static string Describe(ValidationStatus status) => status switch
-    {
-        ValidationStatus.ReferenceValidated => "validated against the official curves",
-        ValidationStatus.ValidationFailed => "FAILED validation — do not rely on this preset",
-        ValidationStatus.UserDefined => "user-defined — not from the Vejregler source, not validated",
-        _ => "source-transcribed, not yet validated"
-    };
+    private static string Describe(ValidationStatus status) => ValidationWording.Describe(status);
 
     private void Apply(VehicleAccessSettings settings)
     {

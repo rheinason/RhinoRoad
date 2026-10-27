@@ -18,7 +18,6 @@ internal static class RhinoOutputWriter
     private static readonly Color ConflictFill = Color.FromArgb(226, 81, 66);
 
     /// <summary>Text height of the title block at the route start, in metres.</summary>
-    private const double NoteHeightMetres = 0.5;
 
     public static IReadOnlyList<Guid> Bake(
         RhinoDoc document,
@@ -206,7 +205,7 @@ internal static class RhinoOutputWriter
     }
 
     /// <summary>
-    /// The block a drawing sheet needs at the route start: what was run, with what allowance, how
+    /// The block a drawing sheet needs beside the envelope: what was run, with what allowance, how
     /// far the preset can be trusted, and when. A preset that is not reference-validated says so
     /// first, in capitals, because that is the line a reader must not skip.
     /// </summary>
@@ -215,26 +214,19 @@ internal static class RhinoOutputWriter
         var document = output.Document;
         var result = output.Result;
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, document.ModelUnitSystem);
-        var lines = new List<string>();
-        var status = result.Vehicle.ValidationStatus;
-        if (status != ValidationStatus.ReferenceValidated)
-            lines.Add(status == ValidationStatus.ValidationFailed
-                ? "PRESET FAILED VALIDATION — DO NOT RELY ON THIS RESULT"
-                : status == ValidationStatus.UserDefined
-                    ? "USER-DEFINED VEHICLE — NOT VALIDATED, SCREENING ONLY"
-                    : "PRESET NOT REFERENCE-VALIDATED — SCREENING ONLY");
-        lines.Add($"Vehicle: {result.Vehicle.Name} ({result.Vehicle.Id} v{result.Vehicle.Version})");
-        lines.Add($"Mode: {result.DrivingMode.Name}");
-        lines.Add($"Clearance: {output.ClearanceMetres:0.00} m");
-        if (geometry.MirrorAllowance) lines.Add(MirrorAllowance.Basis);
-        lines.Add($"Validation: {status}");
-        lines.Add($"Date: {DateTime.Now:yyyy-MM-dd}");
+        var lines = AccessNote.Lines(
+            result.Vehicle, result.DrivingMode, output.ClearanceMetres, geometry.MirrorAllowance, DateOnly.FromDateTime(DateTime.Now));
 
-        var start = geometry.RearAxleTrack.PointAtStart;
-        var plane = new Plane(start + new Vector3d(0.0, -NoteHeightMetres * 2.0 * scale, 0.0), Vector3d.ZAxis);
+        // Below the envelope's lower-left corner; the clearance envelope is the outermost, with the
+        // body envelope and then the route as fallbacks when a run produced no envelope.
+        var bounds = (geometry.ClearanceEnvelope ?? geometry.BodyEnvelope ?? geometry.RearAxleTrack).GetBoundingBox(true);
+        var anchor = AccessNote.Anchor(new Point2(bounds.Min.X, bounds.Min.Y), scale);
+        var plane = new Plane(new Point3d(anchor.X, anchor.Y, bounds.Min.Z), Vector3d.ZAxis);
         var text = TextEntity.Create(string.Join(System.Environment.NewLine, lines), plane, document.DimStyles.Current, false, 0.0, 0.0)
             ?? throw new InvalidOperationException("Rhino could not create the vehicle access note.");
-        text.TextHeight = NoteHeightMetres * scale;
+        text.TextHeight = AccessNote.TextHeightMetres * scale;
+        text.TextHorizontalAlignment = TextHorizontalAlignment.Left;
+        text.TextVerticalAlignment = TextVerticalAlignment.Top;
         var attributes = output.Attributes("Annotation", "Vehicle access note", Color.DimGray);
         var id = document.Objects.AddText(text, attributes);
         if (id == Guid.Empty) throw new InvalidOperationException("Rhino could not create the vehicle access note.");

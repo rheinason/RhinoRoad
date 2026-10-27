@@ -322,10 +322,11 @@ internal sealed class VehicleAccessInspectorForm : Form
         AddMeasurement("Route length", $"{review.RouteLengthMetres:0.00} m");
         AddMeasurement("Maximum wheel angle", $"{Degrees(review.MaximumSteeringAngleRadians):0.0}°");
         AddMeasurement("Maximum steering rate", $"{Degrees(review.MaximumSteeringRateRadiansPerSecond):0.0}°/s");
-        var gradeState = review.Checks.First(check => check.Kind == ReviewCheckKind.Grade).State;
-        AddMeasurement("Maximum grade", gradeState == ReviewCheckState.Unavailable
-            ? "— (World XY route)"
-            : $"{review.MaximumAbsoluteGrade * 100.0:0.00}%");
+        // A planar interactive route has no grade to quote; 0.00% would read as a measured flat
+        // route, so it says so, as the report does.
+        AddMeasurement("Maximum grade", _snapshot.Run.HasElevation
+            ? $"{review.MaximumAbsoluteGrade * 100.0:0.00}%"
+            : "n/a (flat route)");
         if (review.Checks.FirstOrDefault(check => check.Kind == ReviewCheckKind.ArticulationAngle) is { ActualValue: { } fold })
             AddMeasurement("Maximum fold", $"{fold:0.0}°");
         AddMeasurement("Minimum clearance", review.MinimumClearanceMetres is { } clearance ? $"{clearance:0.00} m" : "—");
