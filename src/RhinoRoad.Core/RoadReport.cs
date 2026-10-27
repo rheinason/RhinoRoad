@@ -205,7 +205,9 @@ public static class RoadReportBuilder
                         "the last saved update. The figures below were recomputed from the current geometry and may differ from the saved result; " +
                         "run Update before relying on this report.</p>");
         var validated = road.ValidationStatus == ValidationStatus.ReferenceValidated;
-        html.Append($"<p class=\"banner {(validated ? "ok" : "warn")}\">Vehicle validation: <b>{Html(road.ValidationStatus.ToString())}</b>");
+        // The same wording as the dialog and the baked note, with the status id kept for searching.
+        html.Append($"<p class=\"banner {(validated ? "ok" : "warn")}\">Vehicle validation: " +
+            $"<b>{Html(ValidationWording.Describe(road.ValidationStatus))}</b> ({Html(road.ValidationStatus.ToString())})");
         if (road.ValidationStatus == ValidationStatus.SourceTranscribed)
             html.Append(". SourceTranscribed presets are transcribed from the published source and are not validated against official curves.");
         else if (road.ValidationStatus == ValidationStatus.UserDefined)

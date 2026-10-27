@@ -99,11 +99,18 @@ public static class VehicleAccessReviewAnalyzer
                 var distance = route[index].PositionMetres.XY.DistanceTo(route[index - 1].PositionMetres.XY);
                 if (distance > Geometry2D.Epsilon)
                 {
-                    // At the speed the interval was driven at, as the analyzer prices it.
-                    var elapsed = distance
-                        / (result.DrivingMode.LegSpeedKilometresPerHour(route[index].SpeedKilometresPerHour) / 3.6);
-                    steeringRate = Math.Abs(Geometry2D.NormalizeAngle(
-                        result.Poses[index].SteeringAngleRadians - result.Poses[index - 1].SteeringAngleRadians)) / elapsed;
+                    // A wheel turned at a standstill -- every change of direction, and an armed
+                    // Stop -- moved while the vehicle covered no distance, so it has no rate to
+                    // report. The analyzer skips the same samples; without this the profile showed
+                    // a steering-rate problem at every cusp while the check itself passed.
+                    if (!route[index].StartsFromStandstill)
+                    {
+                        // At the speed the interval was driven at, as the analyzer prices it.
+                        var elapsed = distance
+                            / (result.DrivingMode.LegSpeedKilometresPerHour(route[index].SpeedKilometresPerHour) / 3.6);
+                        steeringRate = Math.Abs(Geometry2D.NormalizeAngle(
+                            result.Poses[index].SteeringAngleRadians - result.Poses[index - 1].SteeringAngleRadians)) / elapsed;
+                    }
                     grade = (route[index].PositionMetres.Z - route[index - 1].PositionMetres.Z) / distance;
                 }
             }
