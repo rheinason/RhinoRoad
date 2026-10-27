@@ -46,4 +46,36 @@ public sealed class EnvelopeComparisonTests
         Assert.Equal(4, result.OnlyBArea, 6);
         Assert.Equal(96, result.BothArea, 6);
     }
+
+    /// <summary>
+    /// A quadrilateral (area 90) with a triangle (area 10) cut from it that touches its slanted left
+    /// edge at (1, 5), beside a larger square. Clipper starts the triangle's hole at that touching
+    /// vertex, and a ray cast from a point on a slanted edge reads it as outside by rounding, so the
+    /// hole was assigned to no region at all and the piece drew and measured as 90 m² instead of 80.
+    /// </summary>
+    internal static readonly Point2[] Slanted = [new(2, 0), new(10, 0), new(10, 10), new(0, 10)];
+
+    internal static readonly Point2[] TouchingTriangle = [new(1, 5), new(6, 3), new(6, 7)];
+
+    internal static void AssertHoleStaysWithItsOwnRegion(IReadOnlyList<SweptRegion> regions)
+    {
+        Assert.Equal(2, regions.Count);
+        Assert.Empty(regions[0].Holes);
+        Assert.Equal(400.0, regions[0].AreaSquareMetres, 6);
+        Assert.Equal(80.0, regions[1].AreaSquareMetres, 6);
+        var inside = new Point2(4.0, 5.0);
+        Assert.Contains(regions[1].Holes, hole => Geometry2D.Contains(hole, inside));
+    }
+
+    [Fact]
+    public void A_hole_touching_its_outer_boundary_stays_with_its_own_region()
+    {
+        var result = EnvelopeComparison.Compare(
+            [new SweptRegion(Slanted, []), Rect(20, 0, 40, 20)],
+            [new SweptRegion(TouchingTriangle, [])]);
+
+        Assert.Equal(480.0, result.OnlyAArea, 6);
+        Assert.Equal(result.OnlyAArea, result.OnlyA.Sum(region => region.AreaSquareMetres), 6);
+        AssertHoleStaysWithItsOwnRegion(result.OnlyA);
+    }
 }

@@ -29,23 +29,34 @@ public sealed class StandstillSteeringTests
     /// lock angle — that a standstill removes. The cost depends on the speed alone, so it is the same
     /// for every mode driven at the same speed: every mode B, and SK's mode A, run at 5 km/h.
     /// </summary>
+    /// <remarks>
+    /// Every preset mode is keyed to the speed it is meant to run at, and each row checks exactly
+    /// those modes, so a preset whose speed or steering drifts fails rather than dropping out of
+    /// the comparison.
+    /// </remarks>
     [Theory]
     [InlineData(15.0, 12.5)]
     [InlineData(5.0, 4.17)]
     public void ReachingFullLockCostsAFixedDistanceThatIsTheSameAtTheSameSpeed(
         double speedKilometresPerHour, double expectedMetres)
     {
-        var compared = 0;
-        foreach (var mode in Catalog.Vehicles.SelectMany(vehicle => vehicle.DrivingModes.Values))
+        static double IntendedSpeed(VehicleDefinition vehicle, string modeId) =>
+            modeId == "B" || vehicle.Id == "SK" ? 5.0 : 15.0;
+
+        var modes = Catalog.Vehicles
+            .SelectMany(vehicle => vehicle.DrivingModes.Values.Select(mode => (Vehicle: vehicle, Mode: mode)))
+            .Where(item => IntendedSpeed(item.Vehicle, item.Mode.Id) == speedKilometresPerHour)
+            .ToArray();
+
+        // Every preset has modes A and B; SK's A runs at 5 km/h with the B modes.
+        Assert.Equal(Catalog.Vehicles.Count + (speedKilometresPerHour == 5.0 ? 1 : -1), modes.Length);
+        foreach (var (vehicle, mode) in modes)
         {
-            if (mode.SpeedKilometresPerHour != speedKilometresPerHour) continue;
-            compared++;
+            Assert.True(mode.SpeedKilometresPerHour == speedKilometresPerHour, $"{vehicle.Id}/{mode.Id} runs at {mode.SpeedKilometresPerHour} km/h.");
             var metres = mode.MaximumWheelAngleRadians
                 / (mode.MaximumSteeringRateRadiansPerSecond / mode.SpeedMetresPerSecond);
             Assert.Equal(expectedMetres, metres, 2);
         }
-
-        Assert.True(compared >= Catalog.Vehicles.Count - 1);
     }
 
     [Fact]

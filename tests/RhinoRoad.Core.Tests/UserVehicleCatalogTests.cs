@@ -121,4 +121,101 @@ public sealed class UserVehicleCatalogTests
             Directory.Delete(directory, true);
         }
     }
+
+    /// <summary>A file the loader must report rather than crash on; the good file beside it still loads.</summary>
+    private static void AssertReportedNotThrown(string json, string expectedFragment)
+    {
+        var load = Load(("bad.json", json), ("good.json", WithId("GOOD")));
+
+        var error = Assert.Single(load.Errors);
+        Assert.StartsWith("bad.json", error);
+        Assert.Contains(expectedFragment, error);
+        Assert.Equal(ValidationStatus.UserDefined, load.Catalog.Get("GOOD").ValidationStatus);
+        Assert.Equal(VehicleCatalog.LoadEmbedded().Vehicles.Count + 1, load.Catalog.Vehicles.Count);
+    }
+
+    private static string Edited(Action<JsonNode> edit)
+    {
+        var root = JsonNode.Parse(WithId("BAD"))!;
+        edit(root["vehicles"]![0]!);
+        return root.ToJsonString();
+    }
+
+    [Fact]
+    public void A_null_vehicles_array_is_a_file_error() =>
+        AssertReportedNotThrown("{\"vehicles\":null}", "\"vehicles\" is null");
+
+    [Fact]
+    public void A_null_document_is_a_file_error() =>
+        AssertReportedNotThrown("null", "empty");
+
+    [Fact]
+    public void A_null_vehicle_entry_is_skipped_with_its_position() =>
+        AssertReportedNotThrown("{\"vehicles\":[null]}", "vehicle 1 is null");
+
+    [Fact]
+    public void A_null_driving_mode_is_a_vehicle_error() =>
+        AssertReportedNotThrown(Edited(vehicle => vehicle["drivingModes"]!["A"] = null), "driving mode 'A' is null");
+
+    [Fact]
+    public void Null_driving_modes_are_a_vehicle_error() =>
+        AssertReportedNotThrown(Edited(vehicle => vehicle["drivingModes"] = null), "drivingModes is null");
+
+    [Fact]
+    public void A_null_outline_point_is_a_vehicle_error() =>
+        AssertReportedNotThrown(Edited(vehicle => vehicle["bodyOutline"]![1] = null), "point 2 of bodyOutline");
+
+    [Fact]
+    public void A_short_outline_point_is_a_vehicle_error() =>
+        AssertReportedNotThrown(Edited(vehicle => vehicle["bodyOutline"]![0] = new JsonArray(1.0)), "point 1 of bodyOutline");
+
+    [Fact]
+    public void A_null_outline_is_a_vehicle_error() =>
+        AssertReportedNotThrown(Edited(vehicle => vehicle["bodyOutline"] = null), "bodyOutline is null");
+
+    [Fact]
+    public void A_null_towed_unit_is_a_vehicle_error() =>
+        AssertReportedNotThrown(Edited(vehicle => vehicle["towedUnits"] = new JsonArray((JsonNode?)null)), "towed unit 1 is null");
+
+    [Fact]
+    public void Null_strings_and_optional_lists_read_as_absent()
+    {
+        var json = Edited(vehicle =>
+        {
+            vehicle["name"] = null;
+            vehicle["version"] = null;
+            vehicle["source"] = null;
+            vehicle["validationNotes"] = null;
+            vehicle["towedUnits"] = null;
+            vehicle["protrusions"] = null;
+        });
+
+        var load = Load(("nulls.json", json));
+
+        Assert.Empty(load.Errors);
+        var vehicle = load.Catalog.Get("BAD");
+        Assert.Equal(string.Empty, vehicle.Name);
+        Assert.Empty(vehicle.TowedUnits);
+        Assert.NotNull(vehicle.Source);
+    }
+
+    [Theory]
+    [InlineData("maximumWheelAngleDegrees", 95.0, "wheel angle")]
+    [InlineData("maximumWheelAngleDegrees", 90.0, "wheel angle")]
+    [InlineData("maximumWheelAngleDegrees", 0.0, "wheel angle")]
+    [InlineData("defaultClearanceMetres", -0.1, "clearance")]
+    public void Out_of_range_mode_values_are_rejected(string field, double value, string expectedFragment) =>
+        AssertReportedNotThrown(Edited(vehicle => vehicle["drivingModes"]!["A"]![field] = value), expectedFragment);
+
+    [Theory]
+    [InlineData("frontOverhangMetres")]
+    [InlineData("rearOverhangMetres")]
+    public void A_negative_overhang_is_rejected(string field) =>
+        AssertReportedNotThrown(Edited(vehicle => vehicle[field] = -0.5), "overhangs cannot be negative");
+
+    [Fact]
+    public void Every_built_in_preset_passes_the_tightened_validation()
+    {
+        foreach (var vehicle in VehicleCatalog.LoadEmbedded().Vehicles) vehicle.Validate();
+    }
 }

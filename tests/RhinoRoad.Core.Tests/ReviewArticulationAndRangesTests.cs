@@ -147,10 +147,10 @@ public sealed class ReviewArticulationAndRangesTests
         Assert.Equal(5.0, turn.EndStationMetres, 9);
         Assert.Equal(11, turn.Count);
         Assert.Equal($"SteeringAngle at {2.0:0.0}", turn.Message);
-        Assert.Equal($"Wheel angle {2.0:0.0}–{5.0:0.0} m", ViolationRanges.Label(turn));
+        Assert.Equal("Wheel angle 2.0–5.0 m", ViolationRanges.Label(turn));
         Assert.Contains(ranges, range => range.Kind == ViolationKind.SteeringAngle && range.StartStationMetres == 20.0);
         var site = ranges.Single(range => range.Kind == ViolationKind.ObstacleClearance);
         Assert.Equal(14.0, site.EndStationMetres);
-        Assert.Equal($"Obstacle {10.0:0.0}–{14.0:0.0} m", ViolationRanges.Label(site));
+        Assert.Equal("Obstacle 10.0–14.0 m", ViolationRanges.Label(site));
     }
 }

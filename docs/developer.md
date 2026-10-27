@@ -47,6 +47,13 @@ preview, the commit and the replay, and tests pin them sample for sample), and *
 planners** (anything replayed from a saved journey consults no clock and no randomness, so it comes
 out sample for sample the same on every machine).
 
+**Numbers in analysis text are invariant.** A violation message, a region summary, a range label or
+the join note can end up in the HTML report beside numbers the report formats itself, so Core formats
+them with `FormattableString.Invariant` rather than the current culture. Interactive prompts and
+dialog fields may follow the user's culture. Clipper output is turned into regions only through
+`SweptRegionBuilder.Nest`, which reads the nesting from Clipper's `PolyTreeD` instead of guessing it
+from where each hole starts.
+
 Dimensions and driving-mode limits come from *Grundlag for udformning af trafikarealer* and are
 stored with source, date, figure, version, validation status and notes. Existing AutoTURN `.veh`
 payloads are not reverse-engineered.

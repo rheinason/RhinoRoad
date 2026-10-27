@@ -205,4 +205,41 @@ public sealed class SweptRegionBuilderTests
         Assert.Equal(first.Region!.OuterBoundary.Count, second.Region!.OuterBoundary.Count);
         Assert.Equal(first.Region.AreaSquareMetres, second.Region.AreaSquareMetres, 9);
     }
+
+    [Fact]
+    public void A_hole_touching_the_outer_boundary_belongs_to_its_own_piece()
+    {
+        // Three footprints that leave a triangle open, touching the bottom edge at (5, 0), and a
+        // larger, separate footprint. Whether Clipper makes the triangle a hole or a notch, the
+        // larger piece must not be given it (the reproducing case is in EnvelopeComparisonTests).
+        IReadOnlyList<Point2>[] outlines =
+        [
+            [new(0, 0), new(5, 0), new(3, 5), new(0, 5)],
+            [new(5, 0), new(10, 0), new(10, 5), new(7, 5)],
+            [new(0, 5), new(10, 5), new(10, 10), new(0, 10)],
+            [new(20, 0), new(40, 0), new(40, 20), new(20, 20)]
+        ];
+
+        var result = SweptRegionBuilder.FromOutlines(outlines);
+
+        Assert.Equal(SweptRegionStatus.Disjoint, result.Status);
+        Assert.Equal(2, result.Regions.Count);
+        Assert.Empty(result.Regions[0].Holes);
+        Assert.Equal(400.0, result.Regions[0].AreaSquareMetres, 4);
+        Assert.Equal(90.0, result.Regions[1].AreaSquareMetres, 4);
+    }
+
+    [Fact]
+    public void An_island_in_a_hole_is_a_region_of_its_own()
+    {
+        Point2[] Square(double x0, double y0, double x1, double y1) => [new(x0, y0), new(x1, y0), new(x1, y1), new(x0, y1)];
+        var ring = SweptRegionBuilder.FromOutlines(
+            [Square(0, 0, 10, 2), Square(0, 8, 10, 10), Square(0, 0, 2, 10), Square(8, 0, 10, 10), Square(4, 4, 6, 6)]);
+
+        Assert.Equal(2, ring.Regions.Count);
+        Assert.Equal(64.0, ring.Regions[0].AreaSquareMetres, 4);
+        Assert.Single(ring.Regions[0].Holes);
+        Assert.Empty(ring.Regions[1].Holes);
+        Assert.Equal(4.0, ring.Regions[1].AreaSquareMetres, 4);
+    }
 }

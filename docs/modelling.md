@@ -356,9 +356,12 @@ measurements, is in [path-model-notes.md](path-model-notes.md).
 - **Grade.** A route is sampled about every 0.10 m, so a millimetre of Z noise reads as 1 %. Grade
   is therefore **judged over a moving window** — the larger of 5 m and the vehicle's wheelbase — and
   the limit applies to that, and the road report states the windowed maximum. The point-to-point
-  maximum is still shown in the command summary and the inspector. A route shorter than the window is judged end to end. An interactive
-  route is flat (it carries its start Z), and for a flat route grade figures are hidden rather than
-  shown as zero.
+  maximum is still shown in the command summary and the inspector. The window **restarts at every
+  change of direction and every standstill**: at a cusp the vehicle drives back over the ground it has
+  just climbed, and a window spanning it measures the net rise of up-and-back (3 m up a 10 % ramp and
+  3 m back read as 2 %). A leg shorter than the window, like a route shorter than it, is judged end to
+  end. An interactive route is flat (it carries its start Z), and for a flat route grade figures are
+  hidden rather than shown as zero.
 
 ## Mirrors, protrusions and wheel-edge paths
 
@@ -383,9 +386,12 @@ measurements, is in [path-model-notes.md](path-model-notes.md).
 An interactive route is flat by construction. With *Drape onto terrain* ticked, the route's
 elevations are taken from a selected surface, polysurface, SubD or mesh by projecting each sample
 vertically onto it, so a driven route gets a real grade check. First runs and every Update drape the
-same way, so a saved result matches what the command reported. A station that misses the terrain keeps
-the height of the last station that hit, and one before the first hit takes the first height, so a
-short gap at the edge of a surface reads as level rather than as a cliff the grade check would report;
-the number of misses is reported. If every station missed, the route is left unchanged. The terrain
+same way, so a saved result matches what the command reported. A station that misses the terrain
+between two that hit — a hole in the mesh, a gap between two surfaces — takes the height interpolated
+by station between them, so the grade across the hole is the grade between its edges (holding the last
+height instead turned a 10 m hole in a 5 % slope into a level shelf and a half-metre step). Misses
+before the first hit or after the last, where there is nothing to interpolate towards, hold the
+nearest hit's height, so a short gap at the edge of a surface reads as level; the number of misses is
+reported. If every station missed, the route is left unchanged. The terrain
 is saved with the road, and the plan-view geometry is unaffected (plan geometry is evaluated in World
 XY; crossfall, vertical clearance and 3D road surfaces are out of scope).

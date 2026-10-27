@@ -56,14 +56,5 @@ public static class EnvelopeComparison
         return path;
     }
 
-    private static IReadOnlyList<SweptRegion> Regions(PathsD paths)
-    {
-        var loops = paths.Where(path => Math.Abs(Clipper.Area(path)) > 1e-8)
-            .Select(path => (IReadOnlyList<Point2>)path.Select(p => new Point2(p.x, p.y)).ToArray()).ToArray();
-        var outers = loops.Where(loop => SweptRegionBuilder.SignedArea(loop) > 0).ToArray();
-        var holes = loops.Where(loop => SweptRegionBuilder.SignedArea(loop) < 0).ToArray();
-        return outers.Select(outer => new SweptRegion(outer, holes.Where(hole =>
-            outers.Where(candidate => Geometry2D.Contains(candidate, hole[0]))
-                .MinBy(candidate => Math.Abs(SweptRegionBuilder.SignedArea(candidate))) == outer).ToArray())).ToArray();
-    }
+    private static IReadOnlyList<SweptRegion> Regions(PathsD paths) => SweptRegionBuilder.Nest(paths, Precision);
 }

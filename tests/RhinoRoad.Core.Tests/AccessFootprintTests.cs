@@ -86,4 +86,17 @@ public sealed class AccessFootprintTests
         Assert.NotNull(AccessFootprint.Outside(body, [notched]));
         Assert.Null(AccessFootprint.Outside(body, [Box(-1, -1, 3, 6), Box(2, -1, 3, 6)]));
     }
+
+    [Fact]
+    public void Combined_hole_touching_its_outer_boundary_stays_with_its_own_region()
+    {
+        // The hole is assigned from Clipper's own nesting, not by a ray cast from its first vertex,
+        // which Clipper puts on the slanted edge it touches (see EnvelopeComparisonTests).
+        var notched = new SweptRegion(EnvelopeComparisonTests.Slanted, [EnvelopeComparisonTests.TouchingTriangle]);
+
+        var result = AccessFootprint.Combine([notched, Rect(20, 0, 20, 20)]);
+
+        EnvelopeComparisonTests.AssertHoleStaysWithItsOwnRegion(result);
+        Assert.Equal(480.0, result.Sum(region => region.AreaSquareMetres), 6);
+    }
 }

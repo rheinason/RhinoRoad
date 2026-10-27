@@ -45,6 +45,22 @@ its new result, and review it before relying on it.
   route), and the mode's default clearance is applied when the field has not been edited.
 - A road saved by a **newer RhinoRoad** than the one installed is refused with an explicit message;
   older saved roads are upgraded by schema version when read.
+- **A hole in the terrain is bridged, not held level.** A draped station that misses the terrain between
+  two that hit now takes the height interpolated by station between them; only misses before the first
+  hit or after the last hold the nearest hit's height. Holding the last height turned a 10 m hole in a
+  5 % slope into a 500 % step (14.9 % over the window). Draped roads need an Update.
+- **The grade window restarts at every change of direction and every standstill**, so the up and back
+  legs of a shuffle on a slope no longer cancel (3 m up 10 % and 3 m back read as 2 %, now 10 %). A leg
+  shorter than the window is judged end to end. Roads with reversals on a slope need an Update.
+- **An open obstacle line through the body via one of its corners is a body conflict.** The nearest-pair
+  search stopped at the exact touch at the corner and never saw the crossing beyond it, so such a line
+  read as "the body clears… but the clearance does not fit" while its conflict area said the body was
+  in it; a line drawn corner to corner through the body is now caught too.
+- **Allowed areas drawn side by side a hairline apart act as one.** A gap of under 2 mm between separate
+  boundaries is closed before the check, so the sliver no longer reads as outside the allowed area; a
+  notch within one boundary is kept exactly as drawn.
+- **Every piece of a disjoint sweep is checked against the site**, not only the largest. The sweep is
+  still reported as disjoint.
 - **Editing a terrain marks its roads out of date.** A terrain (mesh, surface, polysurface, extrusion or
   SubD) is fingerprinted by its vertices or control points, not only its bounding box, so moving an
   interior vertex no longer leaves a road "current" with stale grades. Curve fingerprints are unchanged.
@@ -99,6 +115,25 @@ its new result, and review it before relying on it.
 - Documentation contradictions: the stored certification run passes **6 of 18** and PV is
   `ReferenceValidated`; the plugin is no longer described as rigid-only; the steering rate
   (`lockToLockSeconds` 6.0 s) is now stated to be a RhinoRoad assumption, not a handbook figure.
+- A user vehicle file containing JSON nulls (`"vehicles": null`, a null vehicle, a null driving mode, a
+  null outline or outline point, a null towed unit) is reported as a file error by `RRVehicles` instead
+  of crashing the catalog, which every command then retried and failed on. One bad file never stops the
+  others loading.
+- User vehicle validation rejects a maximum wheel angle outside (0°, 90°), negative overhangs, a negative
+  default clearance (which used to fail only later, when the road was saved) and non-finite values.
+- Analysis messages (steering, grade and site-fit violations, the swept-region summary, problem-range
+  labels and the drawn-alignment join note) are formatted with invariant numbers, so the HTML report no
+  longer mixes "12,5" from a message with "12.5" beside it on a comma-decimal machine. The join note lists
+  stations as "12.5 m, 30.0 m" instead of "12,5, 30,0 m".
+- A steering-rate violation between two drawn-alignment joins less than 2 m apart is counted once, at the
+  nearer join.
+- Holes are assigned to their regions from Clipper's own nesting (envelopes, comparisons, combined
+  footprints and site-fit conflict areas). A hole Clipper started on the boundary it touches was dropped
+  or given to the wrong region, so the region drew and measured without it.
+- The report's CSV writes a road name starting with `=`, `+`, `-`, `@`, a tab or a carriage return as
+  text (prefixed `'`), so a spreadsheet does not run it as a formula.
+- The baked note keeps a version that merely begins with "v" ("vejregler-1"); only a "v" prefix before a
+  digit or capital ("v2.1", "vVD-…") is dropped.
 - The baked note is **0.25 m tall whatever the annotation scaling**: with model-space scaling on and a
   style scaled 100 it was drawn 25 m tall. The note overrides its own dimension scale to 1.
 - A road whose **user vehicle is no longer loaded** no longer throws in the Edit Road palette, its

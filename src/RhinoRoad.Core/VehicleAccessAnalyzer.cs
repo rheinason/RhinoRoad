@@ -122,7 +122,7 @@ public sealed class VehicleAccessAnalyzer
                     ViolationKind.SteeringAngle,
                     sample.StationMetres,
                     sample.PositionMetres,
-                    $"Wheel angle {ToDegrees(Math.Abs(steering)):0.0}° exceeds {mode.MaximumWheelAngleDegrees:0.0}°."));
+                    FormattableString.Invariant($"Wheel angle {ToDegrees(Math.Abs(steering)):0.0}° exceeds {mode.MaximumWheelAngleDegrees:0.0}°.")));
             }
 
             if (sample.IsTangentDiscontinuous)
@@ -160,7 +160,7 @@ public sealed class VehicleAccessAnalyzer
                                 ViolationKind.SteeringRate,
                                 sample.StationMetres,
                                 sample.PositionMetres,
-                                $"Steering rate {ToDegrees(steeringRate):0.0}°/s exceeds {ToDegrees(mode.MaximumSteeringRateRadiansPerSecond):0.0}°/s."));
+                                FormattableString.Invariant($"Steering rate {ToDegrees(steeringRate):0.0}°/s exceeds {ToDegrees(mode.MaximumSteeringRateRadiansPerSecond):0.0}°/s.")));
                         }
                     }
 
@@ -183,7 +183,7 @@ public sealed class VehicleAccessAnalyzer
                     ViolationKind.Grade,
                     samples[windowEnd].StationMetres,
                     samples[windowEnd].PositionMetres,
-                    $"Grade {Math.Abs(grade) * 100.0:0.00}% exceeds {maximumAbsoluteGrade.Value * 100.0:0.00}%."));
+                    FormattableString.Invariant($"Grade {Math.Abs(grade) * 100.0:0.00}% exceeds {maximumAbsoluteGrade.Value * 100.0:0.00}%.")));
             }
         }
 

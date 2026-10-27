@@ -18,9 +18,15 @@ public static class WindowedGrade
 
     /// <summary>
     /// The signed grade over the trailing window ending at each sample, by sample index. A sample
-    /// earlier than one full window along the route has none, so is omitted. A route shorter than
-    /// the window in total is judged once, end to end, rather than never.
+    /// earlier than one full window along its leg has none, so is omitted. A leg shorter than the
+    /// window in total is judged once, end to end, rather than never.
     /// </summary>
+    /// <remarks>
+    /// The window never reaches back across a change of direction or a standstill. At a cusp the
+    /// vehicle drives back over the ground it has just climbed, so a window spanning it measures the
+    /// net rise of up-and-back, which is close to nothing: 3 m up a 10 % ramp and 3 m back down it
+    /// read as 2 %. Each leg between stops is therefore windowed on its own, starting from the cusp.
+    /// </remarks>
     public static IReadOnlyList<(int Index, double Grade)> Compute(IReadOnlyList<RouteSample> samples, double windowMetres)
     {
         var result = new List<(int, double)>();
@@ -32,24 +38,48 @@ public static class WindowedGrade
             distance[index] = distance[index - 1] + samples[index].PositionMetres.XY.DistanceTo(samples[index - 1].PositionMetres.XY);
         }
 
-        if (distance[^1] < windowMetres)
+        // A sample whose direction differs from the one before, or that starts from a standstill,
+        // begins a new leg; the sample before it, where the vehicle stopped, is that leg's first.
+        var legStart = 0;
+        for (var index = 1; index <= samples.Count; index++)
         {
-            if (distance[^1] > Geometry2D.Epsilon)
-                result.Add((samples.Count - 1, (samples[^1].PositionMetres.Z - samples[0].PositionMetres.Z) / distance[^1]));
-            return result;
+            var legEnds = index == samples.Count ||
+                          samples[index].Direction != samples[index - 1].Direction ||
+                          samples[index].StartsFromStandstill;
+            if (!legEnds) continue;
+            AddLeg(samples, distance, legStart, index - 1, windowMetres, result);
+            legStart = index - 1;
+        }
+
+        return result;
+    }
+
+    private static void AddLeg(
+        IReadOnlyList<RouteSample> samples,
+        IReadOnlyList<double> distance,
+        int first,
+        int last,
+        double windowMetres,
+        List<(int, double)> result)
+    {
+        if (last <= first) return;
+        var length = distance[last] - distance[first];
+        if (length < windowMetres)
+        {
+            if (length > Geometry2D.Epsilon)
+                result.Add((last, (samples[last].PositionMetres.Z - samples[first].PositionMetres.Z) / length));
+            return;
         }
 
         // The window start only ever moves forward as the end does, so this is a single pass.
-        var start = 0;
-        for (var end = 1; end < samples.Count; end++)
+        var start = first;
+        for (var end = first + 1; end <= last; end++)
         {
-            if (distance[end] < windowMetres - 1e-9) continue;
+            if (distance[end] - distance[first] < windowMetres - 1e-9) continue;
             while (start + 1 < end && distance[end] - distance[start + 1] >= windowMetres - 1e-9) start++;
             var span = distance[end] - distance[start];
             if (span <= Geometry2D.Epsilon) continue;
             result.Add((end, (samples[end].PositionMetres.Z - samples[start].PositionMetres.Z) / span));
         }
-
-        return result;
     }
 }

@@ -59,10 +59,16 @@ public static class AccessNote
     public const double GapMetres = 0.5;
 
     /// <summary>The version as a reader would say it: "preset VD-GUT-2023.09", without a stray "v" prefix.</summary>
+    /// <remarks>
+    /// Only a "v" that is a prefix is stripped: one followed by a digit ("v2.1") or a capital
+    /// ("vVD-GUT-2023.09"). A version that merely begins with the letter -- "vejregler-1" -- is a
+    /// word, and keeps it.
+    /// </remarks>
     public static string VersionText(string version)
     {
         var trimmed = (version ?? string.Empty).Trim();
-        if (trimmed.Length > 1 && trimmed[0] == 'v') trimmed = trimmed[1..];
+        if (trimmed.Length > 1 && trimmed[0] == 'v' && (char.IsAsciiDigit(trimmed[1]) || char.IsUpper(trimmed[1])))
+            trimmed = trimmed[1..];
         return $"preset {trimmed}";
     }
 

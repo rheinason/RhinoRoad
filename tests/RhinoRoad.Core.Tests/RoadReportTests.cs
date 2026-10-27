@@ -126,4 +126,75 @@ public sealed class RoadReportTests
         var empty = road with { Review = road.Review with { Samples = [] } };
         Assert.Equal(string.Empty, RoadReportBuilder.PlanSvg(empty));
     }
+
+    [Theory]
+    [InlineData("=HYPERLINK(\"http://x\")")]
+    [InlineData("+1")]
+    [InlineData("-2+3")]
+    [InlineData("@SUM(A1)")]
+    [InlineData("\tcmd")]
+    [InlineData("\rcmd")]
+    public void Csv_field_that_a_spreadsheet_would_run_is_written_as_text(string name)
+    {
+        var field = RoadReportBuilder.CsvField(name);
+
+        Assert.StartsWith(field.StartsWith('"') ? "\"'" : "'", field);
+        var row = RoadReportBuilder.Csv(Document(Road(name))).Split("\r\n")[1];
+        Assert.False(row.Length > 0 && row[0] is '=' or '+' or '-' or '@' or '\t' or '\r');
+    }
+
+    [Fact]
+    public void Csv_field_without_a_formula_lead_is_unchanged()
+    {
+        Assert.Equal("Road A", RoadReportBuilder.CsvField("Road A"));
+        Assert.Equal("A-1", RoadReportBuilder.CsvField("A-1"));
+    }
+
+    [Fact]
+    public void Analyzer_messages_in_the_report_use_invariant_numbers_under_a_comma_culture()
+    {
+        var previous = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = new CultureInfo("da-DK");
+        try
+        {
+            // A real ramp and a real kerb, so the messages are the analyzers' own wording.
+            var vehicle = VehicleCatalog.LoadEmbedded().Get("PV");
+            var route = Enumerable.Range(0, 301)
+                .Select(index => new RouteSample(index * 0.1, new Point3(index * 0.1, 0.0, index * 0.01), 0.0, 0.0, TravelDirection.Forward))
+                .ToArray();
+            var result = new VehicleAccessAnalyzer().Analyze(vehicle, vehicle.DrivingModes["A"], route, maximumAbsoluteGrade: 0.08);
+            var body = SweptRegionBuilder.FromPoses(result.Poses).Region!;
+            var clearance = SweptRegionBuilder.Inflate(body, 0.30).Region!;
+            var kerbY = (vehicle.WidthMetres / 2.0) + 0.15;
+            var site = SiteFitAnalyzer.Check(
+                result.Poses, body, clearance, [new SiteCurve([new(10.0, kerbY), new(20.0, kerbY)], false)], [], null, 0.30);
+            var joins = AlignmentTransitions.DescribeJoins([new CurvatureJoin(12.5, 4.0, 1), new CurvatureJoin(30.0, 4.0, 1)], true);
+
+            var messages = result.Violations.Where(violation => violation.Kind == ViolationKind.Grade).Take(1)
+                .Concat(site.Violations.Take(1))
+                .Select(violation => violation.Message)
+                .Append(joins)
+                .ToArray();
+            Assert.Equal(3, messages.Length);
+            Assert.All(messages, message => Assert.DoesNotMatch(@"\d,\d", message));
+            Assert.Contains("exceeds 8.00%", messages[0]);
+            Assert.Contains("0.30 m clearance allowance", messages[1]);
+            Assert.Contains("stations 12.5 m, 30.0 m", messages[2]);
+
+            var road = Road() with
+            {
+                Review = Road().Review with
+                {
+                    ProblemEvents = messages
+                        .Select(message => new VehicleAccessProblemEvent(ReviewCheckKind.Grade, 1.0, 2.0, 1.5, new Point3(1, 0, 0), 10.0, 8.0, message))
+                        .ToArray()
+                }
+            };
+            var page = RoadReportBuilder.Page(Document(road));
+            Assert.Contains(RoadReportBuilder.Html(messages[0]), page);
+            Assert.Contains(RoadReportBuilder.Html(messages[1]), page);
+            Assert.Contains("stations 12.5 m, 30.0 m", page);
+        }
+        finally { CultureInfo.CurrentCulture = previous; }
+    }
 }

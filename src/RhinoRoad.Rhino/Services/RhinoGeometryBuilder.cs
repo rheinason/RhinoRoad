@@ -40,6 +40,16 @@ internal sealed record RhinoAnalysisGeometry(
 
     public SweptRegion? ClearanceRegion { get; init; }
 
+    /// <summary>
+    /// Every piece of the body sweep, largest first; one entry when the sweep is continuous. A
+    /// disjoint sweep is still reported as a failure, but the site check covers all its pieces, so a
+    /// conflict in a smaller one is not missed.
+    /// </summary>
+    public IReadOnlyList<SweptRegion> BodyRegions { get; init; } = [];
+
+    /// <summary>Every piece of the clearance envelope, grown from <see cref="BodyRegions"/>.</summary>
+    public IReadOnlyList<SweptRegion> ClearanceRegions { get; init; } = [];
+
     /// <summary>The fixed-width corridor, once self-overlap on tight inside curves is resolved.</summary>
     public SweptRegion? RoadCorridorRegion { get; init; }
 
@@ -140,6 +150,11 @@ internal static class RhinoGeometryBuilder
             warnings.Add($"Clearance-envelope offset failed. {clearance.Message}");
         }
         var clearanceEnvelope = clearance.Region is null ? null : LoopCurve(clearance.Region.OuterBoundary, elevationModel, modelUnitsPerMetre);
+
+        // The baked envelope is the largest piece; the site check gets them all.
+        var clearancePieces = body.Regions.Count <= 1 || clearanceMetres <= 1e-9
+            ? clearance.Regions
+            : SweptRegionBuilder.Inflate(body.Regions, clearanceMetres).Regions;
         var clearanceHoles = HoleCurves(clearance.Region, elevationModel, modelUnitsPerMetre);
 
         // Corridor offsets are computed in Core from the per-sample headings; Rhino's curve offset
@@ -173,6 +188,8 @@ internal static class RhinoGeometryBuilder
             ClearanceEnvelopeHoles = clearanceHoles,
             BodyRegion = body.Region,
             ClearanceRegion = clearance.Region,
+            BodyRegions = body.Regions,
+            ClearanceRegions = clearancePieces,
             RoadCorridorRegion = corridor?.Region,
             Poses = result.Poses,
             TowedAxleTracks = towedTracks,
@@ -209,14 +226,17 @@ internal static class RhinoGeometryBuilder
             : geometry.RoadCorridorRegion ?? new SweptRegion(CurveOutline.Points(fixedRoadBoundary, modelUnits), []);
         var outcome = SiteFitAnalyzer.Check(
             geometry.Poses,
-            envelopes ? geometry.BodyRegion : null,
-            envelopes ? geometry.ClearanceRegion : null,
+            envelopes ? Pieces(geometry.BodyRegions, geometry.BodyRegion) : null,
+            envelopes ? Pieces(geometry.ClearanceRegions, geometry.ClearanceRegion) : null,
             obstacles.Select(curve => new SiteCurve(CurveOutline.Points(curve, modelUnits), curve.IsClosed)).ToArray(),
             allowedBoundaries.Where(curve => curve.IsClosed).Select(curve => (IReadOnlyList<Point2>)CurveOutline.Points(curve, modelUnits)).ToArray(),
             road,
             clearanceMetres);
         geometry.SiteFit = outcome;
         return new ClearanceOutcome(outcome.MinimumClearanceMetres, outcome.Violations);
+
+        static IReadOnlyList<SweptRegion> Pieces(IReadOnlyList<SweptRegion> pieces, SweptRegion? largest) =>
+            pieces.Count > 0 ? pieces : largest is null ? [] : [largest];
     }
 
     private static Curve TrackCurve(IReadOnlyList<Point2> points, double elevationModel, double modelUnitsPerMetre) =>
