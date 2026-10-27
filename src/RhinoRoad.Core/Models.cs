@@ -32,6 +32,46 @@ public sealed record DrivingModeDefinition(
     public double SpeedMetresPerSecond => SpeedKilometresPerHour / 3.6;
     public double MaximumWheelAngleRadians => MaximumWheelAngleDegrees * Math.PI / 180.0;
     public double MaximumSteeringRateRadiansPerSecond => (2.0 * MaximumWheelAngleRadians) / LockToLockSeconds;
+
+    /// <summary>
+    /// The speed a leg is driven at when it asks for <paramref name="kilometresPerHour"/>: the mode's
+    /// own when it asks for none, and never more than the mode's.
+    /// </summary>
+    /// <remarks>
+    /// The wheel's slew is a rate per second, so a slower leg spends less distance moving it: at
+    /// 15 km/h the wheel needs 12.5 m to go from centre to lock, at 5 km/h 4.2 m, at walking pace
+    /// less again. That is the whole effect of a leg's speed; the lock is the mode's whatever the
+    /// speed. A speed above the mode's would make every transition shorter than the mode's figures
+    /// allow, which understates the swept path -- the unsafe direction -- so it is clamped to the
+    /// mode's rather than honoured.
+    /// </remarks>
+    /// <exception cref="ArgumentOutOfRangeException">The speed is not a positive number.</exception>
+    public double LegSpeedKilometresPerHour(double? kilometresPerHour)
+    {
+        if (kilometresPerHour is not double requested) return SpeedKilometresPerHour;
+        if (!double.IsFinite(requested) || requested <= 0.0)
+            throw new ArgumentOutOfRangeException(nameof(kilometresPerHour), "A leg's speed must be a positive number.");
+        return Math.Min(requested, SpeedKilometresPerHour);
+    }
+
+    /// <summary>
+    /// This mode as a leg driven at <paramref name="kilometresPerHour"/> sees it: the same lock and
+    /// steering rate, at the leg's speed (see <see cref="LegSpeedKilometresPerHour"/>). Every
+    /// generator takes its slew per metre from the mode it is handed, so handing it this one is how
+    /// a leg's speed reaches all of them at once. The mode itself when no speed is asked for.
+    /// </summary>
+    public DrivingModeDefinition AtSpeed(double? kilometresPerHour)
+    {
+        var speed = LegSpeedKilometresPerHour(kilometresPerHour);
+        return speed == SpeedKilometresPerHour ? this : this with { SpeedKilometresPerHour = speed };
+    }
+
+    /// <summary>
+    /// How far the vehicle travels while the wheel goes from centre to lock at
+    /// <paramref name="kilometresPerHour"/> (the mode's speed when null).
+    /// </summary>
+    public double CentreToLockMetres(double? kilometresPerHour = null) =>
+        LockToLockSeconds * 0.5 * LegSpeedKilometresPerHour(kilometresPerHour) / 3.6;
 }
 
 /// <summary>
@@ -205,7 +245,17 @@ public sealed record RouteSample(
     double SignedCurvaturePerMetre,
     TravelDirection Direction,
     bool IsTangentDiscontinuous = false,
-    bool StartsFromStandstill = false);
+    bool StartsFromStandstill = false)
+{
+    /// <summary>
+    /// The speed the vehicle travelled at over the interval that ends at this sample, when its leg
+    /// was driven slower than the mode (<see cref="ManoeuvreControl.SpeedKilometresPerHour"/>). Null
+    /// means the mode's speed, which is every sample of a curve and of a leg with no speed of its
+    /// own. The steering rate is checked against it, because the same wheel movement over the same
+    /// distance is a slower rate at a slower speed.
+    /// </summary>
+    public double? SpeedKilometresPerHour { get; init; }
+}
 
 /// <summary>Where one towed unit sits at a pose, and how far it is folded against its tower.</summary>
 public sealed record TowedUnitPose(

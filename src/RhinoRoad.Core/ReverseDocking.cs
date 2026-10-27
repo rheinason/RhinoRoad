@@ -47,6 +47,9 @@ public static class ReverseDocking
             // directly down the approach line.
             0 => static (rigid, mode, start, _, target, exit, step, standstill) =>
                 RigidReverseGenerator.DockInAvailableSpace(rigid, mode, start, target, exit, step, standstill),
+            // A semitrailer is docked by the feedback cascade, and planned by simulation where the
+            // cascade misses -- which is every mode A dock of SVT, whose wheel cannot follow the
+            // cascade at 15 km/h.
             1 => TrailerReverseGenerator.DockTowedUnitInAvailableSpace,
             // Two joints defeat the single-joint feedback cascade (see TrailerReverseGenerator.CanDock),
             // so the leg is planned by simulation instead. Longer chains are not measured, so they

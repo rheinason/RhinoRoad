@@ -42,12 +42,20 @@ public enum ManoeuvreControlKind
 /// of direction is a standstill whether or not this is set, because the vehicle has to stop to make
 /// one; setting it asks for a stop that the route would not otherwise have had.
 /// </param>
+/// <param name="SpeedKilometresPerHour">
+/// The speed this leg is driven at, when slower than the driving mode's: a reverse or a shuffle at
+/// walking pace rather than at the mode's 15 or 5 km/h. Null, which every road saved before this
+/// existed reads as, means the mode's speed. Only the slew per metre changes -- a slower leg turns
+/// the wheel in less distance -- and the lock stays the mode's. A speed above the mode's is driven
+/// at the mode's (see <see cref="DrivingModeDefinition.LegSpeedKilometresPerHour"/>).
+/// </param>
 public sealed record ManoeuvreControl(
     Point3 PositionMetres,
     TravelDirection Direction,
     ManoeuvreControlKind Kind = ManoeuvreControlKind.Aim,
     double? ExitHeadingRadians = null,
-    bool FromStandstill = false);
+    bool FromStandstill = false,
+    double? SpeedKilometresPerHour = null);
 
 public sealed record ManoeuvreDefinition(
     int SchemaVersion,
@@ -174,6 +182,9 @@ public static class AccessDefinitionSerializer
                 throw new InvalidDataException($"Unsupported manoeuvre schema {definition.Manoeuvre.SchemaVersion}.");
             if (definition.Manoeuvre.Controls is null || definition.Manoeuvre.Controls.Count == 0)
                 throw new InvalidDataException("An interactive manoeuvre requires at least one control.");
+            if (definition.Manoeuvre.Controls.Any(control => control.SpeedKilometresPerHour is double speed
+                    && (!double.IsFinite(speed) || speed <= 0.0)))
+                throw new InvalidDataException("A control's speed must be a positive number of km/h.");
         }
     }
 }

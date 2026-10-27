@@ -76,6 +76,7 @@ public static class AlignmentTransitions
         DrivingModeDefinition mode,
         IReadOnlyList<RouteSample> samples)
     {
+        ArgumentNullException.ThrowIfNull(mode);
         ArgumentNullException.ThrowIfNull(samples);
         if (samples.Count < 2) return [];
 
@@ -106,9 +107,12 @@ public static class AlignmentTransitions
                 ? 0.0
                 : samples[Math.Min(to + 1, samples.Count - 1)].SignedCurvaturePerMetre;
 
+            // Priced at the speed the stretch was driven at, which is the mode's for any curve and
+            // for a driven leg with no speed of its own.
+            var stretchMode = mode.AtSpeed(samples[Math.Min(from + 1, to)].SpeedKilometresPerHour);
             var required =
-                RequiredLengthMetres(vehicle, mode, before, curvature) +
-                RequiredLengthMetres(vehicle, mode, curvature, after);
+                RequiredLengthMetres(vehicle, stretchMode, before, curvature) +
+                RequiredLengthMetres(vehicle, stretchMode, curvature, after);
 
             runs.Add(new AlignmentRun(
                 samples[from].StationMetres,

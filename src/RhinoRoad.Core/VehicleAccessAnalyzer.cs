@@ -146,7 +146,10 @@ public sealed class VehicleAccessAnalyzer
                     // rate per second, spent here per metre -- has nothing to say about.
                     if (!sample.StartsFromStandstill)
                     {
-                        var elapsed = distance / mode.SpeedMetresPerSecond;
+                        // At the speed this interval was driven at: a leg slowed below the mode's
+                        // speed spends more time on each metre, so the same wheel movement over it
+                        // is a slower rate (see ManoeuvreControl.SpeedKilometresPerHour).
+                        var elapsed = distance / (mode.LegSpeedKilometresPerHour(sample.SpeedKilometresPerHour) / 3.6);
                         var steeringRate = previousSteering.HasValue
                             ? Math.Abs(Geometry2D.NormalizeAngle(steering - previousSteering.Value)) / elapsed
                             : 0.0;

@@ -446,6 +446,16 @@ internal sealed class JourneyEditForm : Form
         };
         heading.Click += (_, _) => PickControlDirection(index);
 
+        var speed = SpeedChoice(definition, control);
+        speed.SelectedKeyChanged += (_, _) =>
+        {
+            double? chosen = speed.SelectedKey == ModeSpeedKey
+                ? null
+                : double.Parse(speed.SelectedKey, System.Globalization.CultureInfo.InvariantCulture);
+            if (chosen == control.SpeedKilometresPerHour) return;
+            Replace(definition, journey, index, control with { SpeedKilometresPerHour = chosen }, "RhinoRoad change control speed");
+        };
+
         // Grips can only move a control, so adding or removing one is offered here.
         var more = new Button { Text = "…", Width = 28, ToolTip = "Insert a control before or after this one, or delete it." };
         var menu = new ContextMenu();
@@ -465,11 +475,61 @@ internal sealed class JourneyEditForm : Form
             Orientation = Orientation.Horizontal,
             Spacing = 6,
             VerticalContentAlignment = VerticalAlignment.Center,
-            Items = { number, direction, kind, heading, more }
+            Items = { number, direction, kind, heading, speed, more }
         };
         row.MouseEnter += (_, _) => Highlight(index);
         row.MouseLeave += (_, _) => Highlight(null);
         return row;
+    }
+
+    private const string ModeSpeedKey = "mode";
+
+    /// <summary>
+    /// The speed a control's leg is driven at: the mode's, or a crawl below it. A slower leg moves
+    /// the wheel in less distance; the lock stays the mode's.
+    /// </summary>
+    private static DropDown SpeedChoice(VehicleAccessDefinition definition, ManoeuvreControl control)
+    {
+        var dropDown = new DropDown { Width = 86 };
+        DrivingModeDefinition? mode = null;
+        try
+        {
+            Catalog.Get(definition.VehicleId).DrivingModes.TryGetValue(definition.ModeId, out mode);
+        }
+        catch (KeyNotFoundException)
+        {
+        }
+
+        if (mode is null)
+        {
+            // Without the mode there is no speed to compare against; the control keeps what it has.
+            dropDown.Items.Add(new ListItem { Key = ModeSpeedKey, Text = control.SpeedKilometresPerHour is double held ? $"{held:0.#} km/h" : "Mode" });
+            dropDown.SelectedKey = ModeSpeedKey;
+            dropDown.Enabled = false;
+            return dropDown;
+        }
+
+        foreach (var choice in ManoeuvreControlEdits.SpeedChoices(mode, control.SpeedKilometresPerHour))
+        {
+            dropDown.Items.Add(choice is double value
+                ? new ListItem
+                {
+                    Key = value.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                    Text = value > mode.SpeedKilometresPerHour
+                        ? $"{value:0.#} → {mode.SpeedKilometresPerHour:0.#}"
+                        : $"{value:0.#} km/h"
+                }
+                : new ListItem { Key = ModeSpeedKey, Text = $"Mode {mode.SpeedKilometresPerHour:0.#}" });
+        }
+
+        dropDown.SelectedKey = control.SpeedKilometresPerHour is double own
+            ? own.ToString("R", System.Globalization.CultureInfo.InvariantCulture)
+            : ModeSpeedKey;
+        dropDown.ToolTip = $"The speed this leg is driven at. {mode.Name} runs at {mode.SpeedKilometresPerHour:0.#} km/h, "
+            + $"where the wheel takes {mode.CentreToLockMetres():0.#} m to reach its lock; a slower leg, such as a reverse "
+            + "at walking pace, gets there in less distance. The lock is the mode's whatever the speed, and a speed above "
+            + "the mode's is driven at the mode's.";
+        return dropDown;
     }
 
     private void Replace(VehicleAccessDefinition definition, ManoeuvreDefinition journey, int index,

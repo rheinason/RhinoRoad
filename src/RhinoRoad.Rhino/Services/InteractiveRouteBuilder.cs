@@ -96,7 +96,8 @@ internal sealed class InteractiveRouteBuilder
         // characters; the viewport legend repeats the keys for as long as the pick runs.
         RhinoApp.WriteLine(
             "Driving: hold Ctrl for a full-lock turn, Shift to square the exit to ortho. Stop starts the next "
-            + "leg from a standstill, Direction swings the exit after placing the point, Undo takes a leg back. "
+            + "leg from a standstill, Direction swings the exit after placing the point, Speed slows the legs that "
+            + "follow, Undo takes a leg back. "
             + "Enter when done; Esc asks before discarding the legs driven.");
 
         var builder = new InteractiveRouteBuilder(document, vehicle, mode, clearanceMetres, site, start);
@@ -160,6 +161,7 @@ internal sealed class InteractiveRouteBuilder
             var finishOption = getter.AddOption(_journey.Finishing ? "Aim" : "Finish");
             var stopOption = getter.AddOption(_journey.StopFirst ? "Rolling" : "Stop");
             var directionOption = getter.AddOption("Direction");
+            var speedOption = getter.AddOption("Speed");
             int? planReverseOption = InteractiveCapabilities.PlanReverseAvailable(_vehicle, state)
                 ? getter.AddOption(_journey.PlanReverseNext ? "Manual" : "PlanReverse")
                 : null;
@@ -218,6 +220,7 @@ internal sealed class InteractiveRouteBuilder
                 else if (option == turnOption) _journey.ToggleTurn();
                 else if (option == stopOption) ToggleStop();
                 else if (option == directionOption) TogglePointExit();
+                else if (option == speedOption) ChooseSpeed();
                 else if (planReverseOption is not null && option == planReverseOption) TogglePlanReverse();
                 else if (option == undoOption && !_journey.Undo()) RhinoApp.WriteLine("Nothing to undo.");
                 continue;
@@ -246,7 +249,8 @@ internal sealed class InteractiveRouteBuilder
                 Commit(new ManoeuvreControl(
                     LockedTurnGenerator.CursorForSweep(state, typedSweep, _turnRangeMetres),
                     state.Direction,
-                    ManoeuvreControlKind.Turn));
+                    ManoeuvreControlKind.Turn,
+                    SpeedKilometresPerHour: _journey.SpeedKilometresPerHour));
                 continue;
             }
 
@@ -305,7 +309,8 @@ internal sealed class InteractiveRouteBuilder
             new Point3(cursor.X, cursor.Y, args.CurrentPoint.Z * _metresPerModelUnit),
             state.Direction,
             _journey.KindFor(locked),
-            exitHeading);
+            exitHeading,
+            SpeedKilometresPerHour: _journey.SpeedKilometresPerHour);
 
         // The snapped aim, drawn from the vehicle, so it is visible that the pick has been squared up
         // and to what. Rhino's own ortho band is off here and would have pointed the wrong way anyway.
@@ -430,7 +435,8 @@ internal sealed class InteractiveRouteBuilder
         }
 
         Commit(new ManoeuvreControl(
-            pickedTarget, state.Direction, pickedKind, pickedExit, FromStandstill: _journey.StopFirst));
+            pickedTarget, state.Direction, pickedKind, pickedExit, FromStandstill: _journey.StopFirst,
+            SpeedKilometresPerHour: _journey.SpeedKilometresPerHour));
         _journey.SpendStop();
     }
 
@@ -471,6 +477,7 @@ internal sealed class InteractiveRouteBuilder
         var reference = ConstructionPlaneHeading(viewport);
         var planReverse = _journey.PlanReverseNext;
         var stopFirst = _journey.StopFirst;
+        var speed = _journey.SpeedKilometresPerHour;
         var legStartIndex = _journey.LegStartIndex;
 
         using var swing = new GetPoint();
@@ -507,7 +514,8 @@ internal sealed class InteractiveRouteBuilder
                 if (planReverse) return;
 
                 DrawPreview(drawn.Display, messages, route, sweepPreview, preview,
-                    new ManoeuvreControl(axleMetres, state.Direction, kind, exit, FromStandstill: stopFirst));
+                    new ManoeuvreControl(axleMetres, state.Direction, kind, exit, FromStandstill: stopFirst,
+                        SpeedKilometresPerHour: speed));
             }
             finally
             {
@@ -546,7 +554,8 @@ internal sealed class InteractiveRouteBuilder
         try
         {
             proposal = ReversePlanner.Find(
-                _vehicle, _mode, route, _journey.LegStartIndex, state, target, exitHeading);
+                _vehicle, _mode, route, _journey.LegStartIndex, state, target, exitHeading,
+                _journey.SpeedKilometresPerHour);
         }
         catch (InvalidOperationException error)
         {
@@ -631,6 +640,59 @@ internal sealed class InteractiveRouteBuilder
             : "Exit direction released.");
     }
 
+    /// <summary>
+    /// Sets the speed the legs from here on are driven at, until it is changed again. Only the
+    /// wheel's slew per metre follows from it, so the lock is the mode's whatever is chosen, and a
+    /// speed above the mode's is driven at the mode's own.
+    /// </summary>
+    private void ChooseSpeed()
+    {
+        using var ask = new GetOption();
+        var modeSpeed = _mode.SpeedKilometresPerHour;
+        ask.SetCommandPrompt(
+            $"Speed for the legs that follow, now {SpeedText(_journey.SpeedKilometresPerHour)}. "
+            + $"ModeSpeed is {modeSpeed:0.#} km/h; Walk 5, Crawl 3, Inch 1, or type km/h");
+        ask.AcceptNumber(true, false);
+        ask.AcceptNothing(true);
+        var modeOption = ask.AddOption("ModeSpeed");
+        var presets = new Dictionary<int, double>
+        {
+            [ask.AddOption("Walk")] = 5.0,
+            [ask.AddOption("Crawl")] = 3.0,
+            [ask.AddOption("Inch")] = 1.0
+        };
+        var answer = ask.Get();
+        double? requested;
+        if (answer == GetResult.Number) requested = ask.Number();
+        else if (answer == GetResult.Option && ask.OptionIndex() == modeOption) requested = null;
+        else if (answer == GetResult.Option && presets.TryGetValue(ask.OptionIndex(), out var preset)) requested = preset;
+        else return;
+
+        if (requested is double typed && !(double.IsFinite(typed) && typed > 0.0))
+        {
+            RhinoApp.WriteLine("A speed must be above zero; the speed is unchanged.");
+            return;
+        }
+
+        var driven = _journey.SetSpeed(_mode, requested);
+        if (requested > modeSpeed)
+        {
+            RhinoApp.WriteLine(
+                $"{_mode.Name} is set out for {modeSpeed:0.#} km/h, and a faster leg would turn the wheel in less distance "
+                + "than the mode allows, which understates the swept path; the legs that follow are driven at the mode's speed.");
+            return;
+        }
+
+        RhinoApp.WriteLine(
+            $"The legs that follow are driven at {SpeedText(_journey.SpeedKilometresPerHour)}: the wheel goes from centre "
+            + $"to lock in {_mode.CentreToLockMetres(driven):0.#} m of travel, and the lock is still the mode's "
+            + $"{_mode.MaximumWheelAngleDegrees:0.#} deg.");
+    }
+
+    private string SpeedText(double? kilometresPerHour) => kilometresPerHour is double speed
+        ? $"{speed:0.#} km/h"
+        : $"the mode's {_mode.SpeedKilometresPerHour:0.#} km/h";
+
     private void TogglePlanReverse()
     {
         _journey.TogglePlanReverse();
@@ -676,6 +738,7 @@ internal sealed class InteractiveRouteBuilder
         if (_journey.LockedTurn) return $"Full-lock turn: pick the side and heading, or type degrees ({state.Direction})";
         var target = InteractiveCapabilities.PointPlacesTrailer(_vehicle, state.Direction) ? "Trailer axle destination" : "Next point";
         return $"{target} ({state.Direction}, wheel {wheel:0.#} deg"
+            + (_journey.SpeedKilometresPerHour is double speed ? $", {speed:0.#} km/h" : string.Empty)
             + (_journey.StopFirst ? ", stop first" : string.Empty)
             + (_journey.PointExitNext ? ", then the exit" : string.Empty)
             + "); Enter when done";

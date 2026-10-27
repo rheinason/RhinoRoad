@@ -35,6 +35,13 @@ namespace RhinoRoad.Core;
 /// iteration cap and a rollout budget — so the same request plans the same leg every time, which
 /// replay depends on, and no clock is consulted.
 /// </para>
+/// <para>
+/// Nothing in the planning depends on the number of joints, and a semitrailer is planned here too
+/// when <see cref="TrailerReverseGenerator.DockTowedUnitInAvailableSpace"/>'s cascade misses: in
+/// mode A the wheel takes 12.5 m to reach its lock, the cascade's fold loop closes over about three,
+/// and a plan that knows the lag in advance docks where feedback chasing it folds into the stop.
+/// <see cref="Handles"/> still names only the chains that come here first.
+/// </para>
 /// </remarks>
 public static class MultiJointReverseDocking
 {
@@ -113,7 +120,10 @@ public static class MultiJointReverseDocking
         (0.30, 1.0), (0.30, 0.6), (0.30, 1.5), (0.25, 1.0), (0.35, 1.0), (0.25, 0.6), (0.25, 1.5)
     ];
 
-    /// <summary>Whether this planner is the one to use: any chain of more than one joint.</summary>
+    /// <summary>
+    /// Whether this planner is the one to use first: any chain of more than one joint. A single
+    /// joint comes here only as the fallback for a missed cascade.
+    /// </summary>
     public static bool Handles(VehicleDefinition vehicle)
     {
         ArgumentNullException.ThrowIfNull(vehicle);

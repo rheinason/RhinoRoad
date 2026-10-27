@@ -201,7 +201,8 @@ public static class TrailerReverseGenerator
     /// <summary>
     /// Chooses a square reverse that fits the available run-in. The gentle line-following law is
     /// best with room to settle, but can leave a trailer well outside a nearby parallel bay.
-    /// When it misses, stronger fold and heading responses are tried and the most accurate
+    /// When it misses, stronger fold and heading responses are tried, and when none of those
+    /// arrives the leg is planned by <see cref="MultiJointReverseDocking.Dock"/>; the most accurate
     /// drivable arrival is returned, so the preview and the saved manoeuvre use exactly the same choice.
     /// </summary>
     public static ReverseLeg DockTowedUnitInAvailableSpace(
@@ -243,7 +244,25 @@ public static class TrailerReverseGenerator
             }
         }
 
-        return best;
+        if (best.ReachedTarget) return best;
+
+        // Where no gain arrives, the leg is planned by simulation instead, as a two-joint chain
+        // always is. The feedback cascade asks for a fold faster than the wheel can be turned to
+        // hold it: its fold loop closes over about three metres, and the wheel is slew-limited per
+        // second, so per metre the faster the mode the further behind it falls. In mode A (15 km/h,
+        // 29.7 degrees, six seconds lock to lock) the wheel needs 12.5 m to go from centre to lock,
+        // the trailer's fold diverges over about one trailer wheelbase reversing (8.9 m on SVT), and
+        // the cascade chases its own lag into the fold stop: measured on SVT turning away from a bay
+        // six manoeuvre scales back, it stopped 50.9 m out at a 64.6 degree fold. The simulation
+        // plans the curvature asked of the trailer in advance, through the same rate-limited steps,
+        // so the lag is in the plan rather than fought by it: the same bay docks 0.05 m out at an
+        // 11 degree fold. It is only reached for here, after the cascade has missed, so every leg the
+        // cascade already docked -- and so every saved journey that replays one -- is unchanged.
+        var planned = MultiJointReverseDocking.Dock(vehicle, mode, start, chain, targetMetres,
+            exitMovementHeadingRadians, maximumStepMetres, wheelSetAtStandstill);
+        return planned.ReachedTarget || DockError(planned, targetMetres, exitMovementHeadingRadians) < bestError
+            ? planned
+            : best;
     }
 
     private static double DockError(ReverseLeg leg, Point2 target, double exitHeading)

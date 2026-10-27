@@ -65,6 +65,8 @@ public sealed class SchemaMigrationTests
         Assert.True(controls[2].FromStandstill);
         Assert.Equal(ManoeuvreControlKind.Finish, controls[3].Kind);
         Assert.Equal(-Math.PI / 2.0, controls[3].ExitHeadingRadians);
+        // Written before a leg could have a speed of its own, so every leg runs at the mode's.
+        Assert.All(controls, control => Assert.Null(control.SpeedKilometresPerHour));
         Assert.Equal([Obstacle], loaded.ObstacleObjectIds);
         Assert.Equal([Boundary], loaded.AllowedBoundaryObjectIds);
         Assert.Equal("DEF", loaded.ReferenceFingerprints[Boundary]);
