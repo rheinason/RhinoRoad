@@ -385,16 +385,22 @@ internal sealed class VehicleAccessDialog : Dialog<bool>
     }
 
     /// <summary>Shows the dialog, writing the chosen values back into <paramref name="settings"/>.</summary>
+    /// <param name="persist">
+    /// Also remember the values as the defaults for the next Rhino session. Only <c>RRRoad</c>'s
+    /// new-road path passes true: the palette's throwaway settings and a saved road's Configure are
+    /// that road's own and must not overwrite the remembered defaults.
+    /// </param>
     public static bool Show(
         RhinoDoc document,
         VehicleCatalog catalog,
         VehicleAccessSettings settings,
-        bool configuringSavedSource = false)
+        bool configuringSavedSource = false,
+        bool persist = false)
     {
         var dialog = new VehicleAccessDialog(catalog, settings, configuringSavedSource);
         if (!dialog.ShowModal(RhinoEtoApp.MainWindowForDocument(document))) return false;
         dialog.Harvest(settings);
-        settings.Save();
+        if (persist) settings.Save();
         return true;
     }
 

@@ -2,6 +2,7 @@ using Grasshopper.Kernel;
 using Rhino.Geometry;
 using RhinoRoad.Core;
 using RhinoRoad.GrasshopperPlugin.Conversion;
+using RhinoRoad.Rhino.Services;
 
 namespace RhinoRoad.GrasshopperPlugin.Components;
 
@@ -41,7 +42,8 @@ public sealed class AnalysePathComponent : AccessComponentBase
         if (!da.GetData(PathInput, ref path) || path is null) return;
         var reverse = false;
         da.GetData(ReverseInput, ref reverse);
-        var metresPerUnit = ModelUnits.MetresPerModelUnit;
+        var document = RhinoDocument;
+        var metresPerUnit = ModelUnits.MetresPerModelUnit(document);
         double? clearance = null;
         var clearanceValue = 0.0;
         if (da.GetData(ClearanceInput, ref clearanceValue)) clearance = Math.Max(0.0, clearanceValue * metresPerUnit);
@@ -50,7 +52,7 @@ public sealed class AnalysePathComponent : AccessComponentBase
 
         try
         {
-            var samples = CurveSampler.Sample(path, metresPerUnit, reverse ? TravelDirection.Reverse : TravelDirection.Forward);
+            var samples = RhinoRouteSampler.Sample(path, ModelUnits.Of(document), reverse ? TravelDirection.Reverse : TravelDirection.Forward);
             Publish(da, AccessRunner.Run(vehicle, mode, samples, clearance, interval * metresPerUnit));
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or InvalidDataException)

@@ -100,14 +100,16 @@ internal sealed class JourneyEditForm : Form
             WriteIntent(saved, ManoeuvreControlReconciler.WithStartDirection(journey, chosen), "RhinoRoad change start direction");
         };
 
+        // Each action that writes to the document or asks for a pick is refused while another
+        // command runs, so it cannot land inside that command's undo step or its prompt.
         var heading = new Button { Text = "Set start heading…" };
-        heading.Click += (_, _) => PickHeading();
+        heading.Click += (_, _) => { if (!Busy()) PickHeading(); };
         var settings = new Button { Text = "Settings…", ToolTip = "Vehicle, mode, clearance and checks for this road. The change is part of the draft until Save." };
-        settings.Click += (_, _) => RunSettings();
+        settings.Click += (_, _) => { if (!Busy()) RunSettings(); };
         var save = new Button { Text = "Save" };
-        save.Click += (_, _) => Save();
+        save.Click += (_, _) => { if (!Busy()) Save(); };
         var discard = new Button { Text = "Discard" };
-        discard.Click += (_, _) => Discard();
+        discard.Click += (_, _) => { if (!Busy()) Discard(); };
 
         _areaSearch = new AreaSearchPanel(this, document, _sourceId, _labels, definition);
         _areaSearch.LayoutChanged += FitToScreen;
@@ -155,7 +157,9 @@ internal sealed class JourneyEditForm : Form
             // would be left on the curve with nothing on screen saying the road is now out of date.
             if (_saved || _closing) return;
             args.Cancel = true;
-            Discard();
+            // Discarding records an undo step, which would join a running command's; the palette
+            // stays open and says why.
+            if (!Busy()) Discard();
         };
         Closed += (_, _) => Teardown();
         Shown += (_, _) =>
@@ -207,8 +211,18 @@ internal sealed class JourneyEditForm : Form
         source.GripsOn = true;
         document.Views.Redraw();
         RhinoApp.WriteLine("Editing road. Drag the control points; Save in the Edit Road palette keeps the result and reruns the checks.");
+        if (!RhinoRoadCatalog.TryRoadVehicle(definition, out _, out var vehicleError))
+            RhinoApp.WriteLine($"{vehicleError} Until then the road cannot be previewed; Settings… can choose another vehicle.");
+        var serial = document.RuntimeSerialNumber;
         Application.Instance.AsyncInvoke(() =>
         {
+            // The document can close between the command and this callback; its session has then
+            // abandoned the palette, which must not be shown over a document that is gone.
+            if (form._abandoned || RhinoDoc.FromRuntimeSerialNumber(serial) is null)
+            {
+                if (session.EditForm == form) session.EditForm = null;
+                return;
+            }
             try
             {
                 form.Show();
@@ -223,6 +237,9 @@ internal sealed class JourneyEditForm : Form
         });
         return CommandResult.Success;
     }
+
+    /// <summary>True, with the reason in the palette, while another Rhino command is running.</summary>
+    private bool Busy() => CommandGuard.Busy(message => _status.Text = message);
 
     public static bool IsEditing(RhinoDoc document, Guid sourceObjectId) =>
         RoadDocumentSession.Find(document)?.EditForm?._sourceId == sourceObjectId;
@@ -286,6 +303,16 @@ internal sealed class JourneyEditForm : Form
     /// </summary>
     internal bool WriteDraft(Curve? curve, VehicleAccessDefinition definition, string undoDescription)
     {
+        if (Busy())
+        {
+            // A row's dropdown already shows the refused choice; rebuild the rows from the road once
+            // the event that changed it has returned.
+            Application.Instance.AsyncInvoke(() =>
+            {
+                if (!_closing && Read() is { } unchanged) Rebuild(unchanged);
+            });
+            return false;
+        }
         if (_document.Objects.FindId(_sourceId) is not { Geometry: Curve previousCurve } source || Read() is not { } previous)
         {
             _status.Text = "The road can no longer be read. Close Edit Road and open it again.";
@@ -547,7 +574,7 @@ internal sealed class JourneyEditForm : Form
     /// </summary>
     private void EditControl(int index, ControlEdit edit)
     {
-        if (_areaSearch.Searching) return;
+        if (_areaSearch.Searching || CommandGuard.Busy(message => _controlsStatus.Text = message)) return;
         if (Read() is not { Manoeuvre: { } stored } definition ||
             _document.Objects.FindId(_sourceId)?.Geometry is not Curve controlCurve ||
             index < 0 || index >= stored.Controls.Count)
@@ -592,6 +619,7 @@ internal sealed class JourneyEditForm : Form
 
     private void PickHeading()
     {
+        if (Busy()) return;
         if (Read() is not { Manoeuvre: { } journey } definition) return;
         if (_document.Objects.FindId(_sourceId)?.Geometry is not Curve curve) return;
         var start = curve.PointAtStart;
@@ -629,7 +657,13 @@ internal sealed class JourneyEditForm : Form
             report("The road must end reversing into the bay. Set the last control to Reverse, or redraw it with PlanReverse.");
             return;
         }
-        var vehicle = Catalog.Get(definition.VehicleId);
+        // The road's own vehicle, as swept; the bay is placed by its rear, which the mirror allowance
+        // does not move.
+        if (!RhinoRoadCatalog.TryRoadVehicle(definition, out var vehicle, out var vehicleError))
+        {
+            report(vehicleError);
+            return;
+        }
         var body = ReverseWording.DockingBody(vehicle);
         var bayRear = ReverseWording.BayRear(vehicle);
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, _document.ModelUnitSystem);
@@ -703,7 +737,7 @@ internal sealed class JourneyEditForm : Form
     /// </summary>
     private void PickControlDirection(int index)
     {
-        if (_areaSearch.Searching) return;
+        if (_areaSearch.Searching || CommandGuard.Busy(message => _controlsStatus.Text = message)) return;
         if (Read() is not { Manoeuvre: { } journey } definition ||
             _document.Objects.FindId(_sourceId)?.Geometry is not Curve controlCurve ||
             index < 0 || index >= journey.Controls.Count)
@@ -723,7 +757,11 @@ internal sealed class JourneyEditForm : Form
             _controlsStatus.Text = "The control line no longer matches its controls. Discard and open Edit Road again.";
             return;
         }
-        var vehicle = Catalog.Get(definition.VehicleId);
+        if (!RhinoRoadCatalog.TryRoadVehicle(definition, out var vehicle, out var vehicleError))
+        {
+            _controlsStatus.Text = vehicleError;
+            return;
+        }
         // A Finish says how the route ends rather than where a body stops, so it turns about its point.
         var bay = index == journey.Controls.Count - 1 &&
             control is { Direction: TravelDirection.Reverse, Kind: ManoeuvreControlKind.Aim };

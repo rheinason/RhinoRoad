@@ -24,15 +24,28 @@ internal static class TerrainDraper
     /// Asks for one terrain object. Null when cancelled. Preselection is ignored so a highlighted
     /// path or control line is never taken for the terrain.
     /// </summary>
-    public static Guid? Pick(RhinoDoc document, string prompt = "Select terrain surface, polysurface, SubD or mesh to drape the route onto")
+    /// <param name="acceptNothing">
+    /// Accept Enter as "no terrain", returned as <see cref="Guid.Empty"/>. A scripted run passes it so
+    /// a macro that names no terrain turns draping off instead of stalling at the prompt.
+    /// </param>
+    public static Guid? Pick(
+        RhinoDoc document,
+        string prompt = "Select terrain surface, polysurface, SubD or mesh to drape the route onto",
+        bool acceptNothing = false)
     {
         document.Objects.UnselectAll();
         using var picker = new global::Rhino.Input.Custom.GetObject();
-        picker.SetCommandPrompt(prompt);
+        picker.SetCommandPrompt(acceptNothing ? prompt + "; Enter for none" : prompt);
         picker.GeometryFilter = ObjectType.Surface | ObjectType.PolysrfFilter | ObjectType.Extrusion | ObjectType.SubD | ObjectType.Mesh;
         picker.SubObjectSelect = false;
         picker.EnablePreSelect(false, true);
-        return picker.Get() == global::Rhino.Input.GetResult.Object ? picker.Object(0).ObjectId : null;
+        picker.AcceptNothing(acceptNothing);
+        return picker.Get() switch
+        {
+            global::Rhino.Input.GetResult.Object => picker.Object(0).ObjectId,
+            global::Rhino.Input.GetResult.Nothing when acceptNothing => Guid.Empty,
+            _ => null
+        };
     }
 
     /// <summary>

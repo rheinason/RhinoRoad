@@ -35,7 +35,7 @@ public sealed class RRCompareRoadsCommand : Command
             var a = Footprint(document, first);
             var b = Footprint(document, second);
             var comparison = EnvelopeComparison.Compare(a.Regions, b.Regions);
-            Bake(document, comparison);
+            Bake(document, comparison, a.ElevationMetres, b.ElevationMetres);
             Report(comparison, a, b);
             document.Views.Redraw();
             return Result.Success;
@@ -59,7 +59,11 @@ public sealed class RRCompareRoadsCommand : Command
         return new[] { pick.Object(0).Object() };
     }
 
-    private sealed record Side(IReadOnlyList<SweptRegion> Regions, string Description);
+    /// <param name="ElevationMetres">
+    /// Where the side's regions are drawn: its first journey's route start elevation, the height the
+    /// journey's own envelopes are baked at, so a comparison on a raised site sits with its roads.
+    /// </param>
+    private sealed record Side(IReadOnlyList<SweptRegion> Regions, string Description, double ElevationMetres);
 
     /// <summary>Same per-journey path as RRCombineRoads: current clearance region of each source, then the union.</summary>
     private static Side Footprint(RhinoDoc document, RhinoObject[] selected)
@@ -67,24 +71,26 @@ public sealed class RRCompareRoadsCommand : Command
         var ids = AccessDerivedService.SourceIds(document, selected);
         var regions = new List<SweptRegion>();
         var descriptions = new List<string>();
+        double? elevation = null;
         foreach (var id in ids)
         {
             var (_, saved, run) = AccessDerivedService.PrepareJourney(document, id, "Update that journey first.");
             regions.Add(run.Geometry.ClearanceRegion!);
             descriptions.Add($"{run.Analysis.Vehicle.Name} ({saved.VehicleId}), mode {saved.ModeId}");
+            elevation ??= run.Route.Count > 0 ? run.Route[0].PositionMetres.Z : 0.0;
         }
-        return new Side(AccessFootprint.Combine(regions), string.Join(" + ", descriptions));
+        return new Side(AccessFootprint.Combine(regions), string.Join(" + ", descriptions), elevation ?? 0.0);
     }
 
-    private static void Bake(RhinoDoc document, EnvelopeComparisonResult comparison)
+    private static void Bake(RhinoDoc document, EnvelopeComparisonResult comparison, double elevationA, double elevationB)
     {
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, document.ModelUnitSystem);
         var layer = AccessDefinitionStore.EnsureChildLayer(document, "Comparison", Color.Gray);
         var created = new List<Guid>();
         try
         {
-            AddRegions(comparison.OnlyA, "Only in A", OnlyAColour);
-            AddRegions(comparison.OnlyB, "Only in B", OnlyBColour);
+            AddRegions(comparison.OnlyA, "Only in A", OnlyAColour, elevationA * scale);
+            AddRegions(comparison.OnlyB, "Only in B", OnlyBColour, elevationB * scale);
             if (created.Count > 0)
             {
                 var group = document.Groups.Add($"RhinoRoad comparison {Guid.NewGuid():D}");
@@ -98,7 +104,7 @@ public sealed class RRCompareRoadsCommand : Command
             throw;
         }
 
-        void AddRegions(IReadOnlyList<SweptRegion> regions, string label, Color colour)
+        void AddRegions(IReadOnlyList<SweptRegion> regions, string label, Color colour, double z)
         {
             foreach (var region in regions)
             {
@@ -110,13 +116,14 @@ public sealed class RRCompareRoadsCommand : Command
                 var curves = new List<Curve>();
                 foreach (var loop in new[] { region.OuterBoundary }.Concat(region.Holes))
                 {
-                    var curve = new PolylineCurve(loop.Append(loop[0]).Select(p => new Point3d(p.X * scale, p.Y * scale, 0)));
+                    var curve = new PolylineCurve(loop.Append(loop[0]).Select(p => new Point3d(p.X * scale, p.Y * scale, z)));
                     curves.Add(curve);
                     Add(curve, attributes);
                 }
                 try
                 {
-                    var pattern = document.HatchPatterns.FindName("Solid")?.Index ?? 0;
+                    // Index 0 is whatever pattern the document lists first, not necessarily solid.
+                    var pattern = RhinoOutputWriter.SolidPatternIndex(document);
                     var hatches = Hatch.Create(curves, pattern, 0, 1, document.ModelAbsoluteTolerance);
                     if (hatches is not null)
                         foreach (var hatch in hatches) Add(hatch, attributes);

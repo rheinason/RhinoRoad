@@ -41,6 +41,7 @@ internal sealed class VehicleAccessInspectorForm : Form
     private uint _sourceRuntimeSerial;
     private readonly Dictionary<Guid, uint> _referenceRuntimeSerials = new();
     private bool _outOfDate;
+    private bool _abandoned;
 
     public VehicleAccessInspectorForm(RhinoDoc document, Guid objectId)
     {
@@ -204,10 +205,33 @@ internal sealed class VehicleAccessInspectorForm : Form
             _timer.Stop();
             StopPlayback();
             _conduit.Enabled = false;
-            _document.Views.Redraw();
+            // A document that is closing may not be asked to redraw; see Abandon.
+            if (!_abandoned) _document.Views.Redraw();
         };
         SetObject(objectId);
     }
+
+    /// <summary>True once the document has closed under the inspector; it must not be shown or redraw it.</summary>
+    public bool Abandoned => _abandoned;
+
+    /// <summary>
+    /// The document is closing. The inspector shuts without touching it, as the edit palette does,
+    /// and an inspector queued to open but not yet shown is never shown.
+    /// </summary>
+    public void Abandon()
+    {
+        _abandoned = true;
+        _timer.Stop();
+        StopPlayback();
+        if (Visible) Close();
+    }
+
+    /// <summary>True, with the reason on the command line and in the status, while a command runs.</summary>
+    private bool Busy() => CommandGuard.Busy(message =>
+    {
+        _status.Text = message;
+        RhinoApp.WriteLine(message);
+    });
 
     /// <summary>Opens against the right-hand edge of the active viewport rather than the screen centre.</summary>
     public void PositionOverActiveView()
@@ -426,6 +450,7 @@ internal sealed class VehicleAccessInspectorForm : Form
 
     private void Pick()
     {
+        if (Busy()) return;
         using var getter = new global::Rhino.Input.Custom.GetObject();
         getter.SetCommandPrompt("Select road to inspect");
         getter.GeometryFilter = ObjectType.AnyObject;
@@ -434,7 +459,7 @@ internal sealed class VehicleAccessInspectorForm : Form
 
     private void Update()
     {
-        if (_source is null) return;
+        if (_source is null || Busy()) return;
         RRUpdateVehicleAccessCommand.Update(_document, _source);
         SetObject(_source.Id);
     }
@@ -444,7 +469,7 @@ internal sealed class VehicleAccessInspectorForm : Form
 
     private void RunForSource(string command)
     {
-        if (_source is null) return;
+        if (_source is null || Busy()) return;
         _document.Objects.UnselectAll();
         _document.Objects.Select(_source.Id);
         _document.Views.Redraw();

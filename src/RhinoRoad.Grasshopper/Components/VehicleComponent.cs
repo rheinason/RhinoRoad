@@ -16,7 +16,7 @@ public sealed class VehicleComponent : GH_Component
 
     protected override void RegisterInputParams(GH_InputParamManager pManager)
     {
-        pManager.AddTextParameter("Vehicle", "V", "Vehicle preset id (PV, REN, LV 12, BUS 12, BUS 13,7, BUS 15, PVT, SVT).", GH_ParamAccess.item, "PV");
+        pManager.AddTextParameter("Vehicle", "V", $"Vehicle id: {AccessRunner.VehicleIds()}, including any user vehicles.", GH_ParamAccess.item, "PV");
         pManager.AddTextParameter("Mode", "M", "Driving mode, A or B.", GH_ParamAccess.item, "A");
         pManager[0].Optional = true;
         pManager[1].Optional = true;
@@ -46,7 +46,7 @@ public sealed class VehicleComponent : GH_Component
             return;
         }
 
-        var scale = ModelUnits.ModelUnitsPerMetre;
+        var scale = ModelUnits.ModelUnitsPerMetre(OnPingDocument()?.RhinoDocument);
         var turning = TurningGeometryCalculator.AtFullLock(vehicle, mode);
         da.SetData(0, vehicle.Name);
         da.SetData(1, vehicle.ValidationStatus.ToString());

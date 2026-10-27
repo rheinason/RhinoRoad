@@ -30,24 +30,36 @@ public sealed class RRVehicleAccessCommand : Command
         var preselectedObject = PreselectedObject(document);
         var storedSource = preselectedObject is null ? null : AccessDefinitionStore.ResolveSource(document, preselectedObject);
         VehicleAccessDefinition? storedDefinition = null;
+        // A new road edits the remembered settings. A saved road is configured on a copy taken from it,
+        // so its settings stay its own: neither this session's next road nor the persisted defaults
+        // start from them.
+        var settings = _settings;
         if (storedSource is not null && AccessDefinitionStore.TryRead(storedSource, out var readDefinition, out _))
         {
             storedDefinition = readDefinition;
-            if (storedDefinition is not null) AccessDefinitionSettings.Apply(storedDefinition, _settings);
+            if (storedDefinition is not null)
+            {
+                settings = new VehicleAccessSettings();
+                AccessDefinitionSettings.Apply(storedDefinition, settings);
+                // A road can outlive the user vehicle it was drawn with. Say so, and let the settings
+                // fall back to a loaded vehicle so the road can be given another one.
+                if (!Catalog.TryGet(storedDefinition.VehicleId, out _))
+                    RhinoApp.WriteLine(VehicleCatalog.NotFoundMessage(storedDefinition.VehicleId));
+                settings.Reconcile(Catalog);
+            }
         }
         if (mode == RunMode.Interactive)
         {
-            if (!VehicleAccessDialog.Show(document, Catalog, _settings, storedDefinition is not null)) return Result.Cancel;
+            if (!VehicleAccessDialog.Show(document, Catalog, settings, storedDefinition is not null,
+                    persist: storedDefinition is null)) return Result.Cancel;
         }
         else
         {
             // A scripted run cannot raise a modal dialog, so the option prompt remains the
             // scripting interface for -Road.
-            var configure = CommandLinePrompt.Configure(_settings, Catalog);
+            var configure = CommandLinePrompt.Configure(settings, Catalog, persist: storedDefinition is null);
             if (configure != Result.Success) return configure;
         }
-
-        var settings = _settings;
 
         // A saved source is the Configure-and-rerun path: the dialog starts from its complete setup,
         // and the accepted changes are replayed without asking for the path again.
@@ -76,8 +88,7 @@ public sealed class RRVehicleAccessCommand : Command
             if (settings.DrapeTerrain && (settings.ReselectReferences ||
                     configured.TerrainObjectId is not { } storedTerrain || document.Objects.FindId(storedTerrain) is null))
             {
-                var terrain = TerrainDraper.Pick(document);
-                if (terrain is null) return Result.Cancel;
+                if (!TryPickTerrain(document, mode, out var terrain)) return Result.Cancel;
                 configured = configured with { TerrainObjectId = terrain };
             }
             configured = configured with
@@ -117,13 +128,11 @@ public sealed class RRVehicleAccessCommand : Command
         }
 
         Guid? terrainId = null;
-        if (settings.DrapeTerrain)
-        {
-            terrainId = TerrainDraper.Pick(document);
-            if (terrainId is null) return Result.Cancel;
-        }
+        if (settings.DrapeTerrain && !TryPickTerrain(document, mode, out terrainId)) return Result.Cancel;
 
-        var vehicle = Catalog.Get(settings.VehicleId);
+        // Resolved once, with the mirror allowance when asked for, and passed to the live sweep as well
+        // as the analysis, so the preview shows the envelope that is baked.
+        var vehicle = MirrorAllowance.Resolve(Catalog.Get(settings.VehicleId), settings.IncludeMirrorAllowance);
         var drivingMode = vehicle.DrivingModes[settings.ModeId];
         // Two ways to get a route. Driving legs interactively builds one the vehicle can certainly
         // drive, because each leg starts from where the vehicle actually is. A selected curve is
@@ -231,7 +240,7 @@ public sealed class RRVehicleAccessCommand : Command
         try
         {
             analysis = new VehicleAccessAnalyzer().Analyze(
-                settings.IncludeMirrorAllowance ? MirrorAllowance.Apply(vehicle) : vehicle,
+                vehicle,
                 drivingMode,
                 route,
                 settings.CheckMaximumGrade ? settings.MaximumGradePercent / 100.0 : null);
@@ -311,6 +320,23 @@ public sealed class RRVehicleAccessCommand : Command
         RhinoApp.WriteLine($"RhinoRoad created {baked.Count} objects. Analysis {analysisId[..8]}.");
         return Result.Success;
 
+    }
+
+    /// <summary>
+    /// Asks for the terrain to drape onto. False when cancelled. A scripted run also accepts Enter,
+    /// which turns draping off for the run (with a message) instead of leaving a macro waiting at the
+    /// prompt because <c>DrapeTerrain</c> was remembered from an earlier interactive run.
+    /// </summary>
+    private static bool TryPickTerrain(RhinoDoc document, RunMode mode, out Guid? terrainId)
+    {
+        terrainId = TerrainDraper.Pick(document, acceptNothing: mode == RunMode.Scripted);
+        if (terrainId is null) return false;
+        if (terrainId == Guid.Empty)
+        {
+            terrainId = null;
+            RhinoApp.WriteLine("No terrain selected; the route is not draped in this run.");
+        }
+        return true;
     }
 
     /// <summary>
@@ -553,7 +579,11 @@ public sealed class RRVehicleAccessCommand : Command
     /// </summary>
     private static class CommandLinePrompt
     {
-        public static Result Configure(VehicleAccessSettings settings, VehicleCatalog catalog)
+        /// <param name="persist">
+        /// Remember the answers as the defaults for the next road. False when configuring a saved road,
+        /// whose settings are its own and must not overwrite the remembered ones.
+        /// </param>
+        public static Result Configure(VehicleAccessSettings settings, VehicleCatalog catalog, bool persist)
         {
             var vehicleIds = catalog.Vehicles.Select(vehicle => vehicle.Id).ToArray();
             var modeIds = catalog.Get(settings.VehicleId).DrivingModes.Keys.OrderBy(key => key).ToArray();
@@ -568,6 +598,9 @@ public sealed class RRVehicleAccessCommand : Command
             var reselectToggle = new OptionToggle(settings.ReselectReferences, "No", "Yes");
             var replaceToggle = new OptionToggle(settings.ReplaceExisting, "No", "Yes");
             var previewToggle = new OptionToggle(settings.PreviewBeforeBaking, "No", "Yes");
+            var drapeToggle = new OptionToggle(settings.DrapeTerrain, "No", "Yes");
+            var wheelEdgeToggle = new OptionToggle(settings.BakeWheelEdgePaths, "No", "Yes");
+            var mirrorToggle = new OptionToggle(settings.IncludeMirrorAllowance, "No", "Yes");
 
             using var getter = new GetOption();
             getter.SetCommandPrompt("Road settings; Enter to continue");
@@ -596,6 +629,9 @@ public sealed class RRVehicleAccessCommand : Command
                 getter.AddOptionToggle("ReselectReferences", ref reselectToggle);
                 getter.AddOptionToggle("ReplaceExisting", ref replaceToggle);
                 getter.AddOptionToggle("Preview", ref previewToggle);
+                getter.AddOptionToggle("DrapeTerrain", ref drapeToggle);
+                getter.AddOptionToggle("WheelEdges", ref wheelEdgeToggle);
+                getter.AddOptionToggle("MirrorAllowance", ref mirrorToggle);
                 footprintIndex = getter.AddOptionList("Footprints", footprintNames, Math.Max(0, Array.IndexOf(footprintNames, settings.Footprints.ToString())));
                 getter.AddOptionDouble("FootprintInterval", ref footprintInterval);
             }
@@ -633,8 +669,11 @@ public sealed class RRVehicleAccessCommand : Command
             settings.ReselectReferences = reselectToggle.CurrentValue;
             settings.ReplaceExisting = replaceToggle.CurrentValue;
             settings.PreviewBeforeBaking = previewToggle.CurrentValue;
+            settings.DrapeTerrain = drapeToggle.CurrentValue;
+            settings.BakeWheelEdgePaths = wheelEdgeToggle.CurrentValue;
+            settings.IncludeMirrorAllowance = mirrorToggle.CurrentValue;
             settings.Reconcile(catalog);
-            settings.Save();
+            if (persist) settings.Save();
             return Result.Success;
         }
     }

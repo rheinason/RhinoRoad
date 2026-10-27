@@ -212,6 +212,24 @@ public sealed class VehicleCatalogTests
         }
     }
 
+    [Fact]
+    public void TryGetFindsAPresetAndReportsAMissingVehicleWithoutThrowing()
+    {
+        var catalog = VehicleCatalog.LoadEmbedded();
+
+        Assert.True(catalog.TryGet("pv", out var found));
+        Assert.Equal("PV", found!.Id);
+        Assert.False(catalog.TryGet("MY-LORRY", out var missing));
+        Assert.Null(missing);
+        Assert.False(catalog.TryGet(null, out _));
+        // The message names the vehicle and the two ways out, since a saved road can outlive the
+        // user-vehicle file it was drawn with.
+        var message = VehicleCatalog.NotFoundMessage("MY-LORRY");
+        Assert.Contains("MY-LORRY", message);
+        Assert.Contains("RRImportVehicle", message);
+        Assert.Contains("change the road's vehicle", message);
+    }
+
     private static void AssertWheelGeometry(
         VehicleDefinition vehicle,
         double axleTrack,

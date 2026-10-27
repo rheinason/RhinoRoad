@@ -86,7 +86,8 @@ Projects bring their own refuse truck or fire tender.
    rear-axle frame, +X forward), `drivingModes` (A and/or B, each with speed, maximum wheel angle,
    `lockToLockSeconds` and default clearance), and optionally `towedUnits` (each with a hitch offset,
    wheelbase, width, outline and an optional `maximumArticulationDegrees`) and `protrusions`.
-2. Run `RRImportVehicle` and choose the file. It is validated against the built-in presets and the
+2. Run `RRImportVehicle` and choose the file (`-RRImportVehicle` takes the path on the command line,
+   for scripts). It is validated against the built-in presets and the
    other files already in the folder, and copied into the user vehicles folder only if it passes. The
    folder is the `vehicles` folder under the plugin's settings directory; `RRVehicles` prints its
    exact location, and a `*.json` dropped there by hand is read the same way.
@@ -130,9 +131,13 @@ Rules:
    first.
 
 A default run asks for at most one thing after the dialog, and nothing at all when the path was
-pre-selected. `-RRRoad` keeps the option prompt for scripting, with a `Preview` toggle matching the
-dialog's. **Your last settings are remembered** between Rhino sessions (vehicle, mode, clearance,
-output options); the one-run "reselect references" request is deliberately not remembered.
+pre-selected. `-RRRoad` keeps the option prompt for scripting, with `Preview`, `DrapeTerrain`,
+`WheelEdges` and `MirrorAllowance` toggles matching the dialog's. In a scripted run the terrain prompt
+also accepts Enter for none, which turns draping off for that run (and says so) rather than leaving a
+macro waiting for a pick. **Your last settings are remembered** between Rhino sessions (vehicle, mode,
+clearance, output options) from the dialog or prompt of a *new* road; configuring a saved road, here or
+in the Edit Road palette, keeps its settings to that road. The one-run "reselect references" request is
+deliberately not remembered.
 
 ## Interactive driving
 
@@ -148,7 +153,7 @@ that end. A closed curve is started where picked and driven the way it runs. Esc
 returns to the start prompt.
 
 **Aiming.** While aiming, blue outlines show the body sweep and green outlines show the clearance
-footprint of the complete proposed journey; the retained body boundary is darker and the discarded tail
+footprint of the complete proposed journey (with the mirror allowance when it is ticked, as baked); the retained body boundary is darker and the discarded tail
 dotted. Forward and reverse travel are coloured differently (blue and purple). A steering-limit
 message means the driven leg cannot follow the requested aim exactly. Preview uses the same polygon
 union and clearance offset as final output, caching retained geometry; its extra boundary
@@ -253,7 +258,8 @@ On bake:
   overlap?"), not only reported as a clash.
 - **One marker per problem range** replaces a red point every 0.25 m: each carries the check and the
   stations it covers.
-- A **note is baked beside the envelope** (below its lower-left corner, 0.25 m high): vehicle and
+- A **note is baked beside the envelope** (below its lower-left corner, 0.25 m high on the site whatever
+  the document's annotation scaling): vehicle and
   version, mode, clearance, the mirror allowance if used, the validation status (with a warning line
   where the preset is not `ReferenceValidated`), and the date.
 - The clearance and body envelopes are filled with light hatches behind everything else.
@@ -294,6 +300,15 @@ available only on the last control; Turn is available anywhere. Each row also ha
 
 Scripted `-RREditRoad` cannot raise a palette. It turns the control points on and leaves
 `RRUpdateRoad` to commit.
+
+The palette and the inspector are modeless, so their buttons stay clickable while another command is
+waiting at its prompt. Anything that would write to the document or ask for a pick then says **Finish
+the running command first** and does nothing, rather than landing inside that command.
+
+A road drawn with a **user vehicle that is no longer loaded** (its file removed from the user vehicles
+folder) still opens: the palette, the labels and the area search say *vehicle X not found — import it
+again (RRImportVehicle) or change the road's vehicle*, and **Settings…** (or `RRRoad` on the road) can
+choose another vehicle.
 
 Select the control line (or any generated part of the analysis) and run `RRUpdateRoad` to save the
 result and rerun the site checks. Update replays the same rewind-aware driving logic with the saved
@@ -391,7 +406,9 @@ for the globally smallest possible bend or junction and do not propose kerb geom
   It writes a self-contained, print-friendly HTML page (checks, maxima, problem ranges, a plan of the
   envelopes, route and conflict areas, validation status, whether the road is out of date) and a CSV of
   the per-station samples beside it (road name first). A flat route's grade figures are omitted rather
-  than shown as zero, and terrain draping is stated when used. `-RRReportRoad` takes the `.html` path.
+  than shown as zero, and terrain draping is stated when used. `-RRReportRoad` takes the `.html` path
+  on the command line (spaces allowed); it defaults to the document's folder, or Documents for an
+  unsaved document, and a relative path is taken from there.
 
 ## Meaning of the outputs
 
@@ -434,8 +451,15 @@ across open documents. Each saved road carries its own settings, which are used 
   dimensions, minimum radius, swept width and outline.
 - **Analyse Path**: checks a curve as a rear-axle path (optionally reversed) and returns the rear
   path, body and clearance envelopes with holes, towed tracks, maxima, fold angles per joint,
-  violations and a feasible flag, and footprints.
+  violations and a feasible flag, and footprints. The curve is sampled by the plugin's own sampler,
+  so the checks match `RRRoad` on the same curve.
 - **Drive Manoeuvre**: drives a start pose through control points with per-control directions
-  (Forward/Reverse text or Boolean), kinds (Aim/Turn/Finish), exit headings and **Speeds**, with the
-  same outputs. Core is Rhino-free, so this opens parametric studies of the same replay the plugin
-  uses.
+  (Forward/Reverse text or Boolean), kinds (Aim/Turn/Finish), exit headings, **Speeds** (km/h) and
+  **Stops** (true to halt before that leg and turn the wheel at a standstill), with the same outputs.
+  Core is Rhino-free, so this opens parametric studies of the same replay the plugin uses.
+
+Every length on the components is in the **model units** of the definition's Rhino document: the
+points and curves, `Clearance` and `Interval`, and every output. The plan outputs (envelopes, holes,
+towed tracks, footprints) sit at the route's start elevation, as the plugin bakes them, while the Rear
+Path keeps its Z. The user vehicles folder is re-read when its files change, so an imported vehicle is
+available at the next solve.

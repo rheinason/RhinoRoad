@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using RhinoRoad.Core;
 
 namespace RhinoRoad.Rhino.Services;
@@ -31,6 +32,27 @@ internal static class RhinoRoadCatalog
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "McNeel", "Rhinoceros", "8.0", "Plug-ins", "RhinoRoad", "vehicles");
         }
+    }
+
+    /// <summary>
+    /// The vehicle a saved road is swept with: its catalogue vehicle, with the mirror allowance when
+    /// the road asks for it (<see cref="MirrorAllowance.Resolve"/>). Resolved once per definition and
+    /// passed to every sweep, so the live preview, the palette and the search show what is baked.
+    /// False, with the message to show, when the road names a vehicle that is no longer loaded -- a
+    /// user vehicle whose file was removed -- so no caller throws for it.
+    /// </summary>
+    public static bool TryRoadVehicle(VehicleAccessDefinition definition,
+        [NotNullWhen(true)] out VehicleDefinition? vehicle, out string error)
+    {
+        if (!Current.TryGet(definition.VehicleId, out var found))
+        {
+            vehicle = null;
+            error = VehicleCatalog.NotFoundMessage(definition.VehicleId);
+            return false;
+        }
+        vehicle = MirrorAllowance.Resolve(found, definition.IncludeMirrorAllowance);
+        error = string.Empty;
+        return true;
     }
 
     public static UserCatalogLoad Reload()

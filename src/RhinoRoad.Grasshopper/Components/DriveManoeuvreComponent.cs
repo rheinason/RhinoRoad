@@ -22,6 +22,8 @@ public sealed class DriveManoeuvreComponent : AccessComponentBase
 
     // Last, so a definition saved before it existed still wires its other inputs by position.
     private const int SpeedsInput = 10;
+    // After Speeds for the same reason.
+    private const int StopsInput = 11;
 
     public DriveManoeuvreComponent()
         : base("Drive Manoeuvre", "Drive", "Drive a vehicle through control points and report its swept envelopes, tracks and feasibility.")
@@ -56,7 +58,11 @@ public sealed class DriveManoeuvreComponent : AccessComponentBase
             + "at walking pace. Zero or missing for the mode's speed; a speed above the mode's is driven at the mode's. "
             + "The lock stays the mode's; a slower leg only moves the wheel in less distance.",
             GH_ParamAccess.list);
-        foreach (var index in new[] { DirectionsInput, KindsInput, ExitsInput, SpeedsInput }) pManager[index].Optional = true;
+        pManager.AddGenericParameter("Stops", "St",
+            "Per control: true to bring the vehicle to a halt before that leg and turn the wheel where it stands "
+            + "(Stop on the RRRoad prompt). Missing is no stop; a change of direction is a stop whatever this says.",
+            GH_ParamAccess.list);
+        foreach (var index in new[] { DirectionsInput, KindsInput, ExitsInput, SpeedsInput, StopsInput }) pManager[index].Optional = true;
     }
 
     protected override void SolveInstance(IGH_DataAccess da)
@@ -85,13 +91,13 @@ public sealed class DriveManoeuvreComponent : AccessComponentBase
         da.GetDataList(ExitsInput, exits);
         var speeds = new List<double>();
         da.GetDataList(SpeedsInput, speeds);
+        var metresPerUnit = ModelUnits.MetresPerModelUnit(RhinoDocument);
         double? clearance = null;
         var clearanceValue = 0.0;
-        if (da.GetData(ClearanceInput, ref clearanceValue)) clearance = Math.Max(0.0, clearanceValue * ModelUnits.MetresPerModelUnit);
+        if (da.GetData(ClearanceInput, ref clearanceValue)) clearance = Math.Max(0.0, clearanceValue * metresPerUnit);
         var interval = 0.0;
         da.GetData(IntervalInput, ref interval);
 
-        var metresPerUnit = ModelUnits.MetresPerModelUnit;
         var problems = new List<string>();
         var controls = ManoeuvreInputParser.BuildControls(
             points.Select(point => GeometryConverter.ToMetres(point, metresPerUnit)).ToList(),
@@ -99,7 +105,8 @@ public sealed class DriveManoeuvreComponent : AccessComponentBase
             ReadObjects(da, KindsInput),
             exits.Select(vector => ManoeuvreInputParser.HeadingOf(vector.X, vector.Y)).ToList(),
             problems,
-            speeds.Select(speed => (double?)speed).ToList());
+            speeds.Select(speed => (double?)speed).ToList(),
+            ReadObjects(da, StopsInput));
         foreach (var problem in problems) AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, problem);
         if (controls.Any(control => control.SpeedKilometresPerHour > mode.SpeedKilometresPerHour))
         {

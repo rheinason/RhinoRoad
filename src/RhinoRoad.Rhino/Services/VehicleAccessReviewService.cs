@@ -234,9 +234,13 @@ internal static class VehicleAccessReviewService
     /// </summary>
     private static SiteFitOutcome SiteFit(RhinoDoc document, PreparedVehicleAccess run)
     {
+        // The same road the run checked: whenever the road has fixed edges. CheckClearance measures
+        // against the corridor region when there is one and falls back to the boundary curve's
+        // outline when there is not; dropping the boundary with the region lost the road check.
+        var fixedEdges = run.Definition.RoadEdgeMethod is RoadEdgeMethod.Both or RoadEdgeMethod.FixedWidth;
         RhinoGeometryBuilder.CheckClearance(
             run.Geometry,
-            run.Geometry.RoadCorridorRegion is null ? null : run.Geometry.FixedRoadBoundary,
+            fixedEdges ? run.Geometry.FixedRoadBoundary : null,
             run.Obstacles,
             run.AllowedBoundaries,
             run.Definition.ClearanceMetres,

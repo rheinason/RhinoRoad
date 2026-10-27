@@ -24,6 +24,11 @@ Use an empty **metric** document unless a step says otherwise. Build Debug first
 2. Tick options under **Advanced geometry and output**: wheel-edge paths (on), mirror allowance (off),
    terrain draping, grade limit. Continue, finish a road, close Rhino, reopen, run `RRRoad`: the last
    vehicle, mode, clearance and options are restored.
+3. Configure a saved road (select it, `RRRoad`) with a different vehicle, and change a draft's settings in
+   the Edit Road palette: the next *new* road still starts from the defaults of step 2.
+4. `-RRRoad` lists `DrapeTerrain`, `WheelEdges` and `MirrorAllowance`. With `DrapeTerrain=Yes`, a macro
+   such as `-RRRoad _Enter _Enter` stops at the terrain prompt for one Enter, says the route is not
+   draped, and carries on rather than waiting for a pick.
 
 ## 3. Interactive driving (REN, mode B)
 
@@ -84,7 +89,16 @@ For each of PV, LV 12, BUS 12, SVT, PVT, SK and MVT, in mode A and mode B:
 4. **Save**, then Ctrl+Z restores the previous result; do the same for **Discard**.
 5. Repeat in a millimetre document and with two documents open; close a document during computation. No
    stale worker result may appear after cancellation, configuration changes or closing.
-6. For a saved road that ends reversing into a bay: the **Clear-area search** group is present
+6. Start `_Line` and leave it at its prompt; press Save, Discard, Settings…, Set start heading, a row's
+   direction button, Pick yard and Set bay in the palette, and Pick, Update, Edit road and Measure in
+   the inspector: each says "Finish the running command first" and nothing joins the Line's undo.
+7. Run `RREditRoad` (or `RRInspectRoad`) and close the document in the same moment (a macro
+   `_RREditRoad _-Close`): no palette appears over the closed document and nothing throws.
+8. Remove a user vehicle's file from the user vehicles folder, restart, and open Edit Road on a road
+   drawn with it: the palette opens with "vehicle … not found — import it again (RRImportVehicle) or
+   change the road's vehicle" in the preview, bay and search texts; nothing throws on redraw. Settings…
+   can choose another vehicle.
+9. For a saved road that ends reversing into a bay: the **Clear-area search** group is present
    (collapsed) for a dockable vehicle and absent for a road that does not end in a bay. Pick yard and
    obstacles, set the bay, search, and apply a suggestion; Save stores yard and obstacles, Discard
    restores the original. (Test with a rigid vehicle as well as SVT.)
@@ -97,7 +111,8 @@ For each of PV, LV 12, BUS 12, SVT, PVT, SK and MVT, in mode A and mode B:
 2. Use the scrub slider, `◀ 1 m` / `1 m ▶`, arrow keys, **Play** at each speed, and **Show swept trail**.
    Click a failed check or problem area to zoom to it.
 3. Move a source or referenced obstacle: the inspector reads **Out of date**; nothing recomputes until
-   Update.
+   Update. Do the same by moving one interior vertex of a draped road's terrain mesh (and one control
+   point of a terrain surface): the road reads Out of date.
 
 ## 8. Sizing, compare, report
 
@@ -105,9 +120,12 @@ For each of PV, LV 12, BUS 12, SVT, PVT, SK and MVT, in mode A and mode B:
    a journey and the combined result gives ordinary dimensions with separate intervals and rejects
    clipped endpoints; move the endpoints and Update. Repeat in a millimetre document.
 2. `RRCompareRoads` on two journeys (for example BUS 12 and BUS 15): the areas only A, only B, both and the
-   net difference are printed and hatched on `RhinoRoad::Comparison`.
+   net difference are printed and hatched (solid) on `RhinoRoad::Comparison`. On roads drawn at Z = 5 the
+   regions sit at Z = 5.
 3. `RRReportRoad` for one and for two roads: the `.html` opens and reads correctly, the `.csv` has one
    row per station with the road name first, a flat route shows no grade figures, a draped route says so.
+   `-RRReportRoad` offers a default in the document's folder (Documents when unsaved) and accepts a path
+   with spaces.
 4. Move a source or referenced obstacle: linked sizing objects turn orange and read Out of date; Update
    the journey and the linked dimensions refresh; if another journey is stale its dependent output stays
    intact until it is updated.
@@ -117,7 +135,10 @@ For each of PV, LV 12, BUS 12, SVT, PVT, SK and MVT, in mode A and mode B:
 1. Drape onto a terrain surface, polysurface, SubD and mesh in turn: the grade profile appears for a driven
    route; a route partly off the terrain reports the missed stations.
 2. Wheel-edge paths bake on `RhinoRoad::WheelTracks` for the lead unit and each towed axle. Turn the mirror
-   allowance on: the envelope is wider at the front by about 0.30 m a side; the note says so.
+   allowance on: the envelope is wider at the front by about 0.30 m a side; the note says so. The live
+   sweep while driving, the Edit Road preview and the clear-area readout are as wide as the bake.
+3. Turn on model-space annotation scaling (Document Properties > Annotation) with the current style's
+   model space scale at 100, and bake a road: the note is 0.25 m tall in the model viewport.
 
 ## 10. User vehicles
 
@@ -125,6 +146,11 @@ For each of PV, LV 12, BUS 12, SVT, PVT, SK and MVT, in mode A and mode B:
    it as `UserDefined`; it appears in the dialog and the palette and can be driven and docked.
 2. Import a file whose id is `PV`, then one with an invalid dimension: each is refused with a reason and
    nothing is added.
+3. `-RRImportVehicle "C:\path with spaces\my lorry.json"` imports without a dialog.
+4. With a Grasshopper `Vehicle` component open, import a user vehicle: the next solve accepts its id
+   without restarting Rhino. `Drive Manoeuvre` with a `Stops` list of `false, true` stops before the
+   second leg; in a millimetre document `Clearance` 300 means 0.30 m; a route starting at Z = 2 gives
+   envelopes at Z = 2.
 
 ## 11. Saved documents and schema
 

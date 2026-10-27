@@ -42,13 +42,18 @@ public static class ManoeuvreInputParser
     /// <summary>
     /// Builds the controls. Optional lists may be empty or shorter than the points: a missing
     /// direction repeats the previous one (Forward to begin with), a missing kind is Aim, a missing
-    /// exit heading is none, and a missing speed is the mode's. Unrecognised entries are reported
-    /// rather than guessed.
+    /// exit heading is none, a missing speed is the mode's, and a missing stop is none. Unrecognised
+    /// entries are reported rather than guessed.
     /// </summary>
     /// <param name="exitHeadingsRadians">Per control; null entries mean no exit heading.</param>
     /// <param name="speedsKilometresPerHour">
     /// Per control, in km/h. Zero or a null entry is the mode's speed, as a zero exit vector is no
     /// exit heading; a negative or non-finite entry is reported and the mode's speed used.
+    /// </param>
+    /// <param name="stops">
+    /// Per control: whether the vehicle stops before that leg and turns the wheel where it stands
+    /// (<see cref="ManoeuvreControl.FromStandstill"/>). A Boolean, or text/number read as one; a null
+    /// or missing entry is no stop. Unlike a direction, a stop does not carry on to later controls.
     /// </param>
     public static IReadOnlyList<ManoeuvreControl> BuildControls(
         IReadOnlyList<Point3> pointsMetres,
@@ -56,9 +61,11 @@ public static class ManoeuvreInputParser
         IReadOnlyList<object?> kinds,
         IReadOnlyList<double?> exitHeadingsRadians,
         ICollection<string> problems,
-        IReadOnlyList<double?>? speedsKilometresPerHour = null)
+        IReadOnlyList<double?>? speedsKilometresPerHour = null,
+        IReadOnlyList<object?>? stops = null)
     {
         speedsKilometresPerHour ??= [];
+        stops ??= [];
         var controls = new List<ManoeuvreControl>(pointsMetres.Count);
         var direction = TravelDirection.Forward;
         for (var index = 0; index < pointsMetres.Count; index++)
@@ -86,12 +93,38 @@ public static class ManoeuvreInputParser
                 else problems.Add($"Speed {index} ({given}) is not a positive number of km/h; the mode's speed is used.");
             }
 
+            var standstill = false;
+            if (index < stops.Count && stops[index] is not null)
+            {
+                var parsed = ParseStop(stops[index]);
+                if (parsed.HasValue) standstill = parsed.Value;
+                else problems.Add($"Stop {index} ('{stops[index]}') is not a Boolean; no stop is made.");
+            }
+
             controls.Add(new ManoeuvreControl(pointsMetres[index], direction, kind, exit,
-                SpeedKilometresPerHour: speed));
+                FromStandstill: standstill, SpeedKilometresPerHour: speed));
         }
 
         return controls;
     }
+
+    /// <summary>
+    /// Reads a stop from a Boolean, a number (non-zero is a stop) or text (True/Yes/Stop/1 or
+    /// False/No/0, case-insensitive). Returns null for anything else.
+    /// </summary>
+    public static bool? ParseStop(object? value) => value switch
+    {
+        bool stop => stop,
+        int number => number != 0,
+        double number => number != 0.0,
+        string text => text.Trim().ToUpperInvariant() switch
+        {
+            "TRUE" or "YES" or "Y" or "STOP" or "1" => true,
+            "FALSE" or "NO" or "N" or "0" or "" => false,
+            _ => null
+        },
+        _ => null
+    };
 
     /// <summary>Plan heading of a vector in radians, or null for a zero (or vertical) vector.</summary>
     public static double? HeadingOf(double x, double y) =>

@@ -22,9 +22,23 @@ internal sealed class JourneyEditLabelConduit : DisplayConduit
 
     protected override void DrawForeground(DrawEventArgs e)
     {
+        // Runs every frame: a fault here would be raised on every redraw, so nothing may escape.
+        try
+        {
+            Draw(e);
+        }
+        catch (Exception)
+        {
+            // A control line edited out of shape or a vehicle that is no longer loaded: the palette
+            // says so in words, and the labels are simply not drawn.
+        }
+    }
+
+    private void Draw(DrawEventArgs e)
+    {
         if (e.RhinoDoc is not { } document || document.Objects.FindId(SourceId) is not { } source) return;
         if (!AccessDefinitionStore.TryReadCached(source, out var definition, out _) || definition?.Manoeuvre is null) return;
-        if (source.Geometry is not Curve curve) return;
+        if (source.Geometry is not Curve curve || !curve.TryGetPolyline(out _)) return;
         var vertices = AccessDefinitionStore.PolylineVertices(curve, document.ModelUnitSystem);
         var scale = RhinoMath.UnitScale(UnitSystem.Meters, document.ModelUnitSystem);
 
@@ -39,7 +53,7 @@ internal sealed class JourneyEditLabelConduit : DisplayConduit
         // control line's current end, rear marked.
         if (vertices.Count > 1 &&
             ReverseBay.FinalBay(definition.Manoeuvre) is { ExitHeadingRadians: double bayHeading } &&
-            Catalog.Get(definition.VehicleId) is { } bayVehicle)
+            Catalog.TryGet(definition.VehicleId, out var bayVehicle))
         {
             var axle = vertices[^1];
             var docked = ReverseBay.DockedOutline(bayVehicle, axle, bayHeading)

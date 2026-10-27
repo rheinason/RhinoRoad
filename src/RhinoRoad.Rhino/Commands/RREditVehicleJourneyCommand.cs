@@ -52,7 +52,17 @@ public sealed class RREditVehicleJourneyCommand : Command
             document.Views.Redraw();
             return Result.Success;
         }
-        return JourneyEditForm.Start(document, source, saved, curve);
+        try
+        {
+            return JourneyEditForm.Start(document, source, saved, curve);
+        }
+        catch (Exception error)
+        {
+            // Building the palette reads the road's vehicle, controls and site; a road that cannot be
+            // read that way is reported rather than left to escape the command.
+            RhinoApp.WriteLine($"RhinoRoad could not open Edit Road: {error.Message}");
+            return Result.Failure;
+        }
     }
 
     private static RhinoObject? Selected(RhinoDoc document)
