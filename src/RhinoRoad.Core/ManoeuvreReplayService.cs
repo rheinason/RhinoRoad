@@ -39,6 +39,33 @@ public static class ManoeuvreReplayService
         ArgumentNullException.ThrowIfNull(control);
         if (route.Count == 0) throw new ArgumentException("A route is required.", nameof(route));
 
+        // A leg with a speed of its own is driven in the mode as that speed sees it: the same lock,
+        // less distance to move the wheel. Handing every generator below that mode, rather than
+        // threading a speed through each, is what keeps aiming, easing, locked turns and every
+        // docking solver on the one slew per metre the leg is driven with.
+        if (control.SpeedKilometresPerHour is null) return Plan(vehicle, mode, route, legStartIndex, state, control);
+        var legMode = mode.AtSpeed(control.SpeedKilometresPerHour);
+        var planned = Plan(vehicle, legMode, route, legStartIndex, state, control);
+        // Each sample says the speed of the interval ending at it, so the analyzer can price its wheel
+        // movement at that speed. The first sample is where the leg starts, the end of whatever came
+        // before, and is left as it was.
+        var speed = legMode.SpeedKilometresPerHour;
+        return planned with
+        {
+            Samples = planned.Samples
+                .Select((sample, index) => index == 0 ? sample : sample with { SpeedKilometresPerHour = speed })
+                .ToArray()
+        };
+    }
+
+    private static PlannedManoeuvreLeg Plan(
+        VehicleDefinition vehicle,
+        DrivingModeDefinition mode,
+        IReadOnlyList<RouteSample> route,
+        int legStartIndex,
+        VehicleState state,
+        ManoeuvreControl control)
+    {
         // A direction change is a standstill by definition -- the vehicle cannot swap gear rolling --
         // so the wheel is free there whether or not it was asked for. It is read from the route
         // rather than from the state, because callers set the new direction on the state before

@@ -99,7 +99,9 @@ public static class VehicleAccessReviewAnalyzer
                 var distance = route[index].PositionMetres.XY.DistanceTo(route[index - 1].PositionMetres.XY);
                 if (distance > Geometry2D.Epsilon)
                 {
-                    var elapsed = distance / result.DrivingMode.SpeedMetresPerSecond;
+                    // At the speed the interval was driven at, as the analyzer prices it.
+                    var elapsed = distance
+                        / (result.DrivingMode.LegSpeedKilometresPerHour(route[index].SpeedKilometresPerHour) / 3.6);
                     steeringRate = Math.Abs(Geometry2D.NormalizeAngle(
                         result.Poses[index].SteeringAngleRadians - result.Poses[index - 1].SteeringAngleRadians)) / elapsed;
                     grade = (route[index].PositionMetres.Z - route[index - 1].PositionMetres.Z) / distance;

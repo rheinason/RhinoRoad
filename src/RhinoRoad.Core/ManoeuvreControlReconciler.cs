@@ -48,8 +48,12 @@ public static class ManoeuvreControlReconciler
             }
             else
             {
+                // A vertex added to the line carries on the way the leg before it was driven: in its
+                // direction, and at its speed.
                 var direction = reconciled.Count > 0 ? reconciled[^1].Direction : stored.StartDirection;
-                reconciled.Add(new ManoeuvreControl(points[index], direction, ManoeuvreControlKind.Aim));
+                var speed = reconciled.Count > 0 ? reconciled[^1].SpeedKilometresPerHour : null;
+                reconciled.Add(new ManoeuvreControl(points[index], direction, ManoeuvreControlKind.Aim,
+                    SpeedKilometresPerHour: speed));
             }
         }
 

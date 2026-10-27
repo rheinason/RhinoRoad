@@ -139,9 +139,11 @@ public static class ManoeuvringAreaSearch
                 if (planned.FromIndex < turnRoute.Count - 1)
                     turnRoute.RemoveRange(planned.FromIndex + 1, turnRoute.Count - planned.FromIndex - 1);
                 turnRoute.AddRange(planned.Samples.Skip(1));
+                // The bay keeps the speed it was reversed into at, so a reverse saved at walking pace
+                // is searched at walking pace.
                 var reverse = ReversePlanner.Find(vehicle, mode, turnRoute,
                     prefixRoute.Length - 1, planned.EndState, target.PositionMetres,
-                    target.ExitHeadingRadians);
+                    target.ExitHeadingRadians, target.SpeedKilometresPerHour);
                 var definition = saved with
                 {
                     Controls = prefixControls.Concat(new[] { turn }).Concat(reverse.Controls).ToArray()

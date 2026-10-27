@@ -75,6 +75,10 @@ public static class ReversePlanner
     /// <see cref="ReverseBay.AxleFromRear"/>.
     /// </param>
     /// <param name="exitMovementHeadingRadians">The direction of travel into the bay, or null for a point.</param>
+    /// <param name="speedKilometresPerHour">
+    /// The speed every planned leg is driven at, carried on each control it proposes; null for the
+    /// mode's speed (see <see cref="ManoeuvreControl.SpeedKilometresPerHour"/>).
+    /// </param>
     public static Proposal Find(
         VehicleDefinition vehicle,
         DrivingModeDefinition mode,
@@ -82,7 +86,8 @@ public static class ReversePlanner
         int legStartIndex,
         VehicleState state,
         Point3 axleTarget,
-        double? exitMovementHeadingRadians = null)
+        double? exitMovementHeadingRadians = null,
+        double? speedKilometresPerHour = null)
     {
         ArgumentNullException.ThrowIfNull(vehicle);
         ArgumentNullException.ThrowIfNull(mode);
@@ -90,6 +95,8 @@ public static class ReversePlanner
         ArgumentNullException.ThrowIfNull(state);
         if (route.Count == 0) throw new ArgumentException("A route is required.", nameof(route));
         if (state.Direction != TravelDirection.Forward) throw new ArgumentException("Start before changing to reverse.", nameof(state));
+        // Checked here, so a bad speed is refused as the request it is rather than from inside a leg.
+        var swing = mode.CentreToLockMetres(speedKilometresPerHour);
 
         var scale = ManoeuvreScaleMetres(vehicle, mode);
         var honoured = exitMovementHeadingRadians is null || ReverseDocking.CanDock(vehicle);
@@ -109,6 +116,18 @@ public static class ReversePlanner
         foreach (var distance in new[] { 0.5, 1.0, 1.5, 2.0, 2.5, 3.5 })
         foreach (var offset in new[] { -0.5, 0.0, 0.5 })
             Consider(distance * scale, offset * scale);
+        // The scale is the size of the turn, but a turn also takes the distance the wheel needs to
+        // get to its lock and back, and that is set by the slew rate and the speed rather than by
+        // the vehicle's shape. In mode B it is small against the scale (4.2 m from centre to lock at
+        // 5 km/h); in mode A it is not (12.5 m at 15 km/h), and MVT in mode A, whose reverse has to
+        // swing two joints round with the wheel taking three times as far to follow, does not
+        // arrive from any pull-up within 3.5 scales -- measured, the nearest missed by 2.4 m and 48
+        // degrees -- and arrives from 5. So the grid is carried on past the turn by one and two
+        // wheel swings, which reaches that far in mode A and adds little in mode B, or in either
+        // mode at a crawl.
+        foreach (var extra in new[] { 1.0, 2.0 })
+        foreach (var offset in new[] { -0.5, 0.0, 0.5 })
+            Consider((3.5 * scale) + (extra * swing), offset * scale);
         foreach (var step in new[] { 0.25, 0.125 })
         {
             var centre = bestAt;
@@ -169,7 +188,8 @@ public static class ReversePlanner
             {
                 var point = state.RearAxleCentreMetres.XY + (forward * distance) + (left * offset);
                 pullControl = new ManoeuvreControl(
-                    new Point3(point.X, point.Y, state.RearAxleCentreMetres.Z), TravelDirection.Forward);
+                    new Point3(point.X, point.Y, state.RearAxleCentreMetres.Z), TravelDirection.Forward,
+                    SpeedKilometresPerHour: speedKilometresPerHour);
                 pull = ManoeuvreReplayService.PlanControl(vehicle, mode, route, legStartIndex, state, pullControl);
                 if (pull.RequestedAngleExceeded || pull.AimedBehindTheBeam) return;
                 fromIndex = pull.FromIndex;
@@ -179,7 +199,8 @@ public static class ReversePlanner
 
             budget--;
             var reverseControl = new ManoeuvreControl(
-                axleTarget, TravelDirection.Reverse, ManoeuvreControlKind.Aim, exitMovementHeadingRadians);
+                axleTarget, TravelDirection.Reverse, ManoeuvreControlKind.Aim, exitMovementHeadingRadians,
+                SpeedKilometresPerHour: speedKilometresPerHour);
             var reverse = ManoeuvreReplayService.PlanControl(
                 vehicle, mode, prefix, prefix.Count - 1,
                 pullEnd with { Direction = TravelDirection.Reverse }, reverseControl);
@@ -217,7 +238,7 @@ public static class ReversePlanner
                 + (correctionForward * distance) + (correctionLeft * offset);
             var correctionControl = new ManoeuvreControl(
                 new Point3(point.X, point.Y, correctionStart.RearAxleCentreMetres.Z),
-                TravelDirection.Forward);
+                TravelDirection.Forward, SpeedKilometresPerHour: speedKilometresPerHour);
             var correction = ManoeuvreReplayService.PlanControl(vehicle, mode, firstRoute,
                 firstRoute.Length - 1, correctionStart, correctionControl);
             if (correction.RequestedAngleExceeded || correction.AimedBehindTheBeam) return;
@@ -225,7 +246,8 @@ public static class ReversePlanner
             var correctedRoute = firstRoute.Take(correction.FromIndex + 1)
                 .Concat(correction.Samples.Skip(1)).ToArray();
             var finalControl = new ManoeuvreControl(axleTarget, TravelDirection.Reverse,
-                ManoeuvreControlKind.Aim, exitMovementHeadingRadians);
+                ManoeuvreControlKind.Aim, exitMovementHeadingRadians,
+                SpeedKilometresPerHour: speedKilometresPerHour);
             var final = ManoeuvreReplayService.PlanControl(vehicle, mode, correctedRoute,
                 correctedRoute.Length - 1,
                 correction.EndState with { Direction = TravelDirection.Reverse }, finalControl);

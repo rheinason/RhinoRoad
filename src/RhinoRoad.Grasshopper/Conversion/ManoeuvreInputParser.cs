@@ -41,17 +41,24 @@ public static class ManoeuvreInputParser
 
     /// <summary>
     /// Builds the controls. Optional lists may be empty or shorter than the points: a missing
-    /// direction repeats the previous one (Forward to begin with), a missing kind is Aim, and a
-    /// missing exit heading is none. Unrecognised entries are reported rather than guessed.
+    /// direction repeats the previous one (Forward to begin with), a missing kind is Aim, a missing
+    /// exit heading is none, and a missing speed is the mode's. Unrecognised entries are reported
+    /// rather than guessed.
     /// </summary>
     /// <param name="exitHeadingsRadians">Per control; null entries mean no exit heading.</param>
+    /// <param name="speedsKilometresPerHour">
+    /// Per control, in km/h. Zero or a null entry is the mode's speed, as a zero exit vector is no
+    /// exit heading; a negative or non-finite entry is reported and the mode's speed used.
+    /// </param>
     public static IReadOnlyList<ManoeuvreControl> BuildControls(
         IReadOnlyList<Point3> pointsMetres,
         IReadOnlyList<object?> directions,
         IReadOnlyList<object?> kinds,
         IReadOnlyList<double?> exitHeadingsRadians,
-        ICollection<string> problems)
+        ICollection<string> problems,
+        IReadOnlyList<double?>? speedsKilometresPerHour = null)
     {
+        speedsKilometresPerHour ??= [];
         var controls = new List<ManoeuvreControl>(pointsMetres.Count);
         var direction = TravelDirection.Forward;
         for (var index = 0; index < pointsMetres.Count; index++)
@@ -72,7 +79,15 @@ public static class ManoeuvreInputParser
             }
 
             var exit = index < exitHeadingsRadians.Count ? exitHeadingsRadians[index] : null;
-            controls.Add(new ManoeuvreControl(pointsMetres[index], direction, kind, exit));
+            double? speed = null;
+            if (index < speedsKilometresPerHour.Count && speedsKilometresPerHour[index] is double given && given != 0.0)
+            {
+                if (double.IsFinite(given) && given > 0.0) speed = given;
+                else problems.Add($"Speed {index} ({given}) is not a positive number of km/h; the mode's speed is used.");
+            }
+
+            controls.Add(new ManoeuvreControl(pointsMetres[index], direction, kind, exit,
+                SpeedKilometresPerHour: speed));
         }
 
         return controls;

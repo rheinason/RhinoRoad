@@ -20,6 +20,9 @@ public sealed class DriveManoeuvreComponent : AccessComponentBase
     private const int ClearanceInput = 8;
     private const int IntervalInput = 9;
 
+    // Last, so a definition saved before it existed still wires its other inputs by position.
+    private const int SpeedsInput = 10;
+
     public DriveManoeuvreComponent()
         : base("Drive Manoeuvre", "Drive", "Drive a vehicle through control points and report its swept envelopes, tracks and feasibility.")
     {
@@ -48,7 +51,12 @@ public sealed class DriveManoeuvreComponent : AccessComponentBase
         pManager.AddVectorParameter("Exit Headings", "E", "Per control: the heading to leave the point on. Zero or missing for none.", GH_ParamAccess.list);
         pManager.AddParameter(ClearanceParameter());
         pManager.AddParameter(IntervalParameter());
-        foreach (var index in new[] { DirectionsInput, KindsInput, ExitsInput }) pManager[index].Optional = true;
+        pManager.AddNumberParameter("Speeds", "V",
+            "Per control: the speed in km/h to drive that leg at, slower than the mode's for a reverse or a shuffle "
+            + "at walking pace. Zero or missing for the mode's speed; a speed above the mode's is driven at the mode's. "
+            + "The lock stays the mode's; a slower leg only moves the wheel in less distance.",
+            GH_ParamAccess.list);
+        foreach (var index in new[] { DirectionsInput, KindsInput, ExitsInput, SpeedsInput }) pManager[index].Optional = true;
     }
 
     protected override void SolveInstance(IGH_DataAccess da)
@@ -75,6 +83,8 @@ public sealed class DriveManoeuvreComponent : AccessComponentBase
 
         var exits = new List<Vector3d>();
         da.GetDataList(ExitsInput, exits);
+        var speeds = new List<double>();
+        da.GetDataList(SpeedsInput, speeds);
         double? clearance = null;
         var clearanceValue = 0.0;
         if (da.GetData(ClearanceInput, ref clearanceValue)) clearance = Math.Max(0.0, clearanceValue * ModelUnits.MetresPerModelUnit);
@@ -88,8 +98,15 @@ public sealed class DriveManoeuvreComponent : AccessComponentBase
             ReadObjects(da, DirectionsInput),
             ReadObjects(da, KindsInput),
             exits.Select(vector => ManoeuvreInputParser.HeadingOf(vector.X, vector.Y)).ToList(),
-            problems);
+            problems,
+            speeds.Select(speed => (double?)speed).ToList());
         foreach (var problem in problems) AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, problem);
+        if (controls.Any(control => control.SpeedKilometresPerHour > mode.SpeedKilometresPerHour))
+        {
+            AddRuntimeMessage(GH_RuntimeMessageLevel.Remark,
+                $"A speed above the mode's {mode.SpeedKilometresPerHour:0.#} km/h is driven at {mode.SpeedKilometresPerHour:0.#} km/h: "
+                + "the mode's lock and steering rate are stated for its speed, and driving faster would understate the swept path.");
+        }
 
         try
         {

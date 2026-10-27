@@ -161,6 +161,14 @@ public sealed class InteractiveJourney
     /// </summary>
     public bool PointExitNext { get; private set; }
 
+    /// <summary>
+    /// Latched by Speed: the speed the legs from here on are driven at, put on every control they
+    /// make, until it is changed again. Null is the mode's speed. Unlike Stop it is a state rather
+    /// than an event -- a driver who slows to walking pace for a shunt stays at it until they speed
+    /// up -- and undo leaves it alone, as it leaves Turn.
+    /// </summary>
+    public double? SpeedKilometresPerHour { get; private set; }
+
     /// <summary>Armed by PlanReverse, and only in effect while the vehicle can still plan one.</summary>
     public bool PlanReverseNext => _planReverseNext && InteractiveCapabilities.PlanReverseAvailable(Vehicle, State);
 
@@ -217,6 +225,20 @@ public sealed class InteractiveJourney
         if (!_planReverseNext) return;
         LockedTurn = false;
         Finishing = false;
+    }
+
+    /// <summary>
+    /// Sets the speed for the legs that follow; null returns them to the mode's speed. A speed at or
+    /// above the mode's is the mode's, and is kept as null so the saved control says nothing it does
+    /// not mean. Returns the speed that will be driven at.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The speed is not a positive number.</exception>
+    public double SetSpeed(DrivingModeDefinition mode, double? kilometresPerHour)
+    {
+        ArgumentNullException.ThrowIfNull(mode);
+        var driven = mode.LegSpeedKilometresPerHour(kilometresPerHour);
+        SpeedKilometresPerHour = driven < mode.SpeedKilometresPerHour ? driven : null;
+        return driven;
     }
 
     public void SpendStop() => StopFirst = false;

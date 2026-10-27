@@ -271,13 +271,18 @@ public sealed class TrailerReverseTests
         var mode = vehicle.DrivingModes["B"];
         var start = new VehicleState(new(0, 0, 0), 0.0, 0.0, TravelDirection.Forward, 0.0);
         var route = new[] { ManoeuvreReplayService.StateSample(start, vehicle) };
+        // Bays square to 180 degrees used to be the ones that needed a correction; since a missed
+        // cascade falls back to the simulation planner they dock from the first reverse, so bays
+        // square to -90 degrees, a quarter turn from the approach, are added -- measured, (5, 5)
+        // still takes a correction.
         var targets = new[]
         {
-            new Point3(-10, 15, 0), new Point3(-5, 12, 0), new Point3(0, 15, 0),
-            new Point3(-10, -15, 0), new Point3(-5, -12, 0), new Point3(0, -15, 0)
+            (new Point3(-10, 15, 0), Math.PI), (new Point3(-5, 12, 0), Math.PI), (new Point3(0, 15, 0), Math.PI),
+            (new Point3(-10, -15, 0), Math.PI), (new Point3(-5, -12, 0), Math.PI), (new Point3(0, -15, 0), Math.PI),
+            (new Point3(5, 5, 0), -Math.PI / 2.0), (new Point3(0, 5, 0), -Math.PI / 2.0)
         };
         var proposals = targets.Select(target => TrailerReversePlanner.Find(
-            vehicle, mode, route, 0, start, target, Math.PI)).ToArray();
+            vehicle, mode, route, 0, start, target.Item1, target.Item2)).ToArray();
         var corrected = proposals.FirstOrDefault(item => item.Controls.Count > 2);
 
         Assert.True(corrected is not null,
@@ -533,5 +538,53 @@ public sealed class TrailerReverseTests
         Assert.True(planned.Samples.Count > 1);
         Assert.All(planned.Samples, sample => Assert.Equal(TravelDirection.Reverse, sample.Direction));
         Assert.Empty(Analyzer.Analyze(vehicle, mode, planned.Samples).Poses[0].TowedUnits);
+    }
+
+    /// <summary>
+    /// SVT in mode A: the wheel needs 12.5 m of travel to reach its lock at 15 km/h, and the cascade,
+    /// whose fold loop closes over about three, folds into the stop chasing its own lag at every gain
+    /// it tries -- measured 42.4 m out at a 64.5 degree fold for this bay. The simulation planner,
+    /// which the cascade falls back to, docks it at a fold of about 20 degrees.
+    /// </summary>
+    [Fact]
+    public void ASemitrailerTheCascadeCannotDockInModeAIsPlannedBySimulationInstead()
+    {
+        var vehicle = Catalog.Get("SVT");
+        var mode = vehicle.DrivingModes["A"];
+        var scale = ReversePlanner.ManoeuvreScaleMetres(vehicle, mode);
+        var start = new VehicleState(new(0, 0, 0), 0.0, 0.0, TravelDirection.Reverse, 0.0);
+        var chain = ArticulationChain.StartAligned(vehicle, 0.0);
+        var bay = new Point2(TrailerStart(vehicle) - (6.0 * scale), scale);
+
+        var cascade = TrailerReverseGenerator.DockTowedUnit(vehicle, mode, start, chain, bay, Math.PI);
+        var docked = TrailerReverseGenerator.DockTowedUnitInAvailableSpace(vehicle, mode, start, chain, bay, Math.PI);
+
+        Assert.False(cascade.ReachedTarget);
+        Assert.True(docked.ReachedTarget);
+        Assert.True(Math.Abs(docked.HeadingErrorRadians!.Value) <= ReversePlanner.ArrivalToleranceDegrees * Math.PI / 180.0);
+        var fold = FoldLimit.Measure(vehicle, docked.Samples);
+        Assert.False(fold.LimitReached);
+        Assert.True(fold.MaximumRadians < 30.0 * Math.PI / 180.0, $"fold {fold.MaximumRadians * 180.0 / Math.PI:0.0} deg");
+    }
+
+    /// <summary>
+    /// Where the cascade docks, the fallback is never reached, so every leg it already docked -- and
+    /// every saved journey replaying one -- is unchanged.
+    /// </summary>
+    [Fact]
+    public void WhereTheCascadeDocksItsLegIsKept()
+    {
+        var vehicle = Catalog.Get("SVT");
+        var mode = vehicle.DrivingModes["B"];
+        var start = new VehicleState(new(0, 0, 0), 0.0, 0.0, TravelDirection.Reverse, 0.0);
+        var chain = ArticulationChain.StartAligned(vehicle, 0.0);
+        // A dock ASemitrailerBacksSquareOntoADock shows the gentle law making.
+        var bay = new Point2(TrailerStart(vehicle) - 60.0, 12.0);
+
+        var cascade = TrailerReverseGenerator.DockTowedUnit(vehicle, mode, start, chain, bay, Math.PI, 0.05);
+        var docked = TrailerReverseGenerator.DockTowedUnitInAvailableSpace(vehicle, mode, start, chain, bay, Math.PI, 0.05);
+
+        Assert.True(cascade.ReachedTarget);
+        Assert.Equal(cascade.Samples, docked.Samples);
     }
 }

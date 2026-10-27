@@ -17,8 +17,9 @@ public static class ManoeuvreControlEdits
     /// the first control, <c>Controls.Count</c> after the last.
     /// </summary>
     /// <remarks>
-    /// Between two points the new control halves the leg it splits and is driven the same way, so
-    /// the reversal pattern the user drove is kept; past the end it continues the last leg. Finish
+    /// Between two points the new control halves the leg it splits and is driven the same way, in
+    /// the same direction and at the same speed, so the reversal pattern the user drove is kept;
+    /// past the end it continues the last leg, at its speed. Finish
     /// only means something on the last control, so appending after a Finish moves it to the new end.
     /// </remarks>
     public static ManoeuvreDefinition Insert(ManoeuvreDefinition journey, int index)
@@ -34,7 +35,8 @@ public static class ManoeuvreControlEdits
             var to = controls[index].PositionMetres;
             inserted = new ManoeuvreControl(
                 new Point3((from.X + to.X) / 2.0, (from.Y + to.Y) / 2.0, (from.Z + to.Z) / 2.0),
-                controls[index].Direction);
+                controls[index].Direction,
+                SpeedKilometresPerHour: controls[index].SpeedKilometresPerHour);
         }
         else
         {
@@ -42,7 +44,8 @@ public static class ManoeuvreControlEdits
             inserted = new ManoeuvreControl(
                 Beyond(journey, from),
                 last?.Direction ?? journey.StartDirection,
-                last?.Kind == ManoeuvreControlKind.Finish ? ManoeuvreControlKind.Finish : ManoeuvreControlKind.Aim);
+                last?.Kind == ManoeuvreControlKind.Finish ? ManoeuvreControlKind.Finish : ManoeuvreControlKind.Aim,
+                SpeedKilometresPerHour: last?.SpeedKilometresPerHour);
             if (last?.Kind == ManoeuvreControlKind.Finish)
                 controls[^1] = last with { Kind = ManoeuvreControlKind.Aim };
         }
@@ -67,6 +70,23 @@ public static class ManoeuvreControlEdits
             controls[^1].Kind == ManoeuvreControlKind.Aim)
             controls[^1] = controls[^1] with { Kind = ManoeuvreControlKind.Finish };
         return journey with { Controls = controls };
+    }
+
+    /// <summary>The crawl speeds offered for a leg, in km/h, wherever they are slower than the mode.</summary>
+    public static readonly IReadOnlyList<double> CrawlSpeedsKilometresPerHour = [5.0, 3.0, 1.0];
+
+    /// <summary>
+    /// The speeds a control can be given in <paramref name="mode"/>, fastest first: null for the
+    /// mode's own, then each crawl speed slower than it, and the control's own speed when it is none
+    /// of those -- set from Grasshopper or typed in the pick loop -- so a choice list can show what
+    /// the control holds rather than silently replacing it.
+    /// </summary>
+    public static IReadOnlyList<double?> SpeedChoices(DrivingModeDefinition mode, double? current)
+    {
+        ArgumentNullException.ThrowIfNull(mode);
+        var speeds = CrawlSpeedsKilometresPerHour.Where(speed => speed < mode.SpeedKilometresPerHour).ToList();
+        if (current is double own && !speeds.Contains(own)) speeds.Add(own);
+        return new double?[] { null }.Concat(speeds.OrderByDescending(speed => speed).Select(speed => (double?)speed)).ToArray();
     }
 
     /// <summary>

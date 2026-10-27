@@ -21,25 +21,12 @@ public sealed class AllPresetReversingTests
 
     public static IEnumerable<object[]> PresetModes() => All();
 
-    // The cases below are the ones measured not to work today. They are listed per feature so each
-    // stays a skipped, documented row rather than a weakened assertion; every other preset and mode
-    // runs and must pass.
-    private static readonly HashSet<string> TurnAwayDockFailures = ["SVT:A"];
-    private static readonly HashSet<string> StraightBehindFailures = ["SVT:A", "SK:A"];
-    private static readonly HashSet<string> PlannerFailures = ["SVT:A", "SK:A", "MVT:A"];
-
-    public static IEnumerable<object[]> TurnAwayDockCases() => All().Where(row => !TurnAwayDockFailures.Contains(Key(row)));
-    public static IEnumerable<object[]> TurnAwayDockKnownFailures() => All().Where(row => TurnAwayDockFailures.Contains(Key(row)));
-    public static IEnumerable<object[]> StraightBehindCases() => All().Where(row => !StraightBehindFailures.Contains(Key(row)));
-    public static IEnumerable<object[]> StraightBehindKnownFailures() => All().Where(row => StraightBehindFailures.Contains(Key(row)));
-    public static IEnumerable<object[]> PlannerCases() => All().Where(row => !PlannerFailures.Contains(Key(row)));
-    public static IEnumerable<object[]> PlannerKnownFailures() => All().Where(row => PlannerFailures.Contains(Key(row)));
-
-    private static readonly HashSet<string> SearchFailures = ["SVT:A"];
-    public static IEnumerable<object[]> SearchCases() => All().Where(row => !SearchFailures.Contains(Key(row)));
-    public static IEnumerable<object[]> SearchKnownFailures() => All().Where(row => SearchFailures.Contains(Key(row)));
-
-    private static string Key(object[] row) => $"{row[0]}:{row[1]}";
+    // Every preset and mode runs every case and must pass. Mode A of SVT, SK and MVT used to be
+    // skipped here: the single-joint cascade could not dock at mode A's slew per metre, and the
+    // planner's pull-ups stopped short of the run a two-joint reverse needs at it. Both are fixed
+    // (TrailerReverseGenerator.DockTowedUnitInAvailableSpace, ReversePlanner.Find), so no row is
+    // skipped; a case found not to work belongs back here as a skipped row with its measurement,
+    // not as a weakened assertion.
 
     private static IEnumerable<object[]> All() =>
         Catalog.Vehicles.SelectMany(vehicle => vehicle.DrivingModes.Keys.Select(mode => new object[] { vehicle.Id, mode }));
@@ -81,10 +68,7 @@ public sealed class AllPresetReversingTests
     /// scale to the side. The saved controls replay the planned samples exactly.
     /// </summary>
     [Theory]
-    [MemberData(nameof(TurnAwayDockCases))]
-    [MemberData(nameof(TurnAwayDockKnownFailures), Skip =
-        "SVT A: measured at bay 6 scales back, 1 scale across (scale 8.9 m): arrival error 50.9 m, heading error 23.6 deg, "
-        + "RequestedAngleExceeded, max fold 64.6 deg (stops at the 65 deg guard), not reached. Fails at every k/m tried (2-6 / 0.6-1.5).")]
+    [MemberData(nameof(PresetModes))]
     public void DockingIntoABayAfterTurningAwayArrivesWithinTolerance(string id, string modeId)
     {
         var vehicle = Catalog.Get(id);
@@ -117,10 +101,7 @@ public sealed class AllPresetReversingTests
     /// control replays the planned samples exactly.
     /// </summary>
     [Theory]
-    [MemberData(nameof(StraightBehindCases))]
-    [MemberData(nameof(StraightBehindKnownFailures), Skip =
-        "SVT A (scale 8.9 m): back 6 / across +1 arrives 42.4 m out, 30.9 deg off square, fold 64.8 deg, not reached; "
-        + "SK A (scale 14.0 m): back 6 / across +1 arrives 1.47 m out, 12.9 deg off square, fold 60.5 deg (back 6 across 0.3: 1.54 m, 33.8 deg).")]
+    [MemberData(nameof(PresetModes))]
     public void DockingStraightBehindWithALateralShiftArrivesWithinTolerance(string id, string modeId)
     {
         var vehicle = Catalog.Get(id);
@@ -152,12 +133,7 @@ public sealed class AllPresetReversingTests
     /// in, reaches the target honouring the heading, and its controls replay to the same samples.
     /// </summary>
     [Theory]
-    [MemberData(nameof(PlannerCases))]
-    [MemberData(nameof(PlannerKnownFailures), Skip =
-        "ReversePlanner.Find from (-2 scales, 0) heading 0 to a bay with rear at (-2, -0.6) scales, heading 180: "
-        + "SVT A (scale 8.9 m) ReachedTarget false, miss 4.43 m, 1.62 deg, fold 64.2 deg; "
-        + "SK A (scale 14.0 m) ReachedTarget false, miss 0.14 m, 32.51 deg off square, fold 57.7 deg; "
-        + "MVT A (scale 10.8 m) ReachedTarget false, miss 2.41 m, 48.01 deg, fold 64.1 deg. HeadingHonoured true in all.")]
+    [MemberData(nameof(PresetModes))]
     public void PlanningFromAStraightApproachReachesABayToTheSide(string id, string modeId)
     {
         var vehicle = Catalog.Get(id);
@@ -187,11 +163,7 @@ public sealed class AllPresetReversingTests
     /// tolerance, stays inside the fold limit and replays as ordinary controls.
     /// </summary>
     [Theory]
-    [MemberData(nameof(SearchCases))]
-    [MemberData(nameof(SearchKnownFailures), Skip =
-        "SVT A: no journey to search. The turn-away then ReversePlanner.Find to the bay (rear at -2, -0.6 scales; scale 8.9 m) "
-        + "does not reach it, so the search has no passing reverse to take as its fixed bay (docking fails the same way, "
-        + "RequestedAngleExceeded; see the docking cases).")]
+    [MemberData(nameof(PresetModes))]
     public void TheAreaSearchFindsAPassingApproachInAGenerousYard(string id, string modeId)
     {
         var vehicle = Catalog.Get(id);
