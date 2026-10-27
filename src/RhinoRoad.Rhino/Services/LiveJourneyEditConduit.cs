@@ -150,8 +150,15 @@ internal sealed class LiveJourneyEditConduit : DisplayConduit
                 if (preview.Work is null && preview.Error is null &&
                     (preview.ResultVertices is null || !preview.ResultVertices.SequenceEqual(vertices)))
                 {
+                    // The same vehicle the bake sweeps, mirror allowance included. A missing user
+                    // vehicle is reported as the preview's error once, not rethrown on every frame.
+                    if (!RhinoRoadCatalog.TryRoadVehicle(saved, out var vehicle, out var vehicleError))
+                    {
+                        preview.Error = vehicleError;
+                        changed = true;
+                        continue;
+                    }
                     var captured = vertices.ToArray();
-                    var vehicle = Catalog.Get(saved.VehicleId);
                     var mode = vehicle.DrivingModes[saved.ModeId];
                     preview.WorkVertices = captured;
                     var previousRoute = preview.Result?.PreviousRoute;

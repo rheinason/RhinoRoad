@@ -2,6 +2,7 @@ using Grasshopper.Kernel;
 using Grasshopper.Kernel.Data;
 using Grasshopper.Kernel.Parameters;
 using Grasshopper.Kernel.Types;
+using Rhino;
 using Rhino.Geometry;
 using RhinoRoad.Core;
 using RhinoRoad.GrasshopperPlugin.Conversion;
@@ -38,7 +39,7 @@ public abstract class AccessComponentBase : GH_Component
         {
             Name = "Vehicle",
             NickName = "V",
-            Description = "Vehicle preset id (PV, REN, LV 12, BUS 12, BUS 13,7, BUS 15, PVT, SVT). Defaults to PV.",
+            Description = $"Vehicle id: {AccessRunner.VehicleIds()}, including any user vehicles. Defaults to PV.",
             Access = GH_ParamAccess.item,
             Optional = true
         };
@@ -64,7 +65,9 @@ public abstract class AccessComponentBase : GH_Component
     {
         Name = "Clearance",
         NickName = "C",
-        Description = "Clearance around the body envelope in metres. Omit for the mode's default.",
+        // Model units, like every other length on these components (the points, curves and every
+        // output), so a value read off the drawing can be wired in directly.
+        Description = "Clearance around the body envelope, in model units. Omit for the mode's default (0.30 m).",
         Access = GH_ParamAccess.item,
         Optional = true
     };
@@ -73,7 +76,7 @@ public abstract class AccessComponentBase : GH_Component
     {
         Name = "Interval",
         NickName = "I",
-        Description = "Footprint stamp spacing along the route in metres. Omit or 0 for no footprints.",
+        Description = "Footprint stamp spacing along the route, in model units. Omit or 0 for no footprints.",
         Access = GH_ParamAccess.item,
         Optional = true
     };
@@ -94,6 +97,12 @@ public abstract class AccessComponentBase : GH_Component
         pManager.AddCurveParameter("Footprints", "FP", "Vehicle outlines stamped at the interval, towed units included.", GH_ParamAccess.list);
     }
 
+    /// <summary>
+    /// The Rhino document this definition belongs to, for its model units; the active document when
+    /// the definition is not attached to one.
+    /// </summary>
+    protected RhinoDoc? RhinoDocument => OnPingDocument()?.RhinoDocument ?? RhinoDoc.ActiveDoc;
+
     /// <summary>Resolves the vehicle and mode, raising an error message if either is unknown.</summary>
     protected bool TryGetVehicle(IGH_DataAccess da, int vehicleIndex, int modeIndex, out VehicleDefinition vehicle, out DrivingModeDefinition mode)
     {
@@ -108,8 +117,11 @@ public abstract class AccessComponentBase : GH_Component
 
     protected void Publish(IGH_DataAccess da, AccessRun run)
     {
-        var scale = ModelUnits.ModelUnitsPerMetre;
+        var scale = ModelUnits.ModelUnitsPerMetre(RhinoDocument);
         var result = run.Result;
+        // Plan outputs sit at the route's start elevation, as the plugin bakes them, so they are level
+        // with where the Rear Path (which keeps its Z) begins.
+        var elevation = result.Poses.Count > 0 ? result.Poses[0].RearAxleCentreMetres.Z * scale : 0.0;
         var rear = result.Poses
             .Select(pose => new Point3d(pose.RearAxleCentreMetres.X * scale, pose.RearAxleCentreMetres.Y * scale, pose.RearAxleCentreMetres.Z * scale))
             .ToList();
@@ -117,14 +129,14 @@ public abstract class AccessComponentBase : GH_Component
 
         if (run.Body.Region is not null)
         {
-            da.SetData(BodyOutput, GeometryConverter.ToPolyline(run.Body.Region, scale));
-            da.SetDataList(BodyHolesOutput, GeometryConverter.HolesOf(run.Body.Region, scale));
+            da.SetData(BodyOutput, GeometryConverter.ToPolyline(run.Body.Region, scale, elevation));
+            da.SetDataList(BodyHolesOutput, GeometryConverter.HolesOf(run.Body.Region, scale, elevation));
         }
 
         if (run.Clearance?.Region is not null)
         {
-            da.SetData(ClearanceOutput, GeometryConverter.ToPolyline(run.Clearance.Region, scale));
-            da.SetDataList(ClearanceHolesOutput, GeometryConverter.HolesOf(run.Clearance.Region, scale));
+            da.SetData(ClearanceOutput, GeometryConverter.ToPolyline(run.Clearance.Region, scale, elevation));
+            da.SetDataList(ClearanceHolesOutput, GeometryConverter.HolesOf(run.Clearance.Region, scale, elevation));
         }
 
         if (run.Body.Status == SweptRegionStatus.Disjoint)
@@ -139,7 +151,7 @@ public abstract class AccessComponentBase : GH_Component
         var towed = new GH_Structure<GH_Curve>();
         for (var unit = 0; unit < result.TowedAxleTracksMetres.Count; unit++)
         {
-            var track = GeometryConverter.ToPolyline(result.TowedAxleTracksMetres[unit], scale, closed: false);
+            var track = GeometryConverter.ToPolyline(result.TowedAxleTracksMetres[unit], scale, closed: false, elevation);
             if (track is not null) towed.Append(new GH_Curve(track), new GH_Path(unit));
         }
 
@@ -155,7 +167,7 @@ public abstract class AccessComponentBase : GH_Component
         {
             foreach (var outline in pose.OccupiedOutlinesWorldMetres)
             {
-                var curve = GeometryConverter.ToPolyline(outline, scale, closed: true);
+                var curve = GeometryConverter.ToPolyline(outline, scale, closed: true, elevation);
                 if (curve is not null) footprints.Add(curve);
             }
         }

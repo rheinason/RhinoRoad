@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -100,9 +101,123 @@ internal static class AccessDefinitionStore
         else
         {
             builder.Append(geometry.ObjectType).Append('|');
+            // A terrain is a tracked reference too, and editing its interior (a vertex dragged, a
+            // control point lifted) leaves the bounding box unchanged, so the box alone left a road
+            // "current" with stale grades. Hash the content that defines the shape. Curves keep their
+            // original sampled form above so that saved curve fingerprints still match.
+            if (ContentHash(geometry) is { } content) builder.Append(content).Append('|');
         }
 
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString())));
+    }
+
+    /// <summary>
+    /// A hash of the vertices or control points of a non-curve reference, or null for a kind with no
+    /// defined content hash. Explicit rather than <see cref="GeometryBase.DataCRC"/>, whose inputs are
+    /// not documented as stable across sessions or versions; every value hashed here is saved in the
+    /// file, so the fingerprint survives a reload. A whole mesh is hashed: binary SHA-256 over a
+    /// million vertices costs tens of milliseconds, and it runs on change events, not per frame.
+    /// </summary>
+    private static string? ContentHash(GeometryBase geometry)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        switch (geometry)
+        {
+            case Mesh mesh:
+                AddCount(hash, mesh.Vertices.Count);
+                foreach (var point in mesh.Vertices.ToPoint3dArray()) AddPoint(hash, point);
+                var faces = mesh.Faces.ToIntArray(asTriangles: false);
+                AddCount(hash, faces.Length);
+                foreach (var index in faces) AddCount(hash, index);
+                break;
+            case Brep brep:
+                AddBrep(hash, brep);
+                break;
+            case Extrusion extrusion:
+                using (var brep = extrusion.ToBrep(splitKinkyFaces: false))
+                {
+                    if (brep is null) return null;
+                    AddBrep(hash, brep);
+                }
+                break;
+            case Surface surface:
+                if (!AddSurface(hash, surface)) return null;
+                break;
+            case SubD subd:
+                // Hashed by persistent component id rather than list order, which a reload need not keep.
+                var vertices = new List<(uint Id, Point3d Point)>();
+                for (var vertex = subd.Vertices.First; vertex is not null; vertex = vertex.Next)
+                    vertices.Add((vertex.Id, vertex.ControlNetPoint));
+                AddCount(hash, vertices.Count);
+                AddCount(hash, subd.Edges.Count);
+                AddCount(hash, subd.Faces.Count);
+                foreach (var (id, point) in vertices.OrderBy(v => v.Id))
+                {
+                    AddCount(hash, unchecked((int)id));
+                    AddPoint(hash, point);
+                }
+                break;
+            default:
+                return null;
+        }
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    private static void AddBrep(IncrementalHash hash, Brep brep)
+    {
+        AddCount(hash, brep.Vertices.Count);
+        foreach (var vertex in brep.Vertices) AddPoint(hash, vertex.Location);
+        AddCount(hash, brep.Surfaces.Count);
+        for (var i = 0; i < brep.Surfaces.Count; i++) AddSurface(hash, brep.Surfaces[i]);
+        AddCount(hash, brep.Curves3D.Count);
+        for (var i = 0; i < brep.Curves3D.Count; i++)
+        {
+            using var nurbs = brep.Curves3D[i].ToNurbsCurve();
+            if (nurbs is null) { AddCount(hash, -1); continue; }
+            AddCount(hash, nurbs.Points.Count);
+            for (var j = 0; j < nurbs.Points.Count; j++)
+            {
+                var point = nurbs.Points[j];
+                AddPoint(hash, point.Location);
+                AddDouble(hash, point.Weight);
+            }
+        }
+    }
+
+    private static bool AddSurface(IncrementalHash hash, Surface surface)
+    {
+        using var nurbs = surface.ToNurbsSurface();
+        if (nurbs is null) { AddCount(hash, -1); return false; }
+        AddCount(hash, nurbs.Points.CountU);
+        AddCount(hash, nurbs.Points.CountV);
+        for (var u = 0; u < nurbs.Points.CountU; u++)
+        for (var v = 0; v < nurbs.Points.CountV; v++)
+        {
+            nurbs.Points.GetPoint(u, v, out Point4d point);
+            AddDouble(hash, point.X); AddDouble(hash, point.Y); AddDouble(hash, point.Z); AddDouble(hash, point.W);
+        }
+        for (var i = 0; i < nurbs.KnotsU.Count; i++) AddDouble(hash, nurbs.KnotsU[i]);
+        for (var i = 0; i < nurbs.KnotsV.Count; i++) AddDouble(hash, nurbs.KnotsV[i]);
+        return true;
+    }
+
+    private static void AddPoint(IncrementalHash hash, Point3d point)
+    {
+        AddDouble(hash, point.X); AddDouble(hash, point.Y); AddDouble(hash, point.Z);
+    }
+
+    private static void AddDouble(IncrementalHash hash, double value)
+    {
+        Span<byte> bytes = stackalloc byte[sizeof(double)];
+        BinaryPrimitives.WriteDoubleLittleEndian(bytes, value);
+        hash.AppendData(bytes);
+    }
+
+    private static void AddCount(IncrementalHash hash, int value)
+    {
+        Span<byte> bytes = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32LittleEndian(bytes, value);
+        hash.AppendData(bytes);
     }
 
     public static IReadOnlyList<Point3> PolylineVertices(Curve curve, UnitSystem modelUnits)

@@ -37,8 +37,16 @@ internal static class VehicleAccessInspectorService
         var form = new VehicleAccessInspectorForm(document, target.Id);
         session.InspectorForm = form;
         form.Closed += (_, _) => Forget(session, form);
+        var serial = document.RuntimeSerialNumber;
         Application.Instance.AsyncInvoke(() =>
         {
+            // The document can close between the command and this callback; the session has then
+            // abandoned the inspector, which must not open over a document that is gone.
+            if (form.Abandoned || RhinoDoc.FromRuntimeSerialNumber(serial) is null)
+            {
+                Forget(session, form);
+                return;
+            }
             try
             {
                 form.Show();

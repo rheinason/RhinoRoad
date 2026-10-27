@@ -101,16 +101,17 @@ authors:
 description: >
   Vehicle access screening for Rhino 8, rigid and articulated. Drive a vehicle along a path or
   follow an existing curve, and get swept and clearance envelopes, wheel tracks and feasibility
-  checks against the Danish Vejdirektoratet driving modes. Eight type-vehicle presets: PV, REN,
-  LV 12, BUS 12, BUS 13,7, BUS 15, PVT and SVT. A trailer is placed from where the vehicle has
-  been rather than from where it is, so it stays folded into the straight after a corner. Reversing
-  steers the trailer rather than the tractor, and a semitrailer backs square onto a dock; the wheel
-  can be turned at a standstill, which is what makes a three-point turn narrower than a U-turn.
-  PV is reference-validated against the official koerekurver
-  drawings. REN, LV 12, BUS 12 and BUS 13,7 are transcribed and corroborated against the legacy
-  Vejdirektoratet curve library, which also corroborates the PVT lorry; neither trailer is
-  corroborated, because neither combination reaches a steady turn on those sheets. Each preset
-  records its own validation status, and no result is presented as certified AutoTURN output.
+  checks against the Danish Vejdirektoratet driving modes. Ten type-vehicle presets: PV, REN,
+  LV 12, BUS 12, BUS 13,7, BUS 15, SVT, PVT, SK and MVT, and user-defined vehicles imported from
+  JSON (RRImportVehicle). A trailer is placed from where the vehicle has been rather than from where
+  it is, so it stays folded into the straight after a corner. Every vehicle, rigid or articulated,
+  can reverse square into a bay, by hand or with a planned approach; the wheel can be turned at a
+  standstill, which is what makes a three-point turn narrower than a U-turn. Edit a road with a live
+  sweep, inspect and scrub it, compare and report roads, and search a yard for a route that clears
+  less of it. Grasshopper components drive the same Core. PV is reference-validated against the
+  official koerekurver drawings (worst envelope deviation 0.054 m against a 0.10 m tolerance); every
+  other preset is source-transcribed, and a user vehicle is user-defined and not validated. Each
+  preset records its own validation status, and no result is presented as certified AutoTURN output.
 url: https://github.com/rheinason/RhinoRoad
 keywords:
 - rhinoroad

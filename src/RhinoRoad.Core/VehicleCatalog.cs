@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -22,6 +23,21 @@ public sealed class VehicleCatalog
     public VehicleDefinition Get(string id) => _vehicles.TryGetValue(id, out var vehicle)
         ? vehicle
         : throw new KeyNotFoundException($"Vehicle preset '{id}' was not found.");
+
+    /// <summary>
+    /// The vehicle with <paramref name="id"/>, or false when there is none. A saved road can name a
+    /// user vehicle whose file has since been removed, so code that opens a saved road asks this and
+    /// reports <see cref="NotFoundMessage"/> instead of throwing.
+    /// </summary>
+    public bool TryGet(string? id, [NotNullWhen(true)] out VehicleDefinition? vehicle)
+    {
+        vehicle = null;
+        return id is not null && _vehicles.TryGetValue(id, out vehicle);
+    }
+
+    /// <summary>What to tell the user when a saved road's vehicle is not in the catalogue.</summary>
+    public static string NotFoundMessage(string? id) =>
+        $"Vehicle {id} not found — import it again (RRImportVehicle) or change the road's vehicle.";
 
     public static VehicleCatalog LoadEmbedded()
     {

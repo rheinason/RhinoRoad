@@ -224,6 +224,12 @@ internal static class RhinoOutputWriter
         var plane = new Plane(new Point3d(anchor.X, anchor.Y, bounds.Min.Z), Vector3d.ZAxis);
         var text = TextEntity.Create(string.Join(System.Environment.NewLine, lines), plane, document.DimStyles.Current, false, 0.0, 0.0)
             ?? throw new InvalidOperationException("Rhino could not create the vehicle access note.");
+        // With model-space annotation scaling on (Document Properties > Annotation), Rhino draws text
+        // in a model viewport at the style's height times the style's model space scale, so a style
+        // scaled 100 showed this 0.25 m note 25 m tall. The note is drawn to the site's scale, not the
+        // sheet's, so this entity overrides its own dimension scale to 1: its displayed height is then
+        // TextHeight whether scaling is on or off, and the document's style is left as it was.
+        text.DimensionScale = 1.0;
         text.TextHeight = AccessNote.TextHeightMetres * scale;
         text.TextHorizontalAlignment = TextHorizontalAlignment.Left;
         text.TextVerticalAlignment = TextVerticalAlignment.Top;
@@ -241,7 +247,8 @@ internal static class RhinoOutputWriter
         _ => conflict.Kind.ToString()
     };
 
-    private static int SolidPatternIndex(RhinoDoc document)
+    /// <summary>The document's solid hatch pattern, added when the document has none.</summary>
+    internal static int SolidPatternIndex(RhinoDoc document)
     {
         var solid = document.HatchPatterns.FindName(HatchPattern.Defaults.Solid.Name);
         return solid?.Index ?? document.HatchPatterns.Add(HatchPattern.Defaults.Solid);

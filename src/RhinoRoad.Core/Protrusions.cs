@@ -47,6 +47,16 @@ public static class MirrorAllowance
         "Mirror allowance: lead body widened 0.30 m each side over its front 1.0 m. The 0.30 m width is " +
         "published (Grundlag for udformning af trafikarealer 2023, p.37); the position is a RhinoRoad assumption.";
 
+    /// <summary>
+    /// The vehicle a road is swept with: <paramref name="vehicle"/> with the allowance when
+    /// <paramref name="include"/> is set, otherwise unchanged. Every sweep of a road -- the live
+    /// preview, the edit palette, the clear-area search and readout, the analysis and the bake --
+    /// resolves its vehicle through this, so what is previewed is what is baked. The allowance adds
+    /// protrusions only, which the sweep reads and the kinematics do not, so the route is the same.
+    /// </summary>
+    public static VehicleDefinition Resolve(VehicleDefinition vehicle, bool include) =>
+        include ? Apply(vehicle) : vehicle;
+
     /// <summary>The vehicle with the allowance added to its lead unit; the vehicle itself is not changed.</summary>
     public static VehicleDefinition Apply(VehicleDefinition vehicle)
     {

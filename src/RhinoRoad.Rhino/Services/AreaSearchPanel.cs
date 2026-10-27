@@ -70,7 +70,8 @@ internal sealed class AreaSearchPanel : Panel
         };
         _bayButton.Click += (_, _) =>
         {
-            if (!Searching) _host.PickBay(message => _areaStatus.Text = message);
+            if (!Searching && !CommandGuard.Busy(message => _areaStatus.Text = message))
+                _host.PickBay(message => _areaStatus.Text = message);
         };
         var pickYard = new Button { Text = "Pick yard…", ToolTip = "One closed curve around the area the vehicle may use." };
         pickYard.Click += (_, _) => PickYard();
@@ -151,14 +152,17 @@ internal sealed class AreaSearchPanel : Panel
     /// <summary>Follows the road's saved intent: which vehicle, which controls the search may move, the bay.</summary>
     public void Refresh(VehicleAccessDefinition definition)
     {
-        _vehicle = JourneyEditForm.Catalog.Get(definition.VehicleId);
-        _bayButton.ToolTip = $"Pick {ReverseWording.BayRear(_vehicle)} at the bay, then point the way it reverses in.";
-        var supported = AreaSearchSupported(_vehicle);
+        // The vehicle the road is swept with, mirror allowance included, so the live readout measures
+        // the envelope that is baked. A vehicle that is no longer loaded hides the search.
+        _vehicle = RhinoRoadCatalog.TryRoadVehicle(definition, out var vehicle, out _) ? vehicle : null;
+        if (_vehicle is not null)
+            _bayButton.ToolTip = $"Pick {ReverseWording.BayRear(_vehicle)} at the bay, then point the way it reverses in.";
+        var supported = _vehicle is not null && AreaSearchSupported(_vehicle);
         if (Visible != supported)
         {
             if (!supported)
             {
-                _searchCancellation?.Cancel();
+                StopSearch();
                 ClearSuggestions();
             }
             Visible = supported;
@@ -196,7 +200,11 @@ internal sealed class AreaSearchPanel : Panel
             _bayLabel.Text = "The road must end reversing into a bay. Set the last control to Reverse, or redraw it with PlanReverse.";
             return;
         }
-        var vehicle = JourneyEditForm.Catalog.Get(definition.VehicleId);
+        if (!RhinoRoadCatalog.TryRoadVehicle(definition, out var vehicle, out var vehicleError))
+        {
+            _bayLabel.Text = vehicleError;
+            return;
+        }
         if (final.ExitHeadingRadians is not double heading)
         {
             _bayLabel.Text = "No reversing direction yet — required for the search.";
@@ -248,13 +256,19 @@ internal sealed class AreaSearchPanel : Panel
         var obstacles = _searchObstacles;
         var current = _searchResult?.Current;
         _ = Task.Run(() => ClearAreaReadout.Measure(vehicle, preview, yard, obstacles))
-            .ContinueWith(work => Application.Instance.AsyncInvoke(() =>
+            .ContinueWith(work =>
             {
-                if (_closed || !ReferenceEquals(_measured, preview)) return;
-                _liveArea.Text = work.IsCompletedSuccessfully
-                    ? Describe(work.Result, current)
-                    : $"Live clear area unavailable: {work.Exception?.GetBaseException().Message}";
-            }));
+                // Observed here, before the early return below, so a fault in a readout that is no
+                // longer wanted is never left unobserved.
+                _ = work.Exception;
+                Application.Instance.AsyncInvoke(() =>
+                {
+                    if (_closed || !ReferenceEquals(_measured, preview)) return;
+                    _liveArea.Text = work.IsCompletedSuccessfully
+                        ? Describe(work.Result, current)
+                        : $"Live clear area unavailable: {work.Exception?.GetBaseException().Message}";
+                });
+            }, TaskScheduler.Default);
     }
 
     private static string Describe(ClearAreaReadout readout, ManoeuvringAreaSearch.Candidate? current)
@@ -307,7 +321,7 @@ internal sealed class AreaSearchPanel : Panel
 
     private void PickYard()
     {
-        if (Searching) return;
+        if (Searching || CommandGuard.Busy(message => _areaStatus.Text = message)) return;
         _areaStatus.Text = "Click one closed curve around the planning yard in the viewport. Open curves cannot be picked. Esc keeps the current yard.";
         var picked = JourneyEditPicks.PickCurves(_document, _sourceId,
             "Select one closed curve around the planning yard", multiple: false, closedOnly: true);
@@ -325,7 +339,7 @@ internal sealed class AreaSearchPanel : Panel
 
     private void PickObstacles()
     {
-        if (Searching) return;
+        if (Searching || CommandGuard.Busy(message => _areaStatus.Text = message)) return;
         _areaStatus.Text = "Click closed curves around buildings and storage in the viewport, then press Enter. Enter with nothing selected clears the obstacles; Esc keeps them.";
         var picked = JourneyEditPicks.PickCurves(_document, _sourceId,
             "Select closed building and storage outlines", multiple: true, closedOnly: true);
@@ -358,6 +372,21 @@ internal sealed class AreaSearchPanel : Panel
         _searchCancellation?.Cancel();
     }
 
+    /// <summary>
+    /// Abandons a running search: it is cancelled and forgotten, so whatever it returns is discarded
+    /// rather than filled into a panel that is now hidden. The Stop button cancels without
+    /// forgetting, so a stopped search still shows what it found.
+    /// </summary>
+    private void StopSearch()
+    {
+        _searchCancellation?.Cancel();
+        _searchCancellation = null;
+        if (!Searching) return;
+        Searching = false;
+        _searchButton.Text = SearchText;
+        _areaStatus.Text = string.Empty;
+    }
+
     private void StartAreaSearch()
     {
         if (Searching) return;
@@ -367,7 +396,11 @@ internal sealed class AreaSearchPanel : Panel
             _areaStatus.Text = "The saved road could not be read. Close Edit Road and open it again.";
             return;
         }
-        var vehicle = JourneyEditForm.Catalog.Get(definition.VehicleId);
+        if (!RhinoRoadCatalog.TryRoadVehicle(definition, out var vehicle, out var vehicleError))
+        {
+            _areaStatus.Text = vehicleError;
+            return;
+        }
         if (!AreaSearchSupported(vehicle))
         {
             _areaStatus.Text = $"{vehicle.Name} cannot be squared onto a bay in reverse, so the clear-area search cannot hold the bay's direction for it.";
@@ -406,58 +439,66 @@ internal sealed class AreaSearchPanel : Panel
         var seconds = _searchTime.SelectedKey == "120" ? 120 : 30;
         _ = Task.Run(() => ManoeuvringAreaSearch.Find(vehicle, mode, journey, first,
                 yard, obstacles, definition.ClearanceMetres, TimeSpan.FromSeconds(seconds), cancellation.Token))
-            .ContinueWith(work => Application.Instance.AsyncInvoke(() =>
+            .ContinueWith(work =>
             {
-                if (_closed || cancellation != _searchCancellation) return;
-                Searching = false;
-                _searchButton.Text = SearchText;
-                if (!work.IsCompletedSuccessfully)
-                {
-                    _areaStatus.Text = $"Search stopped: {work.Exception?.GetBaseException().Message ?? "cancelled"}";
-                    UpdateReadout();
-                    return;
-                }
-                _searchResult = work.Result;
-                _suppressSuggestionEvent = true;
-                _suggestions.Items.Clear();
-                for (var index = 0; index < work.Result.Suggestions.Count; index++)
-                {
-                    var candidate = work.Result.Suggestions[index];
-                    var change = work.Result.Current is { } current
-                        ? $" ({candidate.ClearAreaSquareMetres - current.ClearAreaSquareMetres:+0.0;-0.0;0.0} m²)"
-                        : string.Empty;
-                    _suggestions.Items.Add(new ListItem { Key = index.ToString(),
-                        Text = $"{index + 1}. {candidate.ClearAreaSquareMetres:0.0} m²{change}" });
-                }
-                if (work.Result.Suggestions.Count > 0)
-                    _suggestions.Items.Add(new ListItem { Key = CurrentRouteKey, Text = "Current route (unchanged)" });
-                _suggestions.Enabled = work.Result.Suggestions.Count > 0;
-                var summary = $"Found {work.Result.Suggestions.Count} suggestions from {work.Result.Tried} routes"
-                    + (work.Result.TimeLimitReached ? " before the time limit" : string.Empty) + ". ";
-                if (work.Result.Suggestions.Count == 0)
-                {
-                    _suppressSuggestionEvent = false;
-                    _areaStatus.Text = $"No passing route found. Tried {work.Result.Tried}; outside yard {work.Result.OutsideYard}, fixed-object conflicts {work.Result.ObstacleConflicts}, vehicle/arrival failures {work.Result.VehicleFailures}.";
-                }
-                else if (!SourceMatchesBaseline())
-                {
-                    // Applying now would silently overwrite whatever was changed while it ran.
-                    _suggestions.SelectedKey = CurrentRouteKey;
-                    _suppressSuggestionEvent = false;
-                    _areaStatus.Text = summary + "The controls changed during the search, so nothing was applied. Choosing a suggestion replaces those changes.";
-                }
-                else
-                {
-                    // The best suggestion becomes the draft straight away, so Save keeps it without a
-                    // separate step; choosing another entry, or the current route, switches.
-                    _suggestions.SelectedKey = "0";
-                    _suppressSuggestionEvent = false;
-                    SelectSuggestion("0", summary);
-                }
-                _measured = null;
-                UpdateReadout();
-                _document.Views.Redraw();
-            }));
+                // Observed before the early returns below: a search abandoned by Close, or by the
+                // vehicle becoming unsupported, must not leave its fault unobserved.
+                _ = work.Exception;
+                Application.Instance.AsyncInvoke(() => SearchFinished(work, cancellation));
+            }, TaskScheduler.Default);
+    }
+
+    private void SearchFinished(Task<ManoeuvringAreaSearch.Result> work, CancellationTokenSource cancellation)
+    {
+        if (_closed || cancellation != _searchCancellation) return;
+        Searching = false;
+        _searchButton.Text = SearchText;
+        if (!work.IsCompletedSuccessfully)
+        {
+            _areaStatus.Text = $"Search stopped: {work.Exception?.GetBaseException().Message ?? "cancelled"}";
+            UpdateReadout();
+            return;
+        }
+        _searchResult = work.Result;
+        _suppressSuggestionEvent = true;
+        _suggestions.Items.Clear();
+        for (var index = 0; index < work.Result.Suggestions.Count; index++)
+        {
+            var candidate = work.Result.Suggestions[index];
+            var change = work.Result.Current is { } current
+                ? $" ({candidate.ClearAreaSquareMetres - current.ClearAreaSquareMetres:+0.0;-0.0;0.0} m²)"
+                : string.Empty;
+            _suggestions.Items.Add(new ListItem { Key = index.ToString(),
+                Text = $"{index + 1}. {candidate.ClearAreaSquareMetres:0.0} m²{change}" });
+        }
+        if (work.Result.Suggestions.Count > 0)
+            _suggestions.Items.Add(new ListItem { Key = CurrentRouteKey, Text = "Current route (unchanged)" });
+        _suggestions.Enabled = work.Result.Suggestions.Count > 0;
+        var summary = $"Found {work.Result.Suggestions.Count} suggestions from {work.Result.Tried} routes"
+            + (work.Result.TimeLimitReached ? " before the time limit" : string.Empty) + ". ";
+        if (work.Result.Suggestions.Count == 0)
+        {
+            _suppressSuggestionEvent = false;
+            _areaStatus.Text = $"No passing route found. Tried {work.Result.Tried}; outside yard {work.Result.OutsideYard}, fixed-object conflicts {work.Result.ObstacleConflicts}, vehicle/arrival failures {work.Result.VehicleFailures}.";
+        }
+        else if (!SourceMatchesBaseline())
+        {
+            // Applying now would silently overwrite whatever was changed while it ran.
+            _suggestions.SelectedKey = CurrentRouteKey;
+            _suppressSuggestionEvent = false;
+            _areaStatus.Text = summary + "The controls changed during the search, so nothing was applied. Choosing a suggestion replaces those changes.";
+        }
+        else
+        {
+            // The best suggestion becomes the draft straight away, so Save keeps it without a
+            // separate step; choosing another entry, or the current route, switches.
+            _suggestions.SelectedKey = "0";
+            _suppressSuggestionEvent = false;
+            SelectSuggestion("0", summary);
+        }
+        _measured = null;
+        UpdateReadout();
+        _document.Views.Redraw();
     }
 
     private static string PreviewText(ManoeuvringAreaSearch.Candidate candidate) =>
