@@ -87,8 +87,8 @@ public static class ViolationRanges
     /// <summary>A marker label: the check, and the station or station range it covers.</summary>
     public static string Label(ViolationRange range) =>
         range.EndStationMetres - range.StartStationMetres < 0.05
-            ? $"{CheckName(range.Kind)} @ {range.StartStationMetres:0.0} m"
-            : $"{CheckName(range.Kind)} {range.StartStationMetres:0.0}–{range.EndStationMetres:0.0} m";
+            ? FormattableString.Invariant($"{CheckName(range.Kind)} @ {range.StartStationMetres:0.0} m")
+            : FormattableString.Invariant($"{CheckName(range.Kind)} {range.StartStationMetres:0.0}–{range.EndStationMetres:0.0} m");
 
     /// <summary>The largest sampling step between two stations, the gap a continuous run can show.</summary>
     private static double Step(IReadOnlyList<double> stations, double from, double to)

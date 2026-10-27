@@ -82,6 +82,9 @@ public static class SiteFitAnalyzer
 
     private const double LengthToleranceMetres = 1e-6;
 
+    /// <summary>A distance this small is a touch: at Clipper's precision it cannot be told from zero.</summary>
+    private const double TouchToleranceMetres = 1e-9;
+
     /// <summary>
     /// The least an overlap can read as. Two outlines crossing like a plus sign have no vertex inside
     /// each other, so their measured depth is zero; they still overlap, and must not read as touching.
@@ -95,8 +98,33 @@ public static class SiteFitAnalyzer
         IReadOnlyList<SiteCurve> obstacles,
         IReadOnlyList<IReadOnlyList<Point2>> allowedBoundaries,
         SweptRegion? road,
+        double clearanceMetres) => Check(
+            poses,
+            body is null ? null : (IReadOnlyList<SweptRegion>)[body],
+            clearance is null ? null : (IReadOnlyList<SweptRegion>)[clearance],
+            obstacles,
+            allowedBoundaries,
+            road,
+            clearanceMetres);
+
+    /// <summary>
+    /// The same check against every piece of a sweep. A disjoint sweep is a failure in its own right,
+    /// but each of its pieces is still ground the vehicle occupies, and a conflict in a smaller piece
+    /// is as real as one in the largest.
+    /// </summary>
+    /// <param name="body">Every piece of the body sweep; null or empty when there is none.</param>
+    /// <param name="clearance">Every piece of the clearance envelope; null or empty when there is none.</param>
+    public static SiteFitOutcome Check(
+        IReadOnlyList<VehiclePose> poses,
+        IReadOnlyList<SweptRegion>? body,
+        IReadOnlyList<SweptRegion>? clearance,
+        IReadOnlyList<SiteCurve> obstacles,
+        IReadOnlyList<IReadOnlyList<Point2>> allowedBoundaries,
+        SweptRegion? road,
         double clearanceMetres)
     {
+        if (body is { Count: 0 }) body = null;
+        if (clearance is { Count: 0 }) clearance = null;
         ArgumentNullException.ThrowIfNull(poses);
         ArgumentNullException.ThrowIfNull(obstacles);
         ArgumentNullException.ThrowIfNull(allowedBoundaries);
@@ -191,10 +219,10 @@ public static class SiteFitAnalyzer
     /// obstacle on a roundabout island sits in a hole, and measuring it to the outside edge instead
     /// reads metres more generous than the island kerb actually gets.
     /// </summary>
-    private static double? MinimumClearance(SweptRegion? body, IReadOnlyList<Obstacle> obstacles, Area? allowed)
+    private static double? MinimumClearance(IReadOnlyList<SweptRegion>? body, IReadOnlyList<Obstacle> obstacles, Area? allowed)
     {
         if (body is null) return null;
-        var loops = Loops(body);
+        var loops = body.SelectMany(Loops).ToArray();
         var minimum = double.PositiveInfinity;
         foreach (var obstacle in obstacles)
         {
@@ -297,6 +325,21 @@ public static class SiteFitAnalyzer
                         if (inside > depth) (depth, witness) = (inside, point);
                     }
                 }
+
+                // Touching without a proper crossing. A line that meets the outline exactly at a
+                // vertex and runs on into it, or one drawn corner to corner, never properly crosses
+                // an edge and may have no vertex inside, yet it runs through the body. Cut each
+                // segment where it meets the other shape and test the pieces between the cuts.
+                if (!contact.Crosses && contact.Distance <= TouchToleranceMetres)
+                {
+                    var through = DeepestInside(obstacle.Curve.Points, obstacle.Curve.IsClosed, outline, box);
+                    if (through.Depth > depth) (depth, witness) = through;
+                    if (obstacle.Curve.IsClosed)
+                    {
+                        var into = DeepestInside(outline, true, obstacle.Curve.Points, obstacle.Box);
+                        if (into.Depth > depth) (depth, witness) = into;
+                    }
+                }
             }
 
             var measure = contact.Crosses || depth >= 0.0
@@ -306,6 +349,72 @@ public static class SiteFitAnalyzer
         }
 
         return best;
+    }
+
+    /// <summary>
+    /// How deep the deepest piece of a polyline lies inside a polygon, and where; a depth of -1 when
+    /// no piece lies inside.
+    /// </summary>
+    /// <remarks>
+    /// Each segment is cut at every point where it meets the polygon's boundary -- crossings, touches
+    /// at a vertex, and the ends of a stretch running along an edge -- so between two cuts a piece is
+    /// wholly inside or wholly outside, and its midpoint says which. A piece running along an edge
+    /// has its midpoint on the boundary, at no depth, and does not count.
+    /// </remarks>
+    private static (double Depth, Point2 Point) DeepestInside(
+        IReadOnlyList<Point2> polyline, bool closed, IReadOnlyList<Point2> polygon, Box2 polygonBox)
+    {
+        var deepest = (Depth: -1.0, Point: polyline.Count > 0 ? polyline[0] : default);
+        var segments = closed ? polyline.Count : polyline.Count - 1;
+        var cuts = new List<double>();
+        for (var index = 0; index < segments; index++)
+        {
+            var p = polyline[index];
+            var q = polyline[(index + 1) % polyline.Count];
+            if (Box2.Of(p, q).Gap(polygonBox) > 0.0) continue;
+            var r = q - p;
+            var lengthSquared = (r.X * r.X) + (r.Y * r.Y);
+            if (lengthSquared <= Geometry2D.Epsilon) continue;
+            var length = Math.Sqrt(lengthSquared);
+            cuts.Clear();
+            cuts.Add(0.0);
+            cuts.Add(1.0);
+            for (var edge = 0; edge < polygon.Count; edge++)
+            {
+                var a = polygon[edge];
+                var b = polygon[(edge + 1) % polygon.Count];
+                var s = b - a;
+                var ap = a - p;
+                var denominator = Cross(r, s);
+                if (Math.Abs(denominator) > 1e-12)
+                {
+                    var t = Cross(ap, s) / denominator;
+                    var u = Cross(ap, r) / denominator;
+                    if (t is >= 0.0 and <= 1.0 && u is >= -1e-9 and <= 1.0 + 1e-9) cuts.Add(t);
+                }
+                else if (Math.Abs(Cross(ap, r)) <= 1e-9 * length)
+                {
+                    // Collinear: the ends of the shared stretch are cuts.
+                    cuts.Add(Math.Clamp(Dot(ap, r) / lengthSquared, 0.0, 1.0));
+                    cuts.Add(Math.Clamp(Dot(b - p, r) / lengthSquared, 0.0, 1.0));
+                }
+            }
+
+            cuts.Sort();
+            for (var cut = 1; cut < cuts.Count; cut++)
+            {
+                if ((cuts[cut] - cuts[cut - 1]) * length <= LengthToleranceMetres) continue;
+                var middle = p + (r * ((cuts[cut] + cuts[cut - 1]) * 0.5));
+                if (!polygonBox.Contains(middle) || !Geometry2D.Contains(polygon, middle)) continue;
+                var depth = Geometry2D.ClosestOnPolyline(middle, polygon).Distance;
+                if (depth > TouchToleranceMetres && depth > deepest.Depth) deepest = (depth, middle);
+            }
+        }
+
+        return deepest;
+
+        static double Cross(Point2 u, Point2 v) => (u.X * v.Y) - (u.Y * v.X);
+        static double Dot(Point2 u, Point2 v) => (u.X * v.X) + (u.Y * v.Y);
     }
 
     /// <summary>
@@ -400,15 +509,17 @@ public static class SiteFitAnalyzer
     {
         // The body is in conflict over this stretch only if its own outline is, not merely its clearance.
         var body = range.WorstMarginMetres < -clearanceMetres - 1e-9;
+
+        // Numbers invariant, as everywhere in the report the message is printed in.
         var where = range.EndStationMetres - range.StartStationMetres < 0.005
-            ? $"at station {range.StartStationMetres:0.0} m"
-            : $"from station {range.StartStationMetres:0.0} to {range.EndStationMetres:0.0} m";
-        var amount = conflict.Regions.Count > 0 ? $"{conflict.AreaSquareMetres:0.00} m²" : $"{conflict.LengthMetres:0.00} m";
+            ? FormattableString.Invariant($"at station {range.StartStationMetres:0.0} m")
+            : FormattableString.Invariant($"from station {range.StartStationMetres:0.0} to {range.EndStationMetres:0.0} m");
+        var amount = conflict.Regions.Count > 0 ? FormattableString.Invariant($"{conflict.AreaSquareMetres:0.00} m²") : FormattableString.Invariant($"{conflict.LengthMetres:0.00} m");
         var message = conflict.Kind switch
         {
             ViolationKind.ObstacleClearance => (body
                     ? $"The vehicle body sweep intersects an obstacle {where}."
-                    : $"The body clears this obstacle {where}, but the {clearanceMetres:0.00} m clearance allowance does not fit.") +
+                    : FormattableString.Invariant($"The body clears this obstacle {where}, but the {clearanceMetres:0.00} m clearance allowance does not fit.")) +
                 (conflict.Regions.Count > 0
                     ? $" The clearance envelope overlaps it by {amount}."
                     : $" The clearance envelope crosses it along {amount}."),
@@ -427,13 +538,13 @@ public static class SiteFitAnalyzer
         };
     }
 
-    /// <summary>The part of a region inside an obstacle: area for a closed one, length for an open one.</summary>
-    private static ObstacleOverlap Overlap(SweptRegion region, SiteCurve obstacle)
+    /// <summary>The part of a sweep inside an obstacle: area for a closed one, length for an open one.</summary>
+    private static ObstacleOverlap Overlap(IReadOnlyList<SweptRegion> region, SiteCurve obstacle)
     {
         if (obstacle.IsClosed)
         {
             var inside = Clipper.Intersect(
-                AccessFootprint.Paths(region),
+                Paths(region),
                 new PathsD { AccessFootprint.Path(obstacle.Points, true) },
                 FillRule.NonZero,
                 Precision);
@@ -446,7 +557,7 @@ public static class SiteFitAnalyzer
         var clipper = new ClipperD(Precision);
         var open = new PathD(obstacle.Points.Select(point => new PointD(point.X, point.Y)));
         clipper.AddOpenSubject(new PathsD { open });
-        clipper.AddClip(AccessFootprint.Paths(region));
+        clipper.AddClip(Paths(region));
         var closedSolution = new PathsD();
         var openSolution = new PathsD();
         clipper.Execute(ClipType.Intersection, FillRule.NonZero, closedSolution, openSolution);
@@ -460,23 +571,63 @@ public static class SiteFitAnalyzer
             : new ObstacleOverlap([], pieces, 0.0, length);
     }
 
-    /// <summary>The part of a region that lies outside an area it must stay within.</summary>
-    private static (IReadOnlyList<SweptRegion> Regions, double AreaSquareMetres) Outside(SweptRegion region, Area area)
+    /// <summary>The part of a sweep that lies outside an area it must stay within.</summary>
+    private static (IReadOnlyList<SweptRegion> Regions, double AreaSquareMetres) Outside(IReadOnlyList<SweptRegion> region, Area area)
     {
-        var outside = Clipper.Difference(AccessFootprint.Paths(region), area.Paths, FillRule.NonZero, Precision);
+        var outside = Clipper.Difference(Paths(region), area.Paths, FillRule.NonZero, Precision);
         var total = Math.Abs(outside.Sum(Clipper.Area));
         return total <= AreaToleranceSquareMetres ? ([], 0.0) : (ToRegions(outside), total);
     }
 
-    private static IReadOnlyList<SweptRegion> ToRegions(PathsD paths) =>
-        SweptRegionBuilder.Nest(paths.Select(SweptRegionBuilder.ToLoop));
+    private static IReadOnlyList<SweptRegion> ToRegions(PathsD paths) => SweptRegionBuilder.Nest(paths, Precision);
+
+    private static PathsD Paths(IReadOnlyList<SweptRegion> regions)
+    {
+        var paths = new PathsD();
+        foreach (var region in regions) paths.AddRange(AccessFootprint.Paths(region));
+        return paths;
+    }
+
+    /// <summary>
+    /// How wide a gap between two allowed boundaries is closed over, each side. Two areas drawn edge
+    /// to edge are rarely snapped exactly, and the hairline between them is not ground the vehicle
+    /// has left.
+    /// </summary>
+    public const double AllowedGapClosingMetres = 1e-3;
 
     /// <summary>
     /// Allowed boundaries as one area. They may overlap -- a yard drawn as two rectangles -- and a
-    /// vehicle crossing the edge of one into the other has not left the allowed area.
+    /// vehicle crossing the edge of one into the other has not left the allowed area. Nor has one
+    /// crossing a gap of a fraction of a millimetre between two drawn side by side.
     /// </summary>
-    private static PathsD UnionPaths(IEnumerable<IReadOnlyList<Point2>> loops) =>
-        Clipper.Union(new PathsD(loops.Select(loop => AccessFootprint.Path(loop, true))), new PathsD(), FillRule.NonZero, Precision);
+    /// <remarks>
+    /// The union is closed -- grown by <see cref="AllowedGapClosingMetres"/> and shrunk back -- which
+    /// fills any gap narrower than twice that. Closing also blunts the tip of a narrow notch in a
+    /// single boundary, and that notch is drawn, not a slip of the snap, so what closing adds inside
+    /// each boundary's own outline is taken away again. Only the fill between separate boundaries
+    /// is kept, and every edge stays where it was drawn.
+    /// </remarks>
+    private static PathsD UnionPaths(IEnumerable<IReadOnlyList<Point2>> loops)
+    {
+        var paths = loops.Select(loop => AccessFootprint.Path(loop, true)).ToArray();
+        var union = Clipper.Union(new PathsD(paths), new PathsD(), FillRule.NonZero, Precision);
+        if (paths.Length < 2) return union;
+
+        var ownFill = new PathsD();
+        foreach (var path in paths)
+        {
+            var single = new PathsD { path };
+            ownFill.AddRange(Clipper.Difference(Close(single), single, FillRule.NonZero, Precision));
+        }
+
+        var closed = Close(union);
+        return ownFill.Count == 0 ? closed : Clipper.Difference(closed, ownFill, FillRule.NonZero, Precision);
+
+        // Mitred joins keep corners square.
+        static PathsD Close(PathsD area) => Clipper.InflatePaths(
+            Clipper.InflatePaths(area, AllowedGapClosingMetres, JoinType.Miter, EndType.Polygon, 2.0, Precision),
+            -AllowedGapClosingMetres, JoinType.Miter, EndType.Polygon, 2.0, Precision);
+    }
 
     private static IReadOnlyList<IReadOnlyList<Point2>> Loops(SweptRegion region) =>
         [region.OuterBoundary, .. region.Holes];

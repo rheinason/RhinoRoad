@@ -130,6 +130,9 @@ public sealed record TowedUnitDefinition(
         if (MaximumArticulationDegrees is <= 0.0 or > 90.0 || double.IsNaN(MaximumArticulationDegrees))
             throw new InvalidDataException($"{vehicleId}/{Id}: the fold limit must be above zero and at most 90 degrees.");
         if (string.IsNullOrWhiteSpace(Id)) throw new InvalidDataException($"{vehicleId}: a towed unit is missing its id.");
+        if (!new[] { HitchOffsetMetres, WheelbaseMetres, WidthMetres, AxleTrackMetres, TyreWidthMetres }.All(double.IsFinite) ||
+            !BodyOutline.All(point => double.IsFinite(point.X) && double.IsFinite(point.Y)))
+            throw new InvalidDataException($"{vehicleId}/{Id}: every dimension must be a finite number.");
         if (WheelbaseMetres <= 0.0) throw new InvalidDataException($"{vehicleId}/{Id}: wheelbase must be positive.");
         if (WidthMetres <= 0.0) throw new InvalidDataException($"{vehicleId}/{Id}: width must be positive.");
         if (AxleTrackMetres <= 0.0 || AxleTrackMetres >= WidthMetres)
@@ -212,20 +215,33 @@ public sealed record VehicleDefinition(
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(Id)) throw new InvalidDataException("Vehicle id is required.");
+        if (!new[] { WidthMetres, WheelbaseMetres, FrontOverhangMetres, RearOverhangMetres, AxleTrackMetres, TyreWidthMetres }.All(double.IsFinite))
+            throw new InvalidDataException($"{Id}: every dimension must be a finite number.");
         if (WheelbaseMetres <= 0.0) throw new InvalidDataException($"{Id}: wheelbase must be positive.");
+        if (FrontOverhangMetres < 0.0 || RearOverhangMetres < 0.0)
+            throw new InvalidDataException($"{Id}: the front and rear overhangs cannot be negative.");
         if (WidthMetres <= 0.0) throw new InvalidDataException($"{Id}: width must be positive.");
         if (AxleTrackMetres <= 0.0 || AxleTrackMetres >= WidthMetres)
             throw new InvalidDataException($"{Id}: axle track must be positive and narrower than the body.");
         if (TyreWidthMetres <= 0.0 || TyreWidthMetres >= AxleTrackMetres)
             throw new InvalidDataException($"{Id}: tyre width must be positive and narrower than the axle track.");
         if (BodyOutline.Count < 3) throw new InvalidDataException($"{Id}: body outline needs at least three points.");
+        if (!BodyOutline.All(point => double.IsFinite(point.X) && double.IsFinite(point.Y)))
+            throw new InvalidDataException($"{Id}: every body outline point must be finite.");
         if (DrivingModes.Count == 0) throw new InvalidDataException($"{Id}: at least one driving mode is required.");
         foreach (var mode in DrivingModes.Values)
         {
-            if (mode.SpeedMetresPerSecond <= 0.0 || mode.MaximumWheelAngleRadians <= 0.0 || mode.LockToLockSeconds <= 0.0)
+            if (!double.IsFinite(mode.SpeedKilometresPerHour) || !double.IsFinite(mode.LockToLockSeconds) ||
+                mode.SpeedMetresPerSecond <= 0.0 || mode.LockToLockSeconds <= 0.0)
             {
                 throw new InvalidDataException($"{Id}/{mode.Id}: invalid driving mode values.");
             }
+
+            // At a right angle the wheel no longer steers along the vehicle at all (tan is unbounded).
+            if (!(mode.MaximumWheelAngleDegrees is > 0.0 and < 90.0))
+                throw new InvalidDataException($"{Id}/{mode.Id}: the maximum wheel angle must be above zero and below 90 degrees.");
+            if (!double.IsFinite(mode.DefaultClearanceMetres) || mode.DefaultClearanceMetres < 0.0)
+                throw new InvalidDataException($"{Id}/{mode.Id}: the default clearance cannot be negative.");
         }
 
         foreach (var protrusion in Protrusions) protrusion.Validate(Id);

@@ -58,10 +58,15 @@ public static class RoadReportBuilder
 
     public static string Html(string? text) => WebUtility.HtmlEncode(text ?? string.Empty);
 
-    /// <summary>One CSV field, quoted when it holds a comma, quote or line break.</summary>
+    /// <summary>
+    /// One CSV field, quoted when it holds a comma, quote or line break. A field a spreadsheet would
+    /// read as a formula -- one starting with =, +, -, @, a tab or a carriage return, such as a road
+    /// named "=HYPERLINK(...)" -- is prefixed with an apostrophe so it is shown as text instead.
+    /// </summary>
     public static string CsvField(string? text)
     {
         text ??= string.Empty;
+        if (text.Length > 0 && text[0] is '=' or '+' or '-' or '@' or '\t' or '\r') text = "'" + text;
         return text.IndexOfAny([',', '"', '\r', '\n']) < 0 ? text : "\"" + text.Replace("\"", "\"\"") + "\"";
     }
 

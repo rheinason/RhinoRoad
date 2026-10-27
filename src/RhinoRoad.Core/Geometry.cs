@@ -122,12 +122,12 @@ public static class Geometry2D
             var a = first[i];
             var b = first[(i + 1) % first.Count];
             var segmentBox = Box2.Of(a, b);
-            if (segmentBox.Gap(secondBox) >= best.Distance) continue;
+            if (CannotImprove(segmentBox.Gap(secondBox), best.Distance)) continue;
             for (var j = 0; j < secondSegments; j++)
             {
                 var c = second[j];
                 var d = second[(j + 1) % second.Count];
-                if (segmentBox.Gap(Box2.Of(c, d)) >= best.Distance) continue;
+                if (CannotImprove(segmentBox.Gap(Box2.Of(c, d)), best.Distance)) continue;
                 if (SegmentsIntersect(a, b, c, d))
                 {
                     var crossing = Intersection(a, b, c, d);
@@ -141,6 +141,15 @@ public static class Geometry2D
         }
 
         return best;
+
+        // A box gap is a lower bound on the distance, so a pair at least that far apart cannot get
+        // nearer -- except once the best is an exact touch (distance zero). Nothing is nearer than a
+        // touch, but a touch is not a crossing: a line through a vertex of the outline and on
+        // across it touches first and crosses later, and stopping at the touch would report a
+        // line through the body as merely grazing it. So touching pairs are still examined, for
+        // a crossing alone.
+        static bool CannotImprove(double gap, double bestDistance) =>
+            bestDistance > 0.0 ? gap >= bestDistance : gap > 0.0;
     }
 
     /// <summary>Distance from a point to the nearest edge of a polyline, and the point it lands on.</summary>

@@ -57,13 +57,8 @@ public static class AccessFootprint
             paths.Add(Path(region.OuterBoundary, true));
             foreach (var hole in region.Holes) paths.Add(Path(hole, false));
         }
-        var loops = Clipper.Union(paths, new PathsD(), FillRule.NonZero, 5)
-            .Select(path => (IReadOnlyList<Point2>)path.Select(p => new Point2(p.x, p.y)).ToArray()).ToArray();
-        var outers = loops.Where(loop => SweptRegionBuilder.SignedArea(loop) > 0).ToArray();
-        var holes = loops.Where(loop => SweptRegionBuilder.SignedArea(loop) < 0).ToArray();
-        return outers.Select(outer => new SweptRegion(outer, holes.Where(hole =>
-            outers.Where(candidate => Geometry2D.Contains(candidate, hole[0]))
-                .MinBy(candidate => Math.Abs(SweptRegionBuilder.SignedArea(candidate))) == outer).ToArray())).ToArray();
+        // Nesting is read from the union's own tree, not guessed from where each hole starts.
+        return SweptRegionBuilder.Nest(paths, 5);
     }
 
     /// <summary>Intersect a finite section with occupied space; never bridge gaps or holes.</summary>

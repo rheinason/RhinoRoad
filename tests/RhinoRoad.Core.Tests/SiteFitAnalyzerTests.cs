@@ -194,7 +194,7 @@ public sealed class SiteFitAnalyzerTests
         Assert.Empty(conflict.Regions);
         Assert.Equal(20.0, conflict.LengthMetres, 3);
         Assert.Equal(-0.15, conflict.Ranges.Single().WorstMarginMetres, 6);
-        Assert.Contains($"along {20.0:0.00} m", Assert.Single(outcome.Violations).Message);
+        Assert.Contains("along 20.00 m", Assert.Single(outcome.Violations).Message);
     }
 
     [Fact]
@@ -245,5 +245,111 @@ public sealed class SiteFitAnalyzerTests
 
             return best;
         }
+    }
+
+    /// <summary>The 5 m by 2.5 m body standing at (17.5, 0): corners at x 15 and 20, y ±1.25.</summary>
+    private static IReadOnlyList<VehiclePose> Standing() => [Pose(0.0, new Point2(17.5, 0.0), 0.0)];
+
+    [Fact]
+    public void A_line_through_an_outline_corner_and_across_the_body_is_a_body_conflict()
+    {
+        // The line touches the body exactly at its corner (20, -1.25), then crosses its far edge.
+        // The nearest-pair search stopped at the touch, so this read as the clearance alone not
+        // fitting while the region test said the body was in conflict.
+        var line = new SiteCurve([new(22.0, -3.25), new(16.0, 2.75)], false);
+
+        var contact = Geometry2D.Closest(Standing()[0].BodyOutlineWorldMetres, line.Points, true, false);
+        Assert.True(contact.Crosses);
+
+        var outcome = Check(Standing(), 0.30, [line]);
+        var conflict = Assert.Single(outcome.Conflicts);
+        Assert.True(conflict.BodyConflict);
+        Assert.True(conflict.Ranges.Single().WorstMarginMetres < -0.30);
+        var message = Assert.Single(outcome.Violations).Message;
+        Assert.Contains("body sweep intersects", message);
+        Assert.DoesNotContain("body clears", message);
+    }
+
+    [Fact]
+    public void A_line_drawn_corner_to_corner_through_the_body_is_a_body_conflict()
+    {
+        // Through (15, -1.25) and (20, 1.25): it never properly crosses an edge and has no vertex
+        // inside the body, yet it runs straight through it.
+        var line = new SiteCurve([new(13.0, -2.25), new(22.0, 2.25)], false);
+
+        var outcome = Check(Standing(), 0.30, [line]);
+
+        var conflict = Assert.Single(outcome.Conflicts);
+        Assert.True(conflict.BodyConflict);
+        Assert.True(conflict.Ranges.Single().WorstMarginMetres < -1.0 - 0.30);
+        Assert.Contains("body sweep intersects", Assert.Single(outcome.Violations).Message);
+    }
+
+    [Fact]
+    public void A_line_along_an_edge_touches_but_does_not_overlap()
+    {
+        var line = new SiteCurve([new(10.0, 1.25), new(25.0, 1.25)], false);
+
+        var margins = Check(Standing(), 0.0, [line]).ObstacleMargins!;
+
+        Assert.True(margins[0] > -1e-5);
+    }
+
+    [Fact]
+    public void Adjacent_allowed_areas_a_hairline_apart_read_as_one()
+    {
+        // Two yards drawn side by side with a 0.5 mm gap between them. The vehicle crosses the join;
+        // the sliver between them is not ground it has left.
+        var poses = Straight();
+        var outcome = Check(poses, 0.30, allowed: [Box(-10.0, -5.0, 20.0, 5.0), Box(20.0005, -5.0, 50.0, 5.0)]);
+
+        Assert.Empty(outcome.Conflicts);
+        Assert.Empty(outcome.Violations);
+        Assert.All(outcome.AllowedAreaMargins!, margin => Assert.True(margin > 3.0));
+    }
+
+    [Fact]
+    public void A_real_gap_between_allowed_areas_is_still_outside()
+    {
+        var poses = Straight();
+        var outcome = Check(poses, 0.30, allowed: [Box(-10.0, -5.0, 20.0, 5.0), Box(20.05, -5.0, 50.0, 5.0)]);
+
+        var conflict = Assert.Single(outcome.Conflicts);
+        Assert.Equal(ViolationKind.OutsideAllowedArea, conflict.Kind);
+    }
+
+    [Fact]
+    public void A_conflict_in_a_smaller_piece_of_a_disjoint_sweep_is_found()
+    {
+        // Two separate pieces: the large one clear, the small one standing in a building.
+        Point2[] large = Box(0.0, -1.25, 10.0, 1.25);
+        Point2[] small = Box(30.0, -1.0, 33.0, 1.0);
+        VehiclePose PoseOf(double station, Point2[] outline) =>
+            new(station, new Point3(outline[0].X, 0.0, 0.0), outline[1], 0.0, 0.0, TravelDirection.Forward, outline);
+        var poses = new[] { PoseOf(0.0, large), PoseOf(1.0, small) };
+        var sweep = SweptRegionBuilder.FromPoses(poses);
+        Assert.Equal(SweptRegionStatus.Disjoint, sweep.Status);
+        var building = new SiteCurve(Box(32.0, -3.0, 36.0, 3.0), true);
+
+        var largestOnly = SiteFitAnalyzer.Check(poses, sweep.Region, sweep.Region, [building], [], null, 0.0);
+        var everyPiece = SiteFitAnalyzer.Check(poses, sweep.Regions, sweep.Regions, [building], [], null, 0.0);
+
+        Assert.Empty(largestOnly.Conflicts);
+        var conflict = Assert.Single(everyPiece.Conflicts);
+        Assert.True(conflict.BodyConflict);
+        Assert.Equal(1.0 * 2.0, conflict.AreaSquareMetres, 6);
+        Assert.Equal(0.0, everyPiece.MinimumClearanceMetres);
+    }
+
+    [Fact]
+    public void Inflating_every_piece_of_a_sweep_keeps_them_all()
+    {
+        var sweep = SweptRegionBuilder.FromOutlines([Box(0.0, 0.0, 4.0, 2.0), Box(10.0, 0.0, 11.0, 1.0)]);
+
+        var inflated = SweptRegionBuilder.Inflate(sweep.Regions, 0.5);
+
+        Assert.Equal(2, inflated.Regions.Count);
+        Assert.Equal(SweptRegionStatus.Disjoint, inflated.Status);
+        Assert.True(inflated.Regions[1].AreaSquareMetres > 1.0);
     }
 }

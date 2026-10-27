@@ -82,8 +82,10 @@ internal static class RhinoRoadCatalog
             message = $"Imported {name} into {folder}.";
             return true;
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                                              or ArgumentException or NotSupportedException or System.Security.SecurityException)
         {
+            // A bad path (empty, invalid characters, unsupported format) is the user's input, not a crash.
             message = $"Could not import {path}: {exception.Message}";
             return false;
         }

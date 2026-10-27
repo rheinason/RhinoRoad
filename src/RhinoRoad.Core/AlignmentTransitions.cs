@@ -124,7 +124,10 @@ public static class AlignmentTransitions
         return runs;
     }
 
-    /// <summary>How far from a join a steering-rate violation may sit and still be that join's.</summary>
+    /// <summary>
+    /// How far from a join a steering-rate violation may sit and still be that join's. A violation
+    /// within reach of two joins is the nearer one's, and counted once.
+    /// </summary>
     public const double JoinToleranceMetres = 1.0;
 
     /// <summary>
@@ -145,24 +148,43 @@ public static class AlignmentTransitions
         ArgumentNullException.ThrowIfNull(runs);
         ArgumentNullException.ThrowIfNull(violations);
         var joins = new List<CurvatureJoin>();
+        if (runs.Count < 2) return joins;
+
+        // Each violation goes to its nearest join, so two joins closer together than twice the
+        // tolerance do not both claim the one violation between them.
+        var counts = new int[runs.Count];
+        foreach (var violation in violations)
+        {
+            if (violation.Kind != ViolationKind.SteeringRate) continue;
+            var nearest = -1;
+            var nearestDistance = double.PositiveInfinity;
+            for (var index = 1; index < runs.Count; index++)
+            {
+                var distance = Math.Abs(violation.StationMetres - runs[index].StartStationMetres);
+                if (distance > JoinToleranceMetres || distance >= nearestDistance) continue;
+                nearest = index;
+                nearestDistance = distance;
+            }
+
+            if (nearest > 0) counts[nearest]++;
+        }
+
         for (var index = 1; index < runs.Count; index++)
         {
-            var station = runs[index].StartStationMetres;
-            var count = violations.Count(violation =>
-                violation.Kind == ViolationKind.SteeringRate &&
-                Math.Abs(violation.StationMetres - station) <= JoinToleranceMetres);
-            if (count == 0) continue;
+            if (counts[index] == 0) continue;
             joins.Add(new CurvatureJoin(
-                station,
+                runs[index].StartStationMetres,
                 RequiredLengthMetres(vehicle, mode, runs[index - 1].CurvaturePerMetre, runs[index].CurvaturePerMetre),
-                count));
+                counts[index]));
         }
 
         return joins;
     }
 
     /// <summary>
-    /// The sentence that explains those joins to a reader, in the current culture's number format.
+    /// The sentence that explains those joins to a reader. Numbers are invariant, as in the report,
+    /// and each station carries its unit, so a list of them reads "12.5 m, 30.0 m" whatever the
+    /// machine's decimal separator.
     /// </summary>
     /// <param name="joins">The result of <see cref="JoinsWithRateViolations"/>; must not be empty.</param>
     /// <param name="everyStretchFits">Whether every run is long enough to hold the transitions at its ends.</param>
@@ -170,14 +192,14 @@ public static class AlignmentTransitions
     {
         ArgumentNullException.ThrowIfNull(joins);
         if (joins.Count == 0) throw new ArgumentException("There are no joins to describe.", nameof(joins));
-        var stations = string.Join(", ", joins.Select(join => $"{join.StationMetres:0.0}"));
+        var stations = string.Join(", ", joins.Select(join => FormattableString.Invariant($"{join.StationMetres:0.0} m")));
         var shortest = joins.Min(join => join.RequiredTransitionMetres);
         var longest = joins.Max(join => join.RequiredTransitionMetres);
         var needed = Math.Abs(longest - shortest) < 0.05
-            ? $"{longest:0.0} m"
-            : $"{shortest:0.0} to {longest:0.0} m";
+            ? FormattableString.Invariant($"{longest:0.0} m")
+            : FormattableString.Invariant($"{shortest:0.0} to {longest:0.0} m");
         var lead =
-            $"The drawn line changes curvature instantly at {joins.Count} join(s) (stations {stations} m); " +
+            $"The drawn line changes curvature instantly at {joins.Count} join(s) (stations {stations}); " +
             $"a vehicle needs a transition there of {needed}";
         return everyStretchFits
             ? lead + " — every stretch is long enough to fit one, so easing the joins with transitions would remove these steering-rate violations."

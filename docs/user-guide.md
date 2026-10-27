@@ -98,9 +98,12 @@ Rules:
 - The **id must be unique**: it may not duplicate a built-in preset or a vehicle in another user file.
   The offending vehicle is skipped with a message ("id … is already used by a built-in preset;
   choose a different id").
-- Dimensions are validated: wheelbase and width positive, axle track narrower than the body, tyre
-  width narrower than the axle track, an outline of at least three points, at least one driving mode,
-  and a fold limit above zero and at most 90°.
+- Dimensions are validated: wheelbase and width positive, overhangs not negative, axle track narrower
+  than the body, tyre width narrower than the axle track, an outline of at least three points, at least
+  one driving mode, each with a maximum wheel angle above 0° and below 90° and a default clearance that
+  is not negative, and a fold limit above zero and at most 90°. Every value must be a finite number.
+- A file with a JSON `null` where a vehicle, a mode, an outline or a point should be is reported by
+  `RRVehicles` as an error in that file; the other files still load.
 - **Whatever `validationStatus` the file says, a user vehicle loads as `UserDefined`**: not from the
   Vejregler source and not validated. Every output that quotes a status says so.
 - User vehicles appear in the dialog, the edit palette, the Grasshopper components and the area search
@@ -245,7 +248,13 @@ conflict is located on the road as the stretch of stations whose poses come with
 the worst margin in that stretch. The inspector groups them as problem ranges. The minimum clearance
 accounts for holes (an obstacle on a roundabout island is measured to the island's edge, not the outer
 boundary), and an obstacle completely covered by the body, such as a bollard under a trailer, counts
-as a conflict.
+as a conflict. An open obstacle line that runs into the body through one of its corners, or corner to
+corner across it, is a conflict of the body, not only of its clearance.
+
+Several allowed-area boundaries act as one area, whether they overlap or are drawn edge to edge: a gap
+of under 2 mm between two separate boundaries is closed (a notch within one boundary is kept as
+drawn). A sweep that falls apart into separate pieces is reported as such, and every piece is checked
+against the site.
 
 On bake:
 
@@ -392,6 +401,9 @@ for the globally smallest possible bend or junction and do not propose kerb geom
   envelopes, route and conflict areas, validation status, whether the road is out of date) and a CSV of
   the per-station samples beside it (road name first). A flat route's grade figures are omitted rather
   than shown as zero, and terrain draping is stated when used. `-RRReportRoad` takes the `.html` path.
+  Every number in the report and the CSV, including those inside check messages, uses a decimal point
+  whatever the machine's regional settings, and a road name a spreadsheet would read as a formula is
+  written to the CSV as text.
 
 ## Meaning of the outputs
 
