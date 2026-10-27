@@ -5,12 +5,14 @@ public readonly record struct Point2(double X, double Y)
     public static Point2 operator +(Point2 a, Point2 b) => new(a.X + b.X, a.Y + b.Y);
     public static Point2 operator -(Point2 a, Point2 b) => new(a.X - b.X, a.Y - b.Y);
     public static Point2 operator *(Point2 point, double scale) => new(point.X * scale, point.Y * scale);
+    [System.Text.Json.Serialization.JsonIgnore]
     public double Length => Math.Sqrt((X * X) + (Y * Y));
     public double DistanceTo(Point2 other) => (this - other).Length;
 }
 
 public readonly record struct Point3(double X, double Y, double Z)
 {
+    [System.Text.Json.Serialization.JsonIgnore]
     public Point2 XY => new(X, Y);
 }
 
