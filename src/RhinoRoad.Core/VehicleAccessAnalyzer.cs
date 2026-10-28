@@ -85,8 +85,10 @@ public sealed class VehicleAccessAnalyzer
                         ViolationKind.ArticulationAngle,
                         sample.StationMetres,
                         sample.PositionMetres,
-                        $"The {towed.Name} is folded {ToDegrees(fold):0.0}° against the unit towing it, " +
-                        $"which reaches the assumed fold limit of {towed.MaximumArticulationDegrees:0.#}°. " +
+                        FormattableString.Invariant(
+                            $"The {towed.Name} is folded {ToDegrees(fold):0.0}° against the unit towing it, ") +
+                        FormattableString.Invariant(
+                            $"which reaches the assumed fold limit of {towed.MaximumArticulationDegrees:0.#}°. ") +
                         "The source publishes no limit; this one is a RhinoRoad assumption."));
                 }
 
@@ -97,7 +99,8 @@ public sealed class VehicleAccessAnalyzer
                         ViolationKind.ArticulationAngle,
                         sample.StationMetres,
                         sample.PositionMetres,
-                        $"The {vehicle.TowedUnits[unit].Name} is folded {ToDegrees(fold):0.0}° against the unit " +
+                        FormattableString.Invariant(
+                            $"The {vehicle.TowedUnits[unit].Name} is folded {ToDegrees(fold):0.0}° against the unit ") +
                         "towing it. The combination has jackknifed, and the swept area past this point " +
                         "is not a shape any driver reaches."));
                 }

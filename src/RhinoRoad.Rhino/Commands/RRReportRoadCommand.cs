@@ -179,8 +179,11 @@ public sealed class RRReportRoadCommand : Command
             run.Analysis.MaximumArticulationAnglesRadians,
             run.Geometry.SiteFit?.Conflicts ?? [],
             outOfDate,
-            run.Geometry.BodyRegion is { } body ? [body] : [],
-            run.Geometry.ClearanceRegion is { } clearance ? [clearance] : [])
+            // Every piece of a disjoint sweep, so the plan shows what the site check measured.
+            run.Geometry.BodyRegions.Count > 0 ? run.Geometry.BodyRegions
+                : run.Geometry.BodyRegion is { } body ? [body] : [],
+            run.Geometry.ClearanceRegions.Count > 0 ? run.Geometry.ClearanceRegions
+                : run.Geometry.ClearanceRegion is { } clearance ? [clearance] : [])
         {
             HasElevation = run.HasElevation,
             TerrainDraped = run.TerrainDraped,
