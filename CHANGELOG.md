@@ -5,9 +5,9 @@ published on Yak; each earlier entry is summarised from the release's commit tit
 alters an existing result, it says whether a saved road needs an **Update** (`RRUpdateRoad`) to pick it
 up. Nothing recomputes or rebakes on its own.
 
-## Unreleased
+## 0.6.0-beta (2026-10-28)
 
-This is the 0.5.0-beta → next tranche: most of the first-draft review (see
+Most of the first-draft review (see
 [docs/history/improvements.md](docs/history/improvements.md)) is implemented.
 
 ### Behaviour changes you should know about
