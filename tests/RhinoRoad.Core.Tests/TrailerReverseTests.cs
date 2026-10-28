@@ -182,7 +182,7 @@ public sealed class TrailerReverseTests
         Assert.DoesNotContain(analysis.Violations, item => item.Kind == ViolationKind.ArticulationAngle);
 
         var replay = ManoeuvreReplayService.Replay(
-            vehicle, mode, new ManoeuvreDefinition(1, start.RearAxleCentreMetres, 0.0, TravelDirection.Forward, controls));
+            vehicle, mode, new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, start.RearAxleCentreMetres, 0.0, TravelDirection.Forward, controls));
         Assert.Equal(route, replay.Samples);
         Assert.Equal(state, replay.EndState);
     }
@@ -210,7 +210,7 @@ public sealed class TrailerReverseTests
         var complete = route.Take(proposal.Leg.FromIndex + 1)
             .Concat(proposal.Leg.Samples.Skip(1)).ToArray();
         var replay = ManoeuvreReplayService.Replay(vehicle, mode,
-            new ManoeuvreDefinition(1, start.RearAxleCentreMetres, 0.0,
+            new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, start.RearAxleCentreMetres, 0.0,
                 TravelDirection.Forward, new[] { turn }.Concat(proposal.Controls).ToArray()));
 
         Assert.Equal(complete, replay.Samples);
@@ -288,7 +288,7 @@ public sealed class TrailerReverseTests
         Assert.True(corrected is not null,
             string.Join(", ", proposals.Select(item => $"{item.Controls.Count}:{item.TrailerMissMetres:0.0}")));
         var replay = ManoeuvreReplayService.Replay(vehicle, mode,
-            new ManoeuvreDefinition(1, start.RearAxleCentreMetres, 0.0,
+            new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, start.RearAxleCentreMetres, 0.0,
                 TravelDirection.Forward, corrected.Controls));
         Assert.Equal(corrected.Leg.Samples, replay.Samples);
     }
@@ -356,7 +356,7 @@ public sealed class TrailerReverseTests
 
         controls.Add(dockControl);
         var replay = ManoeuvreReplayService.Replay(vehicle, mode,
-            new ManoeuvreDefinition(1, new(0, 0, 0), 0, TravelDirection.Forward, controls));
+            new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, new(0, 0, 0), 0, TravelDirection.Forward, controls));
         Assert.Equal(route.Concat(selected.Samples.Skip(1)), replay.Samples);
     }
 

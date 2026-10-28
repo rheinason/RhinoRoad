@@ -483,6 +483,28 @@ internal sealed class JourneyEditForm : Form
             Replace(definition, journey, index, control with { SpeedKilometresPerHour = chosen }, "RhinoRoad change control speed");
         };
 
+        // A stop the route would not otherwise have: the vehicle halts before this leg and turns the
+        // wheel where it stands. A change of direction is a stop already, so there it is shown set and
+        // cannot be cleared. It is never assumed anywhere else, because a stop shrinks the sweep.
+        var previousDirection = index == 0 ? journey.StartDirection : journey.Controls[index - 1].Direction;
+        var cusp = previousDirection != control.Direction;
+        var stop = new CheckBox
+        {
+            Text = "Stop first",
+            Checked = control.FromStandstill || cusp,
+            Enabled = !cusp,
+            ToolTip = cusp
+                ? "The vehicle changes direction here, which is a standstill: the wheel is turned before it moves."
+                : "Stop before this leg and turn the wheel at a standstill, so the leg starts at the lock it is driven on. "
+                  + "Only tick it where the driver really stops: a stop the vehicle does not make understates the sweep."
+        };
+        stop.CheckedChanged += (_, _) =>
+        {
+            if (cusp || stop.Checked is not bool chosen || chosen == control.FromStandstill) return;
+            Replace(definition, journey, index, control with { FromStandstill = chosen },
+                chosen ? "RhinoRoad stop before control" : "RhinoRoad roll into control");
+        };
+
         // Grips can only move a control, so adding or removing one is offered here.
         var more = new Button { Text = "…", Width = 28, ToolTip = "Insert a control before or after this one, or delete it." };
         var menu = new ContextMenu();
@@ -502,7 +524,7 @@ internal sealed class JourneyEditForm : Form
             Orientation = Orientation.Horizontal,
             Spacing = 6,
             VerticalContentAlignment = VerticalAlignment.Center,
-            Items = { number, direction, kind, heading, speed, more }
+            Items = { number, direction, kind, heading, speed, stop, more }
         };
         row.MouseEnter += (_, _) => Highlight(index);
         row.MouseLeave += (_, _) => Highlight(null);
@@ -546,7 +568,7 @@ internal sealed class JourneyEditForm : Form
                         ? $"{value:0.#} → {mode.SpeedKilometresPerHour:0.#}"
                         : $"{value:0.#} km/h"
                 }
-                : new ListItem { Key = ModeSpeedKey, Text = $"Mode {mode.SpeedKilometresPerHour:0.#}" });
+                : new ListItem { Key = ModeSpeedKey, Text = DefaultSpeedText(definition, mode, control) });
         }
 
         dropDown.SelectedKey = control.SpeedKilometresPerHour is double own
@@ -554,9 +576,23 @@ internal sealed class JourneyEditForm : Form
             : ModeSpeedKey;
         dropDown.ToolTip = $"The speed this leg is driven at. {mode.Name} runs at {mode.SpeedKilometresPerHour:0.#} km/h, "
             + $"where the wheel takes {mode.CentreToLockMetres():0.#} m to reach its lock; a slower leg, such as a reverse "
-            + "at walking pace, gets there in less distance. The lock is the mode's whatever the speed, and a speed above "
+            + "at walking pace, gets there in less distance. A reverse with no speed of its own is driven at the "
+            + "vehicle's manoeuvring speed, mode B's. The lock is the mode's whatever the speed, and a speed above "
             + "the mode's is driven at the mode's.";
         return dropDown;
+    }
+
+    /// <summary>
+    /// What a control with no speed of its own is driven at: the mode's, or for a reverse the
+    /// vehicle's manoeuvring speed (<see cref="ManoeuvreReplayService.LegSpeedKilometresPerHour"/>).
+    /// </summary>
+    private static string DefaultSpeedText(VehicleAccessDefinition definition, DrivingModeDefinition mode, ManoeuvreControl control)
+    {
+        var vehicle = Catalog.Get(definition.VehicleId);
+        return ManoeuvreReplayService.LegSpeedKilometresPerHour(vehicle, mode, control with { SpeedKilometresPerHour = null })
+            is double reversing
+            ? $"Reversing {reversing:0.#}"
+            : $"Mode {mode.SpeedKilometresPerHour:0.#}";
     }
 
     private void Replace(VehicleAccessDefinition definition, ManoeuvreDefinition journey, int index,

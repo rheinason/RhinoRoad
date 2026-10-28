@@ -183,7 +183,8 @@ public sealed class RRReportRoadCommand : Command
             run.Geometry.ClearanceRegion is { } clearance ? [clearance] : [])
         {
             HasElevation = run.HasElevation,
-            TerrainDraped = run.TerrainDraped
+            TerrainDraped = run.TerrainDraped,
+            UpgradeWarning = saved.UpgradeWarning
         };
     }
 

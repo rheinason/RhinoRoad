@@ -68,7 +68,7 @@ public sealed class AccessDefinitionTests
     public void Reconcile_preserves_intent_through_moves_insertions_and_deletions()
     {
         var stored = new ManoeuvreDefinition(
-            1,
+            ManoeuvreDefinition.CurrentSchemaVersion,
             new Point3(0, 0, 0),
             0,
             TravelDirection.Forward,
@@ -108,7 +108,7 @@ public sealed class AccessDefinitionTests
     [Fact]
     public void Finish_displaced_from_the_end_becomes_aim()
     {
-        var stored = new ManoeuvreDefinition(1, new Point3(0, 0, 0), 0, TravelDirection.Forward,
+        var stored = new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, new Point3(0, 0, 0), 0, TravelDirection.Forward,
             [new ManoeuvreControl(new Point3(10, 0, 0), TravelDirection.Forward, ManoeuvreControlKind.Finish)]);
         var reconciled = ManoeuvreControlReconciler.Reconcile(stored,
             [new Point3(0, 0, 0), new Point3(10, 0, 0), new Point3(20, 0, 0)]);
@@ -118,7 +118,7 @@ public sealed class AccessDefinitionTests
     [Fact]
     public void Changing_start_direction_flips_every_leg_and_preserves_reversals()
     {
-        var stored = new ManoeuvreDefinition(1, new Point3(0, 0, 0), 0, TravelDirection.Forward,
+        var stored = new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, new Point3(0, 0, 0), 0, TravelDirection.Forward,
         [
             new ManoeuvreControl(new Point3(10, 0, 0), TravelDirection.Forward),
             new ManoeuvreControl(new Point3(5, 5, 0), TravelDirection.Reverse),

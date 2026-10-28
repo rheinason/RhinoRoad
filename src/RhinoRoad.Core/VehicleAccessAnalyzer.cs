@@ -75,7 +75,10 @@ public sealed class VehicleAccessAnalyzer
                 towedTracks[unit].Add(towedPoses[unit].AxleCentreMetres);
                 maximumFolds[unit] = Math.Max(maximumFolds[unit], fold);
                 var towed = vehicle.TowedUnits[unit];
-                if (fold > towed.MaximumArticulationRadians && !pastFoldLimit[unit])
+                // Reaching the limit counts, as it does for FoldLimit and every generator: they stop
+                // at the fold rather than past it, so a route sitting exactly on it is one none of
+                // them would have produced.
+                if (fold >= towed.MaximumArticulationRadians && !pastFoldLimit[unit])
                 {
                     pastFoldLimit[unit] = true;
                     violations.Add(new AnalysisViolation(
@@ -83,7 +86,7 @@ public sealed class VehicleAccessAnalyzer
                         sample.StationMetres,
                         sample.PositionMetres,
                         $"The {towed.Name} is folded {ToDegrees(fold):0.0}° against the unit towing it, " +
-                        $"which exceeds the assumed fold limit of {towed.MaximumArticulationDegrees:0.#}°. " +
+                        $"which reaches the assumed fold limit of {towed.MaximumArticulationDegrees:0.#}°. " +
                         "The source publishes no limit; this one is a RhinoRoad assumption."));
                 }
 

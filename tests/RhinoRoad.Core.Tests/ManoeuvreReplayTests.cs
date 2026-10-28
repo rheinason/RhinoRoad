@@ -10,7 +10,7 @@ public sealed class ManoeuvreReplayTests
         var vehicle = VehicleCatalog.LoadEmbedded().Get("PV");
         var mode = vehicle.DrivingModes["B"];
         var definition = new ManoeuvreDefinition(
-            1,
+            ManoeuvreDefinition.CurrentSchemaVersion,
             new Point3(0, 0, 0),
             Math.PI - 0.03,
             TravelDirection.Forward,

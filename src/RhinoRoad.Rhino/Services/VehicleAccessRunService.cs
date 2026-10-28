@@ -23,6 +23,13 @@ internal sealed record PreparedVehicleAccess(
 
     /// <summary>The route has a real vertical profile: a curve with its own Z, or any route draped onto terrain.</summary>
     public bool HasElevation => TerrainDraped || Definition.SourceKind != PathSourceKind.Interactive;
+
+    /// <summary>
+    /// Set when the road was read from an older schema, whose route this run derived again the way
+    /// this RhinoRoad drives it (<see cref="VehicleAccessDefinition.UpgradeWarning"/>). The saved
+    /// definition is written at the current schema, so it is said once, by the run that re-derives it.
+    /// </summary>
+    public string? UpgradeWarning { get; init; }
 }
 
 internal static class VehicleAccessRunService
@@ -145,7 +152,11 @@ internal static class VehicleAccessRunService
             prepared = new PreparedVehicleAccess(updated, source, route, analysis, geometry, violations, obstacles, boundaries)
             {
                 TerrainDraped = stored.TerrainObjectId.HasValue,
-                TerrainMisses = terrainMisses
+                TerrainMisses = terrainMisses,
+                // A configured definition may have been rebuilt from the dialog; the stored one says
+                // what schema the road was saved at.
+                UpgradeWarning = stored.UpgradeWarning
+                    ?? (AccessDefinitionStore.TryRead(source, out var saved, out _) ? saved?.UpgradeWarning : null)
             };
             error = string.Empty;
             return true;

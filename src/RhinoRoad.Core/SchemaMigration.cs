@@ -14,13 +14,52 @@ namespace RhinoRoad.Core;
 /// </remarks>
 public static class SchemaMigration
 {
-    /// <summary>The upgraders for the saved definition, keyed by the version each upgrades from. None yet.</summary>
-    internal static IReadOnlyDictionary<int, Action<JsonObject>> DefinitionUpgraders { get; } =
-        new Dictionary<int, Action<JsonObject>>();
+    /// <summary>
+    /// Where an upgrader records the schema a definition was first read at, so that the reader can
+    /// say a road was upgraded. Removed again before the definition is deserialized.
+    /// </summary>
+    internal const string UpgradedFromSchemaProperty = "upgradedFromSchema";
 
-    /// <summary>The upgraders for the nested manoeuvre, keyed by the version each upgrades from. None yet.</summary>
+    /// <summary>The upgraders for the saved definition, keyed by the version each upgrades from.</summary>
+    internal static IReadOnlyDictionary<int, Action<JsonObject>> DefinitionUpgraders { get; } =
+        new Dictionary<int, Action<JsonObject>>
+        {
+            // Version 2 only adds properties with defaults (the terrain, the wheel-edge paths, the
+            // mirror allowance), so nothing is rewritten. What changed is how the saved manoeuvre's
+            // reverses replay, which is recorded so the road can say its route may have changed.
+            [1] = RecordUpgradeFrom(1)
+        };
+
+    /// <summary>The upgraders for the nested manoeuvre, keyed by the version each upgrades from.</summary>
     internal static IReadOnlyDictionary<int, Action<JsonObject>> ManoeuvreUpgraders { get; } =
-        new Dictionary<int, Action<JsonObject>>();
+        new Dictionary<int, Action<JsonObject>>
+        {
+            // Version 2 adds the per-leg speed and the sealed leg, both defaulted -- a version 1
+            // control is a leg at the mode's speed that may be rewound into, as it always was. Its
+            // reverses are planned the new way; the definition's upgrader records that.
+            [1] = _ => { }
+        };
+
+    /// <summary>
+    /// Takes the schema the upgraders recorded off <paramref name="root"/>, or null when it was read
+    /// at the current schema.
+    /// </summary>
+    public static int? TakeUpgradedFromSchema(JsonObject root)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        if (!root.TryGetPropertyValue(UpgradedFromSchemaProperty, out var recorded)) return null;
+        root.Remove(UpgradedFromSchemaProperty);
+        return recorded is JsonValue value && value.TryGetValue<int>(out var version) ? version : null;
+    }
+
+    /// <summary>
+    /// An upgrader that records <paramref name="version"/> as the schema the definition was first
+    /// read at, unless an earlier upgrader in the chain already recorded an older one.
+    /// </summary>
+    private static Action<JsonObject> RecordUpgradeFrom(int version) => node =>
+    {
+        if (!node.ContainsKey(UpgradedFromSchemaProperty)) node[UpgradedFromSchemaProperty] = version;
+    };
 
     public static void UpgradeDefinition(JsonObject root) =>
         UpgradeDefinition(root, VehicleAccessDefinition.CurrentSchemaVersion, ManoeuvreDefinition.CurrentSchemaVersion,

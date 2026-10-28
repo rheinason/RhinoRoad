@@ -69,6 +69,111 @@ public sealed class LegSpeedTests
         Assert.All(leg.Samples.Skip(1), sample => Assert.Equal(speed, sample.SpeedKilometresPerHour));
     }
 
+    /// <summary>
+    /// Reversing is a slow manoeuvre: the vehicle manoeuvres at its mode B's speed, whatever mode the
+    /// journey is in, and never faster than that mode.
+    /// </summary>
+    [Fact]
+    public void The_manoeuvring_speed_is_mode_Bs_or_at_most_five_and_never_above_the_mode()
+    {
+        foreach (var vehicle in Catalog.Vehicles)
+        foreach (var mode in vehicle.DrivingModes.Values)
+            Assert.Equal(Math.Min(mode.SpeedKilometresPerHour, 5.0), vehicle.ManoeuvringSpeedKilometresPerHour(mode));
+
+        var pv = Catalog.Get("PV");
+        var modeA = pv.DrivingModes["A"];
+        var onlyA = pv with { DrivingModes = new Dictionary<string, DrivingModeDefinition> { ["A"] = modeA } };
+        Assert.Equal(VehicleDefinition.DefaultManoeuvringSpeedKilometresPerHour, onlyA.ManoeuvringSpeedKilometresPerHour(modeA));
+        var slow = modeA with { SpeedKilometresPerHour = 3.0 };
+        Assert.Equal(3.0, onlyA.ManoeuvringSpeedKilometresPerHour(slow));
+        var fastB = pv with
+        {
+            DrivingModes = new Dictionary<string, DrivingModeDefinition>
+            {
+                ["A"] = modeA, ["B"] = pv.DrivingModes["B"] with { SpeedKilometresPerHour = 8.0 }
+            }
+        };
+        Assert.Equal(8.0, fastB.ManoeuvringSpeedKilometresPerHour(modeA));
+    }
+
+    /// <summary>
+    /// A reverse with no speed of its own runs at the manoeuvring speed in mode A -- exactly as one
+    /// asked for 5 km/h, with mode A's lock -- while a forward leg keeps the mode's speed and a
+    /// reverse in mode B, already at 5 km/h, carries no speed at all.
+    /// </summary>
+    [Theory]
+    [InlineData("PV")]
+    [InlineData("BUS12")]
+    [InlineData("SVT")]
+    [InlineData("PVT")]
+    public void A_reverse_with_no_speed_of_its_own_runs_at_the_manoeuvring_speed(string vehicleId)
+    {
+        var vehicle = Catalog.Get(vehicleId);
+        var modeA = vehicle.DrivingModes["A"];
+        var start = new VehicleState(new(0, 0, 0), 0.0, 0.0, TravelDirection.Reverse, 0.0);
+        var route = new[] { ManoeuvreReplayService.StateSample(start, vehicle) };
+        var reverse = new ManoeuvreControl(new Point3(-25, -6, 0), TravelDirection.Reverse);
+
+        var byDefault = ManoeuvreReplayService.PlanControl(vehicle, modeA, route, 0, start, reverse);
+        var atFive = ManoeuvreReplayService.PlanControl(vehicle, modeA, route, 0, start,
+            reverse with { SpeedKilometresPerHour = 5.0 });
+
+        Assert.Equal(5.0, ManoeuvreReplayService.LegSpeedKilometresPerHour(vehicle, modeA, reverse));
+        Assert.Equal(atFive.Samples, byDefault.Samples);
+        Assert.Equal(atFive.EndState, byDefault.EndState);
+        Assert.All(byDefault.Samples.Skip(1), sample => Assert.Equal(5.0, sample.SpeedKilometresPerHour));
+        // The lock is mode A's, not mode B's: slower, not tighter.
+        var lockCurvature = Math.Tan(modeA.MaximumWheelAngleRadians) / vehicle.WheelbaseMetres;
+        Assert.All(byDefault.Samples, sample => Assert.True(Math.Abs(sample.SignedCurvaturePerMetre) <= lockCurvature + 1e-9));
+
+        var forward = new ManoeuvreControl(new Point3(25, 6, 0), TravelDirection.Forward);
+        Assert.Null(ManoeuvreReplayService.LegSpeedKilometresPerHour(vehicle, modeA, forward));
+        var forwardStart = start with { Direction = TravelDirection.Forward };
+        var forwardLeg = ManoeuvreReplayService.PlanControl(vehicle, modeA,
+            [ManoeuvreReplayService.StateSample(forwardStart, vehicle)], 0, forwardStart, forward);
+        Assert.All(forwardLeg.Samples, sample => Assert.Null(sample.SpeedKilometresPerHour));
+
+        var modeB = vehicle.DrivingModes["B"];
+        Assert.Null(ManoeuvreReplayService.LegSpeedKilometresPerHour(vehicle, modeB, reverse));
+        Assert.All(ManoeuvreReplayService.PlanControl(vehicle, modeB, route, 0, start, reverse).Samples,
+            sample => Assert.Null(sample.SpeedKilometresPerHour));
+    }
+
+    /// <summary>A reverse's own speed still wins, clamped to the mode's as for any leg.</summary>
+    [Fact]
+    public void A_reverse_with_a_speed_of_its_own_keeps_it()
+    {
+        var vehicle = Catalog.Get("PV");
+        var modeA = vehicle.DrivingModes["A"];
+        var reverse = new ManoeuvreControl(new Point3(-25, -6, 0), TravelDirection.Reverse);
+
+        Assert.Equal(3.0, ManoeuvreReplayService.LegSpeedKilometresPerHour(vehicle, modeA, reverse with { SpeedKilometresPerHour = 3.0 }));
+        Assert.Equal(10.0, ManoeuvreReplayService.LegSpeedKilometresPerHour(vehicle, modeA, reverse with { SpeedKilometresPerHour = 10.0 }));
+        Assert.Equal(15.0, ManoeuvreReplayService.LegSpeedKilometresPerHour(vehicle, modeA, reverse with { SpeedKilometresPerHour = 40.0 }));
+    }
+
+    /// <summary>
+    /// The analyzer prices the reverse at the speed it was driven at: the same wheel movement over
+    /// the same distance is a third of the rate at 5 km/h that it is at 15.
+    /// </summary>
+    [Fact]
+    public void The_analyzer_prices_a_mode_A_reverse_at_the_manoeuvring_speed()
+    {
+        var vehicle = Catalog.Get("PV");
+        var modeA = vehicle.DrivingModes["A"];
+        var start = new VehicleState(new(0, 0, 0), 0.0, 0.0, TravelDirection.Reverse, 0.0);
+        var reverse = new ManoeuvreControl(new Point3(-12, -8, 0), TravelDirection.Reverse);
+
+        var replay = ManoeuvreReplayService.Replay(vehicle, modeA, Journey(start, reverse));
+        var analysis = new VehicleAccessAnalyzer().Analyze(vehicle, modeA, replay.Samples);
+        var asIfAtFifteen = new VehicleAccessAnalyzer().Analyze(vehicle, modeA,
+            replay.Samples.Select(sample => sample with { SpeedKilometresPerHour = null }).ToArray());
+
+        Assert.DoesNotContain(analysis.Violations, item => item.Kind == ViolationKind.SteeringRate);
+        Assert.Equal(asIfAtFifteen.MaximumSteeringRateRadiansPerSecond / 3.0,
+            analysis.MaximumSteeringRateRadiansPerSecond, 9);
+    }
+
     [Fact]
     public void A_speed_above_the_mode_drives_exactly_as_the_mode_and_records_the_mode_speed()
     {

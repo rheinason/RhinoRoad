@@ -55,11 +55,17 @@ public static class MultiJointReverseDocking
     // (TowedUnitDefinition.MaximumArticulationDegrees): short of the right angle, at the fold a
     // driver would stop and pull forward from. The leg returned never contains a sample past it.
 
-    /// <summary>Fold from which the search starts paying for it — gently, because tight docks need it.</summary>
-    private const double SoftFoldRadians = 50.0 * Math.PI / 180.0;
+    /// <summary>
+    /// How far short of the fold limit the search starts paying for fold — gently, because tight
+    /// docks need it: 50 degrees against the default 65.
+    /// </summary>
+    private const double SoftFoldMarginDegrees = 15.0;
 
-    /// <summary>Fold from which the barrier steepens a hundredfold, keeping plans clear of the stop.</summary>
-    private const double HardFoldRadians = 60.0 * Math.PI / 180.0;
+    /// <summary>
+    /// How far short of the fold limit the barrier steepens a hundredfold, keeping plans clear of the
+    /// stop: 60 degrees against the default 65. A plan that reaches it is never reported converged.
+    /// </summary>
+    private const double HardFoldMarginDegrees = 5.0;
 
     /// <summary>
     /// The search's own stop, further out than the leg's. Stopping candidates at the leg's stop would
@@ -153,11 +159,12 @@ public static class MultiJointReverseDocking
         Point2 targetMetres,
         double exitMovementHeadingRadians,
         double maximumStepMetres = 0.10,
-        bool wheelSetAtStandstill = false)
+        bool wheelSetAtStandstill = false,
+        CancellationToken cancellationToken = default)
     {
         Validate(vehicle, mode, chain, maximumStepMetres);
         return Plan(vehicle, mode, start, chain, targetMetres, exitMovementHeadingRadians, docking: true,
-            maximumStepMetres, wheelSetAtStandstill);
+            maximumStepMetres, wheelSetAtStandstill, cancellationToken);
     }
 
     /// <summary>
@@ -172,7 +179,8 @@ public static class MultiJointReverseDocking
         ArticulationChain chain,
         Point2 targetMetres,
         double maximumStepMetres = 0.10,
-        bool wheelSetAtStandstill = false)
+        bool wheelSetAtStandstill = false,
+        CancellationToken cancellationToken = default)
     {
         Validate(vehicle, mode, chain, maximumStepMetres);
         var trailer = TrailerAxle(vehicle, start.RearAxleCentreMetres.XY, start.VehicleHeadingRadians,
@@ -187,7 +195,7 @@ public static class MultiJointReverseDocking
             Math.Atan2(targetMetres.Y - trailer.Y, targetMetres.X - trailer.X) - travel);
         var arrival = travel + Math.Clamp(2.0 * bearing, -0.5 * Math.PI, 0.5 * Math.PI);
         return Plan(vehicle, mode, start, chain, targetMetres, arrival, docking: false,
-            maximumStepMetres, wheelSetAtStandstill);
+            maximumStepMetres, wheelSetAtStandstill, cancellationToken);
     }
 
     private static void Validate(
@@ -209,10 +217,12 @@ public static class MultiJointReverseDocking
         double arrivalTravelHeading,
         bool docking,
         double maximumStep,
-        bool standstill)
+        bool standstill,
+        CancellationToken cancellationToken)
     {
         var problem = new Problem(vehicle, mode, start, chain, target,
-            Geometry2D.NormalizeAngle(arrivalTravelHeading + Math.PI), docking, maximumStep, standstill);
+            Geometry2D.NormalizeAngle(arrivalTravelHeading + Math.PI), docking, maximumStep, standstill,
+            cancellationToken);
         var trailer = TrailerAxle(vehicle, start.RearAxleCentreMetres.XY, start.VehicleHeadingRadians,
             chain.HeadingsRadians, out var trailerHeading);
 
@@ -430,6 +440,47 @@ public static class MultiJointReverseDocking
 
     private sealed record Outcome(double[] Residuals, bool Converged, ReverseLeg? Leg);
 
+    /// <summary>
+    /// The smallest fold limit of any unit in the chain, in degrees. The barriers are worked out in
+    /// degrees and converted once, so the default limit gives exactly the 50 and 60 degrees they
+    /// were fixed at before and a journey replays sample for sample as it did: the search is
+    /// sensitive enough that a barrier one bit away plans a different leg.
+    /// </summary>
+    private static double TightestFoldLimitDegrees(VehicleDefinition vehicle) =>
+        vehicle.TowedUnits.Min(unit => unit.MaximumArticulationDegrees);
+
+    /// <summary>
+    /// The fold barriers the search plans this chain against: where it starts paying for fold, and
+    /// where the barrier steepens and a plan stops counting as converged. 50 and 60 degrees for the
+    /// default 65 degree limit; for a tighter unit, the same margins short of its limit.
+    /// </summary>
+    public static (double SoftRadians, double HardRadians) FoldBarriersRadians(VehicleDefinition vehicle)
+    {
+        ArgumentNullException.ThrowIfNull(vehicle);
+        if (!vehicle.IsArticulated) throw new ArgumentException("The vehicle tows nothing.", nameof(vehicle));
+        return (SoftFold(vehicle), HardFold(vehicle));
+    }
+
+    /// <summary>
+    /// Where the barrier starts: <see cref="SoftFoldMarginDegrees"/> short of the tightest limit, and
+    /// no lower than half of it, so a unit stated with a very small limit still has room to fold.
+    /// </summary>
+    private static double SoftFold(VehicleDefinition vehicle)
+    {
+        var limit = TightestFoldLimitDegrees(vehicle);
+        return Math.Max(limit - SoftFoldMarginDegrees, 0.5 * limit) * Math.PI / 180.0;
+    }
+
+    /// <summary>
+    /// Where the barrier steepens and convergence ends: <see cref="HardFoldMarginDegrees"/> short of
+    /// the tightest limit, and no lower than four fifths of it.
+    /// </summary>
+    private static double HardFold(VehicleDefinition vehicle)
+    {
+        var limit = TightestFoldLimitDegrees(vehicle);
+        return Math.Max(limit - HardFoldMarginDegrees, 0.8 * limit) * Math.PI / 180.0;
+    }
+
     /// <summary>One planning request: everything a rollout needs except the profile being tried.</summary>
     private sealed class Problem(
         VehicleDefinition vehicle,
@@ -440,10 +491,18 @@ public static class MultiJointReverseDocking
         double facing,
         bool docking,
         double maximumStep,
-        bool standstill)
+        bool standstill,
+        CancellationToken cancellationToken)
     {
         private readonly Point2 _tangent = new(Math.Cos(facing), Math.Sin(facing));
         private readonly Point2 _normal = new(-Math.Sin(facing), Math.Cos(facing));
+
+        // The fold barriers are set against the tightest limit in the chain, so a unit limited to 45
+        // degrees is kept clear of 45 rather than of the 60 a default unit is. Fixed at 50 and 60
+        // they sat at or past such a unit's stop, and the search ran into it with no slope to
+        // descend.
+        private readonly double _softFold = SoftFold(vehicle);
+        private readonly double _hardFold = HardFold(vehicle);
 
         /// <summary>Trailer travel between knots.</summary>
         public double KnotSpacingMetres { get; set; } = 5.0;
@@ -470,6 +529,9 @@ public static class MultiJointReverseDocking
         /// </summary>
         public Outcome Rollout(double[] knots, bool record)
         {
+            // Checked once per rollout, a fraction of a millisecond apart, so a cancelled plan stops
+            // promptly; the rollout itself is never cut short into a different answer.
+            cancellationToken.ThrowIfCancellationRequested();
             Rollouts++;
             var state = start;
             var working = chain.Clone();
@@ -526,8 +588,8 @@ public static class MultiJointReverseDocking
                 {
                     var fold = Math.Abs(working.ArticulationAngleRadians(index, traceHeading));
                     maximumFold = Math.Max(maximumFold, fold);
-                    var soft = Math.Max(0.0, fold - SoftFoldRadians);
-                    var hard = Math.Max(0.0, fold - HardFoldRadians);
+                    var soft = Math.Max(0.0, fold - _softFold);
+                    var hard = Math.Max(0.0, fold - _hardFold);
                     foldPenalty += (soft * soft) + (100.0 * hard * hard);
                 }
 
@@ -577,7 +639,7 @@ public static class MultiJointReverseDocking
                 crossed ? 0.0 : Math.Max(along, 0.0) / CrossScaleMetres,
                 (Math.Sqrt(foldPenalty * maximumStep) / FoldScaleRadians) + (folded ? 100.0 : 0.0)
             };
-            var converged = crossed && !folded && largestFold < HardFoldRadians
+            var converged = crossed && !folded && largestFold < _hardFold
                 && Math.Abs(cross) <= ConvergedCrossMetres
                 && (!docking || Math.Abs(headingError) <= ConvergedHeadingRadians);
             ReverseLeg? leg = null;

@@ -15,7 +15,8 @@ public delegate ReverseLeg ReverseDockingSolver(
     Point2 targetMetres,
     double exitMovementHeadingRadians,
     double maximumStepMetres,
-    bool wheelSetAtStandstill);
+    bool wheelSetAtStandstill,
+    CancellationToken cancellationToken);
 
 /// <summary>
 /// The one place that decides how a reverse with an exit heading is driven for a given vehicle.
@@ -33,6 +34,8 @@ public delegate ReverseLeg ReverseDockingSolver(
 /// <para>
 /// Every solver here must be deterministic — no wall-clock budget, no randomness — because the leg
 /// it produces is replayed from the saved controls and has to come out sample for sample the same.
+/// The cancellation token each one takes can only stop it, with
+/// <see cref="OperationCanceledException"/>; it never shortens a plan into a different answer.
 /// </para>
 /// </remarks>
 public static class ReverseDocking
@@ -45,8 +48,9 @@ public static class ReverseDocking
         {
             // The rear axle of a rigid body does not slip sideways reversing, so it is followed
             // directly down the approach line.
-            0 => static (rigid, mode, start, _, target, exit, step, standstill) =>
-                RigidReverseGenerator.DockInAvailableSpace(rigid, mode, start, target, exit, step, standstill),
+            0 => static (rigid, mode, start, _, target, exit, step, standstill, cancellation) =>
+                RigidReverseGenerator.DockInAvailableSpace(rigid, mode, start, target, exit, step, standstill,
+                    cancellation),
             // A semitrailer is docked by the feedback cascade, and planned by simulation where the
             // cascade misses -- which is every mode A dock of SVT, whose wheel cannot follow the
             // cascade at 15 km/h.
@@ -72,7 +76,8 @@ public static class ReverseDocking
         ArticulationChain chain,
         Point2 targetMetres,
         double maximumStepMetres = 0.10,
-        bool wheelSetAtStandstill = false)
+        bool wheelSetAtStandstill = false,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(vehicle);
         if (!vehicle.IsArticulated)
@@ -81,7 +86,7 @@ public static class ReverseDocking
         // planned rather than steered.
         return MultiJointReverseDocking.Handles(vehicle)
             ? MultiJointReverseDocking.Aim(vehicle, mode, start, chain, targetMetres, maximumStepMetres,
-                wheelSetAtStandstill)
+                wheelSetAtStandstill, cancellationToken)
             : TrailerReverseGenerator.AimTowedUnit(vehicle, mode, start, chain, targetMetres,
                 maximumStepMetres, wheelSetAtStandstill: wheelSetAtStandstill);
     }
@@ -101,12 +106,13 @@ public static class ReverseDocking
         Point2 targetMetres,
         double exitMovementHeadingRadians,
         double maximumStepMetres = 0.10,
-        bool wheelSetAtStandstill = false)
+        bool wheelSetAtStandstill = false,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(chain);
         var solver = SolverFor(vehicle)
             ?? throw new ArgumentException("This vehicle cannot be docked; check CanDock first.", nameof(vehicle));
         return solver(vehicle, mode, start, chain, targetMetres, exitMovementHeadingRadians,
-            maximumStepMetres, wheelSetAtStandstill);
+            maximumStepMetres, wheelSetAtStandstill, cancellationToken);
     }
 }

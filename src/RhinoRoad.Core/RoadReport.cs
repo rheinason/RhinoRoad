@@ -35,6 +35,12 @@ public sealed record RoadReportRoad(
 
     /// <summary>True when the route's heights come from a terrain surface.</summary>
     public bool TerrainDraped { get; init; }
+
+    /// <summary>
+    /// Said when the road was saved at an older schema and its route was derived again the way this
+    /// RhinoRoad drives it (<see cref="VehicleAccessDefinition.UpgradeWarning"/>); null otherwise.
+    /// </summary>
+    public string? UpgradeWarning { get; init; }
 }
 
 public sealed record RoadReportDocument(
@@ -209,6 +215,8 @@ public static class RoadReportBuilder
             html.Append("<p class=\"banner stale\">Out of date: the road's source curve or a referenced site curve has changed since " +
                         "the last saved update. The figures below were recomputed from the current geometry and may differ from the saved result; " +
                         "run Update before relying on this report.</p>");
+        if (road.UpgradeWarning is { } upgraded)
+            html.Append($"<p class=\"banner stale\">{Html(upgraded)}</p>");
         var validated = road.ValidationStatus == ValidationStatus.ReferenceValidated;
         // The same wording as the dialog and the baked note, with the status id kept for searching.
         html.Append($"<p class=\"banner {(validated ? "ok" : "warn")}\">Vehicle validation: " +

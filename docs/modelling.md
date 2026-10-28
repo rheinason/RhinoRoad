@@ -50,7 +50,18 @@ transitions, and no vehicle parameters invented.
 - **A speed above the mode's is clamped to the mode's.** The modes are set out for their speed, and a
   faster leg would turn the wheel in less distance than the mode allows, which understates the swept
   path. The command line says so when it happens.
-- A speed of `null` (every road saved before this existed) means the mode's speed.
+- A speed of `null` (every road saved before this existed) means the mode's speed — except on a
+  reverse, below.
+- **Reversing is a slow manoeuvre.** A reverse leg with no speed of its own is driven at the vehicle's
+  *manoeuvring speed*: the speed of its mode B (5 km/h for every preset), or for a vehicle without one
+  the lower of its mode's speed and 5 km/h, whatever mode the journey is in. The mode's lock is kept,
+  so a mode-A reverse keeps mode A's smaller lock (the conservative side) and only moves the wheel in
+  less distance: 4.2 m from centre to lock instead of 12.5 m. The source's only wording for reversing
+  sits in køremåde B — *"på vendepladser fremføres det dimensionsgivende køretøj med meget lav
+  hastighed og i visse tilfælde ved bakkemanøvrer"*. A reverse's own speed still wins (clamped to the
+  mode's), and the samples carry the speed, so the analyzer prices the reverse's steering rate at it.
+  This is decided in one place (`ManoeuvreReplayService.LegSpeedKilometresPerHour`), so the pick loop,
+  every docking solver, the planner, the area search and replay agree.
 
 ## Aiming, and rewinding to ease the exit
 
@@ -69,7 +80,10 @@ continuous opening turn. The part being given back is drawn as a faint dotted li
 the reshaping is visible as it happens.
 
 Rewinding never reaches back past the start of the leg in hand, or through a change of travel
-direction, so an earlier decision cannot be undone behind your back. It also only happens when the
+direction, so an earlier decision cannot be undone behind your back. Nor does it reach into a
+**planned reverse**: the last control of an accepted `PlanReverse` proposal is saved as *sealing* its
+leg (`ManoeuvreControl.SealsLeg`), and replay honours the seal exactly as the pick loop does, so the
+control after a planned dock neither reshapes it while you drive nor when the road is updated. It also only happens when the
 next point genuinely asks for less turn than the wheel is holding: halfway round a bend the right
 answer is to keep turning, not to straighten and turn back in.
 
@@ -150,7 +164,15 @@ shuffle round than to turn round:
 | BUS 15, mode A | 26.07 m | 19.68 m | 6.39 m |
 
 Away from a direction change the stop has to be asked for: the **Stop** option arms the next click,
-and it is spent on that click rather than latched, because a stop happens once. Inventing stops that
+and it is spent on that click rather than latched, because a stop happens once. In the Edit Road
+palette each control row has a **Stop first** toggle for the same thing (set and greyed where the
+row changes direction, which is a stop already).
+
+The planner does not propose stops of its own. Splitting a missed reverse at a third, half or two
+thirds of its length into a reverse to that pose and a second reverse from a standstill was measured
+on 440 planner layouts (every preset and mode, bays 0.5 to 3 scales back and 0.3 to 1.5 across,
+plus perpendicular bays): it reached none of the 10 bays the ordinary candidates miss, so it was not
+shipped. Inventing stops that
 did not happen shrinks the swept envelope, and an envelope smaller than the vehicle really needs is
 the unsafe direction to be wrong in, so it is never assumed.
 
@@ -208,6 +230,9 @@ that passes it, so a route one of them refuses cannot be baked as feasible by an
 - **Default 65° per towed unit** (`TowedUnitDefinition.MaximumArticulationDegrees`). It is a
   RhinoRoad assumption, not a published figure, and the violation message says so. It can be set per
   unit in a vehicle file (at most 90°).
+- **Reaching the limit counts.** A fold exactly at the limit is reaching it everywhere — the
+  generators stop at it, `FoldLimit` and the analyzer both compare with `>=` — so a route sitting on
+  the limit is never baked as feasible.
 - **90° is the jackknife floor** (`VehicleAccessAnalyzer.JackknifeFoldRadians`). At a right angle the
   towed unit is no longer following the one towing it at all, so footprints past it are of a
   configuration no driver reaches. That floor applies whatever the per-unit limit says.
@@ -280,15 +305,25 @@ two gains measured on PVT either crawled, converged and then wandered off, or ra
 stop. It is the second joint that does it rather than the drawbar it hangs from. So the outer loop is
 replaced by a plan: the curvature asked of the last unit is a piecewise-linear profile over its own
 travel, started from a cubic Hermite curve between the trailer's pose and the dock's, and corrected by
-Levenberg–Marquardt on the arrival errors with a barrier on fold. Every step goes through the same
+Levenberg–Marquardt on the arrival errors with a barrier on fold. The barrier is set against the
+tightest unit's own limit — it starts 15° short of it and steepens 5° short, where a plan also stops
+counting as converged — which is the 50° and 60° it was fixed at for the default 65°. For copies of
+PVT and MVT limited to 45°, fixed barriers let the search fold into the stop (PVT mode B, bays 3–6
+scales behind a turn-away: 24/32 docked, mean miss 0.42 m); derived ones keep it clear (27/32, mean
+miss 0.07 m). Every step goes through the same
 rate-limited step the analyzer and replay use, so the trailer the planner steers is the trailer
 everything downstream sees (reversing a trailer, two integrations that differ in the last bit part
 company exponentially). The search is fixed — iteration cap, knot count, rollout budget — and
-consults no clock, so a saved journey replays sample for sample. The simulation planner also catches
+consults no clock, so a saved journey replays sample for sample. Every solver and the planner take a
+cancellation token, which can only stop them: the pick loop runs `PlanReverse` in the background with
+Esc to cancel, and the area search stops inside a plan rather than after the grid point in hand. The simulation planner also catches
 a semitrailer where the cascade misses: in mode A the wheel takes 12.5 m to reach its lock, the
 cascade's fold loop closes over about three, and a plan that knows the lag in advance docks where
 feedback chasing it folds into the stop. **Articulated vehicles therefore dock in mode A as well as
-mode B.**
+mode B.** With reverses at the 5 km/h manoeuvring speed the fallback is still needed in mode A: the
+wheel catches up, but mode A's lock does not — over sixteen turn-away bays SVT's cascade alone docked
+none in mode A at either speed (six in mode B), and with the fallback 14 of 16 dock at 5 km/h against
+12 at 15.
 
 **The "heading not honoured" case.** A chain of three joints or more has no solver: it is aimed at
 the point instead, the leg is flagged, and the viewport says the heading was not honoured rather
@@ -315,7 +350,9 @@ becomes ordinary forward and reverse controls, so it can be replayed and edited.
 
 The **clear-area search** (`ManoeuvringAreaSearch`) keeps the final body position and heading fixed,
 tries pull-ups and at most one forward correction, and ranks passing routes by the clearance
-footprint's area inside the yard. It needs a vehicle that can be docked, because a search that
+footprint's area inside the yard. Each candidate is planned from replay's own leg boundary
+(`ReplayedManoeuvre.LegStartIndex`), so the turn it moves can ease the leg before it exactly as replay
+of the suggestion will. It needs a vehicle that can be docked, because a search that
 relaxed the heading would compare journeys that end in different bays. It is gated on capability
 (`ReverseCapabilities`), not on a preset id, so it serves every preset and any user vehicle that can
 be docked. Its result is the smallest area found by a bounded search, not a proof of the global

@@ -59,6 +59,17 @@ public sealed class RoadReportTests
     }
 
     [Fact]
+    public void Html_says_a_road_read_from_an_older_schema_may_have_changed()
+    {
+        var warning = AccessDefinitionSerializer.Deserialize(
+            File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "access-definition-v1.json"))).UpgradeWarning;
+
+        Assert.NotNull(warning);
+        Assert.DoesNotContain("RhinoRoad 0.5 or earlier", RoadReportBuilder.Page(Document(Road())));
+        Assert.Contains("RhinoRoad 0.5 or earlier", RoadReportBuilder.Page(Document(Road() with { UpgradeWarning = warning })));
+    }
+
+    [Fact]
     public void Html_lists_checks_problems_and_measurements_with_invariant_numbers()
     {
         var previous = CultureInfo.CurrentCulture;

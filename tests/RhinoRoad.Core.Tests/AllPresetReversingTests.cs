@@ -34,7 +34,7 @@ public sealed class AllPresetReversingTests
     private static string Deg(double radians) => (radians * 180.0 / Math.PI).ToString("0.00", CultureInfo.InvariantCulture);
 
     private static ManoeuvreDefinition Definition(VehicleState start, IEnumerable<ManoeuvreControl> controls) =>
-        new(1, start.RearAxleCentreMetres, start.VehicleHeadingRadians, start.Direction, controls.ToArray());
+        new(ManoeuvreDefinition.CurrentSchemaVersion, start.RearAxleCentreMetres, start.VehicleHeadingRadians, start.Direction, controls.ToArray());
 
     private static (VehicleState Start, List<RouteSample> Route, ManoeuvreControl Turn, VehicleState End) TurnAway(
         VehicleDefinition vehicle, DrivingModeDefinition mode, double scale, double sideSign)

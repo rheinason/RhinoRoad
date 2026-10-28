@@ -52,12 +52,13 @@ public static class ManoeuvringAreaSearch
         if (budget <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(budget));
 
         var prefixControls = saved.Controls.Take(firstAdjustableControl).ToArray();
-        var prefix = saved with { Controls = prefixControls };
-        var prefixRoute = prefixControls.Length == 0
-            ? new[] { ManoeuvreReplayService.StateSample(saved.StartState, vehicle) }
-            : ManoeuvreReplayService.Replay(vehicle, mode, prefix).Samples.ToArray();
-        var prefixState = prefixControls.Length == 0 ? saved.StartState
-            : ManoeuvreReplayService.Replay(vehicle, mode, prefix).EndState;
+        // The prefix is replayed rather than reconstructed, and the turn is planned from replay's
+        // own leg boundary: the turn may ease the exit of the leg before it, exactly as it will when
+        // the suggestion is replayed. Planned from the end of the prefix instead, candidates were
+        // judged from poses a replay of them never reaches.
+        var prefixReplay = ManoeuvreReplayService.Replay(vehicle, mode, saved with { Controls = prefixControls });
+        var prefixRoute = prefixReplay.Samples.ToArray();
+        var prefixState = prefixReplay.EndState;
         if (prefixState.Direction != TravelDirection.Forward)
             throw new ArgumentException("The adjustable section must start moving forward.", nameof(saved));
 
@@ -75,7 +76,7 @@ public static class ManoeuvringAreaSearch
         var outside = 0;
         var blocked = 0;
         var vehicleFailures = 0;
-        Candidate? current = Evaluate(saved, out _);
+        Candidate? current = Evaluate(saved, out _, CancellationToken.None);
         if (current is not null) candidates.Add((current, 0.0, 0.0));
 
         // Coarse pass explores the turn-away point around its saved position. The reverse planner
@@ -116,6 +117,8 @@ public static class ManoeuvringAreaSearch
         return new Result(suggestionsWithLimits, current, tried, outside, blocked, vehicleFailures,
             watch.Elapsed >= budget);
 
+        // Checked between grid points; the token also reaches into each planner run and replay, so a
+        // cancelled search stops within a docking plan rather than after the grid point in hand.
         bool Expired() => cancellationToken.IsCancellationRequested || watch.Elapsed >= budget;
 
         void SearchPoint(double x, double y)
@@ -130,7 +133,7 @@ public static class ManoeuvringAreaSearch
             {
                 var turnRoute = prefixRoute.ToList();
                 var planned = ManoeuvreReplayService.PlanControl(vehicle, mode, turnRoute,
-                    turnRoute.Count - 1, prefixState, turn);
+                    prefixReplay.LegStartIndex, prefixState, turn, cancellationToken);
                 if (planned.RequestedAngleExceeded || planned.AimedBehindTheBeam)
                 {
                     vehicleFailures++;
@@ -138,21 +141,27 @@ public static class ManoeuvringAreaSearch
                 }
                 if (planned.FromIndex < turnRoute.Count - 1)
                     turnRoute.RemoveRange(planned.FromIndex + 1, turnRoute.Count - planned.FromIndex - 1);
+                // Where replay starts the leg after the turn: at the turn's own start, so a pull-up
+                // can reshape its exit, unless the turn is sealed.
+                var turnStartIndex = turnRoute.Count - 1;
                 turnRoute.AddRange(planned.Samples.Skip(1));
+                if (turn.SealsLeg) turnStartIndex = turnRoute.Count - 1;
                 // The bay keeps the speed it was reversed into at, so a reverse saved at walking pace
                 // is searched at walking pace.
                 var reverse = ReversePlanner.Find(vehicle, mode, turnRoute,
-                    prefixRoute.Length - 1, planned.EndState, target.PositionMetres,
-                    target.ExitHeadingRadians, target.SpeedKilometresPerHour);
+                    turnStartIndex, planned.EndState, target.PositionMetres,
+                    target.ExitHeadingRadians, target.SpeedKilometresPerHour, cancellationToken);
                 var definition = saved with
                 {
                     Controls = prefixControls.Concat(new[] { turn }).Concat(reverse.Controls).ToArray()
                 };
-                var candidate = Evaluate(definition, out var reason);
+                var candidate = Evaluate(definition, out var reason, cancellationToken);
                 tried++;
                 if (candidate is not null) candidates.Add((candidate, x, y));
                 else Count(reason);
             }
+            // A cancelled search is over rather than failed: the candidates found so far stand.
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
             catch (ArgumentException) { vehicleFailures++; }
             catch (InvalidOperationException) { vehicleFailures++; }
         }
@@ -164,10 +173,10 @@ public static class ManoeuvringAreaSearch
             else vehicleFailures++;
         }
 
-        Candidate? Evaluate(ManoeuvreDefinition definition, out string reason)
+        Candidate? Evaluate(ManoeuvreDefinition definition, out string reason, CancellationToken cancellation)
         {
             reason = "vehicle";
-            var replay = ManoeuvreReplayService.Replay(vehicle, mode, definition);
+            var replay = ManoeuvreReplayService.Replay(vehicle, mode, definition, cancellation);
             if (replay.RequestedAngleExceeded) return null;
             var analysis = new VehicleAccessAnalyzer().Analyze(vehicle, mode, replay.Samples);
             var suffixStart = Math.Min(prefixRoute.Length - 1, analysis.Poses.Count - 1);

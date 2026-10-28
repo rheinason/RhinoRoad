@@ -21,7 +21,7 @@ public sealed class ClearAreaReadoutTests
         route.AddRange(forward.Samples.Skip(1));
         var reverse = TrailerReversePlanner.Find(vehicle, mode, route, 0,
             forward.EndState, new Point3(5, -6, 0), Math.PI);
-        return new ManoeuvreDefinition(1, start.RearAxleCentreMetres, 0,
+        return new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, start.RearAxleCentreMetres, 0,
             TravelDirection.Forward, new[] { turn }.Concat(reverse.Controls).ToArray());
     }
 
@@ -50,7 +50,7 @@ public sealed class ClearAreaReadoutTests
         // error for a car. A rigid vehicle docks by its own rear axle, so that is what is measured.
         var vehicle = Catalog.Get("PV");
         var mode = vehicle.DrivingModes.Values.First();
-        var journey = new ManoeuvreDefinition(1, new(0, 0, 0), Math.PI / 2, TravelDirection.Forward,
+        var journey = new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, new(0, 0, 0), Math.PI / 2, TravelDirection.Forward,
             [new(new(0, 20, 0), TravelDirection.Forward),
              new(new(0, 10, 0), TravelDirection.Reverse, ExitHeadingRadians: -Math.PI / 2)]);
         var preview = JourneyEditPreview.Build(vehicle, mode, journey, Points(journey), 0.3);
@@ -96,7 +96,7 @@ public sealed class ClearAreaReadoutTests
             new ManoeuvreControl(new(0, 10, 0), TravelDirection.Reverse, ManoeuvreControlKind.Finish, -Math.PI / 2)
         })
         {
-            var journey = new ManoeuvreDefinition(1, new(0, 0, 0), Math.PI / 2, TravelDirection.Forward, [forward, final]);
+            var journey = new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, new(0, 0, 0), Math.PI / 2, TravelDirection.Forward, [forward, final]);
             Assert.Null(ReverseBay.FinalBay(journey));
             Assert.Null(BayArrival.Measure(vehicle, journey, ManoeuvreReplayService.Replay(vehicle, mode, journey)));
         }
@@ -127,7 +127,7 @@ public sealed class ClearAreaReadoutTests
     {
         var vehicle = Catalog.Get("SVT");
         var mode = vehicle.DrivingModes["B"];
-        var journey = new ManoeuvreDefinition(1, new(0, 0, 0), 0, TravelDirection.Forward,
+        var journey = new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, new(0, 0, 0), 0, TravelDirection.Forward,
             [new(new(30, 0, 0), TravelDirection.Forward, ExitHeadingRadians: 0.0)]);
         var replay = ManoeuvreReplayService.Replay(vehicle, mode, journey);
 

@@ -171,6 +171,27 @@ public sealed record VehicleDefinition(
 
     public bool IsArticulated => TowedUnits.Count > 0;
 
+    /// <summary>
+    /// The highest speed a manoeuvre with no speed of its own is driven at when the vehicle has no
+    /// mode B: the speed every preset's mode B states.
+    /// </summary>
+    public const double DefaultManoeuvringSpeedKilometresPerHour = 5.0;
+
+    /// <summary>
+    /// The speed this vehicle manoeuvres at in <paramref name="mode"/> -- a reverse with no speed of
+    /// its own is driven at it: the speed of its mode B when it has one (5 km/h for every preset),
+    /// otherwise <see cref="DefaultManoeuvringSpeedKilometresPerHour"/>, and never faster than
+    /// <paramref name="mode"/> itself. The lock stays <paramref name="mode"/>'s.
+    /// </summary>
+    public double ManoeuvringSpeedKilometresPerHour(DrivingModeDefinition mode)
+    {
+        ArgumentNullException.ThrowIfNull(mode);
+        var manoeuvring = DrivingModes.TryGetValue("B", out var modeB)
+            ? modeB.SpeedKilometresPerHour
+            : DefaultManoeuvringSpeedKilometresPerHour;
+        return Math.Min(mode.SpeedKilometresPerHour, manoeuvring);
+    }
+
     public double RearWheelInnerEdgeOffsetMetres => (AxleTrackMetres - TyreWidthMetres) * 0.5;
     public double WheelOuterEdgeOffsetMetres => (AxleTrackMetres + TyreWidthMetres) * 0.5;
 

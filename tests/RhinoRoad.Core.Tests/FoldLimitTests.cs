@@ -81,6 +81,39 @@ public sealed class FoldLimitTests
         Assert.DoesNotContain("jackknifed", violation.Message);
     }
 
+    /// <summary>
+    /// A fold exactly at the limit is reaching it, for the analyzer as for FoldLimit and every
+    /// generator: the analyzer used to let it pass with a strict comparison, so a route the planner
+    /// refused at the limit could be baked as feasible.
+    /// </summary>
+    [Fact]
+    public void AFoldExactlyAtTheLimitIsReachedByTheAnalyzerAsEverywhereElse()
+    {
+        var svt = Catalog.Get("SVT");
+        var mode = svt.DrivingModes["B"];
+        var leg = CurvedReverse(svt);
+        var reached = Analyzer.Analyze(svt, mode, leg.Samples).MaximumArticulationAnglesRadians[0];
+
+        // Limits either side of the fold reached, to the last bit, one of which lands on it exactly.
+        var degrees = reached * 180.0 / Math.PI;
+        for (var index = 0; index < 4; index++) degrees = Math.BitDecrement(degrees);
+        var exact = 0;
+        for (var index = 0; index < 9; index++, degrees = Math.BitIncrement(degrees))
+        {
+            var limited = WithLimit(svt, degrees);
+            var analysis = Analyzer.Analyze(limited, mode, leg.Samples);
+            var flagged = analysis.Violations.Any(item => item.Kind == ViolationKind.ArticulationAngle);
+
+            Assert.Equal(FoldLimit.IsReached(limited, analysis.MaximumArticulationAnglesRadians), flagged);
+            Assert.Equal(FoldLimit.IsReached(limited, leg.Samples), flagged);
+            if (limited.TowedUnits[0].MaximumArticulationRadians != reached) continue;
+            exact++;
+            Assert.True(flagged);
+        }
+
+        Assert.True(exact > 0);
+    }
+
     /// <summary>The generator stops at the unit's limit, whatever it is, rather than at a fixed 65.</summary>
     [Fact]
     public void TheGeneratorStopsShortOfTheUnitsOwnLimit()

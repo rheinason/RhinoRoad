@@ -256,11 +256,13 @@ public sealed class InteractiveJourney
     /// Splices a planned leg onto the route: the tail the ease-out rewound is given back, the leg's
     /// samples follow, and the vehicle is where the leg left it.
     /// </summary>
-    /// <param name="sealLeg">
-    /// Whether the next leg may rewind into this one. An aimed leg's exit is reshaped by the click
-    /// after it; a planned reverse was searched as a whole and is not.
-    /// </param>
-    public void Commit(PlannedManoeuvreLeg leg, IReadOnlyList<ManoeuvreControl> controls, bool sealLeg = false)
+    /// <remarks>
+    /// When the last control seals its leg (<see cref="ManoeuvreControl.SealsLeg"/>, as a planned
+    /// reverse's does) the next leg may not rewind into it. The seal is read from the control rather
+    /// than passed in, so the boundary drawn here and the one replay of the saved controls finds are
+    /// one and the same.
+    /// </remarks>
+    public void Commit(PlannedManoeuvreLeg leg, IReadOnlyList<ManoeuvreControl> controls)
     {
         ArgumentNullException.ThrowIfNull(leg);
         ArgumentNullException.ThrowIfNull(controls);
@@ -272,7 +274,7 @@ public sealed class InteractiveJourney
 
         LegStartIndex = _route.Count - 1;
         _route.AddRange(leg.Samples.Skip(1));
-        if (sealLeg) LegStartIndex = _route.Count - 1;
+        if (controls.Count > 0 && controls[^1].SealsLeg) LegStartIndex = _route.Count - 1;
         State = leg.EndState;
         _controls.AddRange(controls);
         if (controls.Any(control => control.Kind == ManoeuvreControlKind.Finish))
