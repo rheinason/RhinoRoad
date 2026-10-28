@@ -43,7 +43,7 @@ public sealed class JourneySweepTests
         Assert.True(turnAngles[0] > 150 * Math.PI / 180);
         Assert.InRange(turnAngles[2], 60 * Math.PI / 180, 110 * Math.PI / 180);
         Assert.InRange(turnAngles[4], 5 * Math.PI / 180, 35 * Math.PI / 180);
-        var saved = new ManoeuvreDefinition(1, initial.RearAxleCentreMetres, 0, TravelDirection.Forward, controls);
+        var saved = new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, initial.RearAxleCentreMetres, 0, TravelDirection.Forward, controls);
         var replay = ManoeuvreReplayService.Replay(vehicle, mode, saved);
         Assert.Equal(route, replay.Samples);
         Assert.Equal(state, replay.EndState);

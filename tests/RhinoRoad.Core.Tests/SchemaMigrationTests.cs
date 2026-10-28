@@ -9,9 +9,12 @@ public sealed class SchemaMigrationTests
     private static readonly Guid Obstacle = Guid.Parse("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE");
     private static readonly Guid Boundary = Guid.Parse("BBBBBBBB-BBBB-CCCC-DDDD-EEEEEEEEEEEE");
 
-    /// <summary>The definition the frozen v1 fixture was serialized from.</summary>
+    /// <summary>
+    /// The definition the frozen v1 fixture was serialized from, as it reads today: the same intent,
+    /// at the current schema, with every property added since at its default.
+    /// </summary>
     internal static VehicleAccessDefinition FixtureDefinition() => new(
-        1,
+        VehicleAccessDefinition.CurrentSchemaVersion,
         Guid.Parse("11111111-2222-3333-4444-555555555555"),
         Guid.Parse("99999999-8888-7777-6666-555555555555"),
         PathSourceKind.Interactive,
@@ -19,7 +22,7 @@ public sealed class SchemaMigrationTests
         "B",
         TravelDirection.Forward,
         new ManoeuvreDefinition(
-            1,
+            ManoeuvreDefinition.CurrentSchemaVersion,
             new Point3(1.5, -2.25, 0.0),
             0.5,
             TravelDirection.Forward,
@@ -55,7 +58,11 @@ public sealed class SchemaMigrationTests
         var json = File.ReadAllText(FixturePath);
         var loaded = AccessDefinitionSerializer.Deserialize(json);
 
-        Assert.Equal(1, loaded.SchemaVersion);
+        // Read at the current schema, and saying that it was not written at it.
+        Assert.Equal(VehicleAccessDefinition.CurrentSchemaVersion, loaded.SchemaVersion);
+        Assert.Equal(ManoeuvreDefinition.CurrentSchemaVersion, loaded.Manoeuvre!.SchemaVersion);
+        Assert.Equal(1, loaded.UpgradedFromSchema);
+        Assert.Contains("RhinoRoad 0.5 or earlier", loaded.UpgradeWarning);
         Assert.Equal(PathSourceKind.Interactive, loaded.SourceKind);
         var controls = loaded.Manoeuvre!.Controls;
         Assert.Equal(4, controls.Count);
@@ -65,8 +72,9 @@ public sealed class SchemaMigrationTests
         Assert.True(controls[2].FromStandstill);
         Assert.Equal(ManoeuvreControlKind.Finish, controls[3].Kind);
         Assert.Equal(-Math.PI / 2.0, controls[3].ExitHeadingRadians);
-        // Written before a leg could have a speed of its own, so every leg runs at the mode's.
+        // Written before a leg could have a speed of its own or be sealed.
         Assert.All(controls, control => Assert.Null(control.SpeedKilometresPerHour));
+        Assert.All(controls, control => Assert.False(control.SealsLeg));
         Assert.Equal([Obstacle], loaded.ObstacleObjectIds);
         Assert.Equal([Boundary], loaded.AllowedBoundaryObjectIds);
         Assert.Equal("DEF", loaded.ReferenceFingerprints[Boundary]);
@@ -75,6 +83,34 @@ public sealed class SchemaMigrationTests
         Assert.Equal(AccessDefinitionSerializer.Serialize(loaded), AccessDefinitionSerializer.Serialize(
             AccessDefinitionSerializer.Deserialize(AccessDefinitionSerializer.Serialize(loaded))));
         Assert.Equal(AccessDefinitionSerializer.Serialize(FixtureDefinition()), AccessDefinitionSerializer.Serialize(loaded));
+    }
+
+    [Fact]
+    public void A_road_saved_again_is_written_at_the_current_schema_and_no_longer_reads_as_upgraded()
+    {
+        var loaded = AccessDefinitionSerializer.Deserialize(File.ReadAllText(FixturePath));
+
+        var saved = AccessDefinitionSerializer.Serialize(loaded);
+        var root = JsonNode.Parse(saved)!.AsObject();
+        var reread = AccessDefinitionSerializer.Deserialize(saved);
+
+        Assert.Equal(2, VehicleAccessDefinition.CurrentSchemaVersion);
+        Assert.Equal(2, ManoeuvreDefinition.CurrentSchemaVersion);
+        Assert.Equal(VehicleAccessDefinition.CurrentSchemaVersion, root["schemaVersion"]!.GetValue<int>());
+        Assert.Equal(ManoeuvreDefinition.CurrentSchemaVersion, root["manoeuvre"]!["schemaVersion"]!.GetValue<int>());
+        Assert.False(root.ContainsKey("upgradedFromSchema"));
+        Assert.Null(reread.UpgradedFromSchema);
+        Assert.Null(reread.UpgradeWarning);
+    }
+
+    [Theory]
+    [InlineData("""{"schemaVersion":1,"schemaVersion":1}""")]
+    [InlineData("""{"schemaVersion":2,"manoeuvre":{"schemaVersion":2,"schemaVersion":2}}""")]
+    public void A_duplicated_key_is_malformed_rather_than_an_escaping_exception(string json)
+    {
+        Assert.False(AccessDefinitionSerializer.TryDeserialize(json, out var definition, out var error));
+        Assert.Null(definition);
+        Assert.Contains("malformed", error);
     }
 
     [Fact]

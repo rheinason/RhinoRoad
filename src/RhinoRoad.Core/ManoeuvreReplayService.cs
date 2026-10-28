@@ -16,7 +16,18 @@ public sealed record PlannedManoeuvreLeg(
 public sealed record ReplayedManoeuvre(
     IReadOnlyList<RouteSample> Samples,
     VehicleState EndState,
-    bool RequestedAngleExceeded);
+    bool RequestedAngleExceeded)
+{
+    /// <summary>
+    /// How far back the control after the last one may rewind, as an index into
+    /// <see cref="Samples"/>: the start of the last leg, its end when that leg was sealed
+    /// (<see cref="ManoeuvreControl.SealsLeg"/>). A caller planning a control onto the end of this
+    /// replay passes it to <see cref="ManoeuvreReplayService.PlanControl"/>, so the control is
+    /// planned from the poses a replay with that control appended would reach. A change of
+    /// direction moves the boundary to the end of the route, which PlanControl sees for itself.
+    /// </summary>
+    public int LegStartIndex { get; init; }
+}
 
 /// <summary>The one authoritative implementation of an interactive click and its later replay.</summary>
 public static class ManoeuvreReplayService
@@ -25,37 +36,76 @@ public static class ManoeuvreReplayService
     private const double ExitingFraction = 0.85;
     private const double StepMetres = 0.10;
 
+    /// <param name="legStartIndex">
+    /// How far back an ease-out may rewind: the start of the leg in hand, or the end of the route
+    /// when the leg before was sealed (<see cref="ManoeuvreControl.SealsLeg"/>). Replay's own
+    /// boundary is <see cref="ReplayedManoeuvre.LegStartIndex"/>.
+    /// </param>
+    /// <param name="cancellationToken">
+    /// Stops a slow docking plan with <see cref="OperationCanceledException"/>. A plan that is not
+    /// cancelled is the same whether or not a token was passed.
+    /// </param>
     public static PlannedManoeuvreLeg PlanControl(
         VehicleDefinition vehicle,
         DrivingModeDefinition mode,
         IReadOnlyList<RouteSample> route,
         int legStartIndex,
         VehicleState state,
-        ManoeuvreControl control)
+        ManoeuvreControl control,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(vehicle);
         ArgumentNullException.ThrowIfNull(mode);
         ArgumentNullException.ThrowIfNull(route);
         ArgumentNullException.ThrowIfNull(control);
         if (route.Count == 0) throw new ArgumentException("A route is required.", nameof(route));
+        cancellationToken.ThrowIfCancellationRequested();
 
         // A leg with a speed of its own is driven in the mode as that speed sees it: the same lock,
         // less distance to move the wheel. Handing every generator below that mode, rather than
         // threading a speed through each, is what keeps aiming, easing, locked turns and every
-        // docking solver on the one slew per metre the leg is driven with.
-        if (control.SpeedKilometresPerHour is null) return Plan(vehicle, mode, route, legStartIndex, state, control);
-        var legMode = mode.AtSpeed(control.SpeedKilometresPerHour);
-        var planned = Plan(vehicle, legMode, route, legStartIndex, state, control);
+        // docking solver on the one slew per metre the leg is driven with. A reverse with no speed
+        // of its own is driven at the vehicle's manoeuvring speed (see LegSpeedKilometresPerHour),
+        // decided here so that every generator, the planner, the area search and replay agree.
+        var speed = LegSpeedKilometresPerHour(vehicle, mode, control);
+        if (speed is null) return Plan(vehicle, mode, route, legStartIndex, state, control, cancellationToken);
+        var legMode = mode.AtSpeed(speed);
+        var planned = Plan(vehicle, legMode, route, legStartIndex, state, control, cancellationToken);
         // Each sample says the speed of the interval ending at it, so the analyzer can price its wheel
         // movement at that speed. The first sample is where the leg starts, the end of whatever came
         // before, and is left as it was.
-        var speed = legMode.SpeedKilometresPerHour;
+        var driven = legMode.SpeedKilometresPerHour;
         return planned with
         {
             Samples = planned.Samples
-                .Select((sample, index) => index == 0 ? sample : sample with { SpeedKilometresPerHour = speed })
+                .Select((sample, index) => index == 0 ? sample : sample with { SpeedKilometresPerHour = driven })
                 .ToArray()
         };
+    }
+
+    /// <summary>
+    /// The speed <paramref name="control"/>'s leg is driven at, or null for the mode's own: the
+    /// control's speed when it has one (no faster than the mode's), and for a reverse with none, the
+    /// vehicle's manoeuvring speed (<see cref="VehicleDefinition.ManoeuvringSpeedKilometresPerHour"/>)
+    /// when that is slower than the mode's.
+    /// </summary>
+    /// <remarks>
+    /// Reversing is a slow manoeuvre. The source's only wording for it sits in køremåde B -- "på
+    /// vendepladser fremføres det dimensionsgivende køretøj med meget lav hastighed og i visse
+    /// tilfælde ved bakkemanøvrer" -- so a reverse is driven at mode B's speed whatever mode the
+    /// journey is in, keeping that mode's lock. Mode A keeps its smaller lock, which is the
+    /// conservative side: it is the wheel's speed per metre that the mode's speed was really setting.
+    /// </remarks>
+    public static double? LegSpeedKilometresPerHour(
+        VehicleDefinition vehicle, DrivingModeDefinition mode, ManoeuvreControl control)
+    {
+        ArgumentNullException.ThrowIfNull(vehicle);
+        ArgumentNullException.ThrowIfNull(mode);
+        ArgumentNullException.ThrowIfNull(control);
+        if (control.SpeedKilometresPerHour is double own) return mode.LegSpeedKilometresPerHour(own);
+        if (control.Direction != TravelDirection.Reverse) return null;
+        var manoeuvring = vehicle.ManoeuvringSpeedKilometresPerHour(mode);
+        return manoeuvring < mode.SpeedKilometresPerHour ? manoeuvring : null;
     }
 
     private static PlannedManoeuvreLeg Plan(
@@ -64,7 +114,8 @@ public static class ManoeuvreReplayService
         IReadOnlyList<RouteSample> route,
         int legStartIndex,
         VehicleState state,
-        ManoeuvreControl control)
+        ManoeuvreControl control,
+        CancellationToken cancellationToken)
     {
         // A direction change is a standstill by definition -- the vehicle cannot swap gear rolling --
         // so the wheel is free there whether or not it was asked for. It is read from the route
@@ -123,9 +174,10 @@ public static class ManoeuvreReplayService
             var reversed = docking
                 ? ReverseDocking.Dock(
                     vehicle, mode, state, chain, target, control.ExitHeadingRadians!.Value, StepMetres,
-                    wheelSetAtStandstill: standstill)
+                    wheelSetAtStandstill: standstill, cancellationToken: cancellationToken)
                 : ReverseDocking.Aim(
-                    vehicle, mode, state, chain, target, StepMetres, wheelSetAtStandstill: standstill);
+                    vehicle, mode, state, chain, target, StepMetres, wheelSetAtStandstill: standstill,
+                    cancellationToken: cancellationToken);
             return new PlannedManoeuvreLeg(
                 route.Count - 1,
                 reversed.Samples,
@@ -191,10 +243,15 @@ public static class ManoeuvreReplayService
             fromIndex, samples, leg.EndState, aim.RequestedAngleExceeded, aim.AimedBehindTheBeam);
     }
 
+    /// <param name="cancellationToken">
+    /// Stops the replay with <see cref="OperationCanceledException"/>. It never changes a replay that
+    /// runs to the end: nothing here consults a clock.
+    /// </param>
     public static ReplayedManoeuvre Replay(
         VehicleDefinition vehicle,
         DrivingModeDefinition mode,
-        ManoeuvreDefinition definition)
+        ManoeuvreDefinition definition,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(definition);
         if (definition.SchemaVersion != ManoeuvreDefinition.CurrentSchemaVersion)
@@ -212,16 +269,20 @@ public static class ManoeuvreReplayService
                 legStartIndex = route.Count - 1;
             }
 
-            var planned = PlanControl(vehicle, mode, route, legStartIndex, state, control);
+            var planned = PlanControl(vehicle, mode, route, legStartIndex, state, control, cancellationToken);
             if (planned.FromIndex < route.Count - 1)
                 route.RemoveRange(planned.FromIndex + 1, route.Count - planned.FromIndex - 1);
             legStartIndex = route.Count - 1;
             route.AddRange(planned.Samples.Skip(1));
+            // A sealed leg is one the next control may not reshape: the boundary moves to its end,
+            // exactly as InteractiveJourney.Commit moves it, so the saved journey replays to the
+            // route that was driven.
+            if (control.SealsLeg) legStartIndex = route.Count - 1;
             state = planned.EndState;
             exceeded |= planned.RequestedAngleExceeded;
         }
 
-        return new ReplayedManoeuvre(route, state, exceeded);
+        return new ReplayedManoeuvre(route, state, exceeded) { LegStartIndex = legStartIndex };
     }
 
     public static RouteSample StateSample(VehicleState state, VehicleDefinition vehicle)

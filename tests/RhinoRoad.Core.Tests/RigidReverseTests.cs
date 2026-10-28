@@ -34,7 +34,7 @@ public sealed class RigidReverseTests
         ReverseBay.AxleFromRear(vehicle, new Point3(0, -3.0 - vehicle.OverallLengthMetres - 1.0, 0), -Math.PI / 2.0);
 
     private static ManoeuvreDefinition Definition(VehicleState start, IEnumerable<ManoeuvreControl> controls) =>
-        new(1, start.RearAxleCentreMetres, start.VehicleHeadingRadians, start.Direction, controls.ToArray());
+        new(ManoeuvreDefinition.CurrentSchemaVersion, start.RearAxleCentreMetres, start.VehicleHeadingRadians, start.Direction, controls.ToArray());
 
     /// <summary>
     /// Straight back along the road into a bay set a bay's width to the side: the approach line is

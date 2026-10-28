@@ -79,6 +79,16 @@ public static class ReversePlanner
     /// The speed every planned leg is driven at, carried on each control it proposes; null for the
     /// mode's speed (see <see cref="ManoeuvreControl.SpeedKilometresPerHour"/>).
     /// </param>
+    /// <param name="cancellationToken">
+    /// Abandons the search with <see cref="OperationCanceledException"/>, checked between candidates
+    /// and inside each docking plan. It only ever stops the search: a search that is not cancelled
+    /// tries the same candidates in the same order and proposes the same approach.
+    /// </param>
+    /// <returns>
+    /// The best approach found. Its last control seals its leg
+    /// (<see cref="ManoeuvreControl.SealsLeg"/>), so the control after it neither rewinds into the
+    /// planned arrival while it is driven nor when it is replayed.
+    /// </returns>
     public static Proposal Find(
         VehicleDefinition vehicle,
         DrivingModeDefinition mode,
@@ -87,7 +97,8 @@ public static class ReversePlanner
         VehicleState state,
         Point3 axleTarget,
         double? exitMovementHeadingRadians = null,
-        double? speedKilometresPerHour = null)
+        double? speedKilometresPerHour = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(vehicle);
         ArgumentNullException.ThrowIfNull(mode);
@@ -124,7 +135,8 @@ public static class ReversePlanner
         // arrive from any pull-up within 3.5 scales -- measured, the nearest missed by 2.4 m and 48
         // degrees -- and arrives from 5. So the grid is carried on past the turn by one and two
         // wheel swings, which reaches that far in mode A and adds little in mode B, or in either
-        // mode at a crawl.
+        // mode at a crawl. The swing is measured at the speed asked for (the mode's when none is),
+        // as it was before a reverse defaulted to the manoeuvring speed; keeping it keeps the grid.
         foreach (var extra in new[] { 1.0, 2.0 })
         foreach (var offset in new[] { -0.5, 0.0, 0.5 })
             Consider((3.5 * scale) + (extra * swing), offset * scale);
@@ -143,7 +155,7 @@ public static class ReversePlanner
         }
 
         if (best is null) throw new InvalidOperationException("No drivable reverse candidate was found.");
-        if (best.ReachedTarget) return best;
+        if (best.ReachedTarget) return Sealed(best);
 
         // A short forward correction can straighten the vehicle out after the first reverse has
         // stopped short. Search only from the best initial approach: this is a bounded second pass,
@@ -173,11 +185,12 @@ public static class ReversePlanner
             }
         }
 
-        return best;
+        return Sealed(best);
 
         void Consider(double distance, double offset)
         {
             if (budget <= 0) return;
+            cancellationToken.ThrowIfCancellationRequested();
             ManoeuvreControl? pullControl = null;
             PlannedManoeuvreLeg? pull = null;
             IReadOnlyList<RouteSample> prefix = route;
@@ -190,7 +203,8 @@ public static class ReversePlanner
                 pullControl = new ManoeuvreControl(
                     new Point3(point.X, point.Y, state.RearAxleCentreMetres.Z), TravelDirection.Forward,
                     SpeedKilometresPerHour: speedKilometresPerHour);
-                pull = ManoeuvreReplayService.PlanControl(vehicle, mode, route, legStartIndex, state, pullControl);
+                pull = ManoeuvreReplayService.PlanControl(vehicle, mode, route, legStartIndex, state, pullControl,
+                    cancellationToken);
                 if (pull.RequestedAngleExceeded || pull.AimedBehindTheBeam) return;
                 fromIndex = pull.FromIndex;
                 prefix = route.Take(fromIndex + 1).Concat(pull.Samples.Skip(1)).ToArray();
@@ -203,7 +217,7 @@ public static class ReversePlanner
                 SpeedKilometresPerHour: speedKilometresPerHour);
             var reverse = ManoeuvreReplayService.PlanControl(
                 vehicle, mode, prefix, prefix.Count - 1,
-                pullEnd with { Direction = TravelDirection.Reverse }, reverseControl);
+                pullEnd with { Direction = TravelDirection.Reverse }, reverseControl, cancellationToken);
             var combined = pull is null
                 ? reverse.Samples
                 : pull.Samples.Concat(reverse.Samples.Skip(1)).ToArray();
@@ -234,13 +248,14 @@ public static class ReversePlanner
         void Correct(double distance, double offset)
         {
             if (budget <= 0) return;
+            cancellationToken.ThrowIfCancellationRequested();
             var point = correctionStart.RearAxleCentreMetres.XY
                 + (correctionForward * distance) + (correctionLeft * offset);
             var correctionControl = new ManoeuvreControl(
                 new Point3(point.X, point.Y, correctionStart.RearAxleCentreMetres.Z),
                 TravelDirection.Forward, SpeedKilometresPerHour: speedKilometresPerHour);
             var correction = ManoeuvreReplayService.PlanControl(vehicle, mode, firstRoute,
-                firstRoute.Length - 1, correctionStart, correctionControl);
+                firstRoute.Length - 1, correctionStart, correctionControl, cancellationToken);
             if (correction.RequestedAngleExceeded || correction.AimedBehindTheBeam) return;
             budget--;
             var correctedRoute = firstRoute.Take(correction.FromIndex + 1)
@@ -250,7 +265,8 @@ public static class ReversePlanner
                 SpeedKilometresPerHour: speedKilometresPerHour);
             var final = ManoeuvreReplayService.PlanControl(vehicle, mode, correctedRoute,
                 correctedRoute.Length - 1,
-                correction.EndState with { Direction = TravelDirection.Reverse }, finalControl);
+                correction.EndState with { Direction = TravelDirection.Reverse }, finalControl,
+                cancellationToken);
             var completeRoute = correctedRoute.Concat(final.Samples.Skip(1)).ToArray();
             var fold = FoldLimit.Measure(vehicle, completeRoute);
             if (fold.LimitReached) return;
@@ -278,6 +294,18 @@ public static class ReversePlanner
 
             if (Score(proposal) < Score(best!)) best = proposal;
         }
+    }
+
+    /// <summary>
+    /// The proposal with its last control sealed. Sealing changes nothing about the proposal's own
+    /// route -- it says only what the control after it may do -- so it is applied once the search is
+    /// over rather than to every candidate.
+    /// </summary>
+    private static Proposal Sealed(Proposal proposal)
+    {
+        var controls = proposal.Controls.ToArray();
+        controls[^1] = controls[^1] with { SealsLeg = true };
+        return proposal with { Controls = controls };
     }
 
     // The same tolerance the area search accepts, so a proposal reported as reaching the bay is

@@ -127,7 +127,10 @@ internal sealed class InteractiveRouteBuilder
             var state = _journey.State;
             var legStartIndex = _journey.LegStartIndex;
             var sweepPreview = new JourneySweepPreview(route, _vehicle, _clearanceMetres, _units, _site);
-            LegPreview Plan(ManoeuvreControl control) => PlanPreview(route, legStartIndex, state, sweepPreview, control);
+            // The preview cancels the token when it is disposed, so a slow docking plan for a pick
+            // that is over stops rather than running on behind the next one.
+            LegPreview Plan(ManoeuvreControl control, CancellationToken cancellation) =>
+                PlanPreview(route, legStartIndex, state, sweepPreview, control, cancellation);
 
             // Ctrl held during the pick. Rhino normally spends Ctrl on elevator mode, which is
             // meaningless for a plan-view manoeuvre, so it is given up below and the key is free.
@@ -374,9 +377,11 @@ internal sealed class InteractiveRouteBuilder
         int legStartIndex,
         VehicleState state,
         JourneySweepPreview sweepPreview,
-        ManoeuvreControl control)
+        ManoeuvreControl control,
+        CancellationToken cancellation = default)
     {
-        var leg = ManoeuvreReplayService.PlanControl(_vehicle, _mode, route, legStartIndex, state, control);
+        var leg = ManoeuvreReplayService.PlanControl(
+            _vehicle, _mode, route, legStartIndex, state, control, cancellation);
         return new LegPreview(leg, sweepPreview.Build(leg), ArticulationTrace.At(_vehicle, route, leg), control);
     }
 
@@ -482,7 +487,8 @@ internal sealed class InteractiveRouteBuilder
 
         using var swing = new GetPoint();
         using var preview = new LatestPreview<ManoeuvreControl, LegPreview>(
-            _document, control => PlanPreview(route, legStartIndex, state, sweepPreview, control));
+            _document, (control, cancellation) =>
+                PlanPreview(route, legStartIndex, state, sweepPreview, control, cancellation));
         var body = ReverseWording.DockingBody(_vehicle);
         swing.SetCommandPrompt(bayRear
             ? $"Point the way the {body} reverses into the bay, or type an angle from the CPlane"
@@ -550,18 +556,8 @@ internal sealed class InteractiveRouteBuilder
         Point3 target,
         double? exitHeading)
     {
-        ReversePlanner.Proposal proposal;
-        try
-        {
-            proposal = ReversePlanner.Find(
-                _vehicle, _mode, route, _journey.LegStartIndex, state, target, exitHeading,
-                _journey.SpeedKilometresPerHour);
-        }
-        catch (InvalidOperationException error)
-        {
-            RhinoApp.WriteLine(error.Message);
-            return;
-        }
+        var proposal = PlanReverse(route, state, target, exitHeading);
+        if (proposal is null) return;
 
         // Planned once, not per frame: the review's cursor changes nothing about the proposal.
         var reviewed = new LegPreview(proposal.Leg, sweepPreview.Build(proposal.Leg),
@@ -579,9 +575,54 @@ internal sealed class InteractiveRouteBuilder
         };
         if (review.Get() != GetResult.Nothing) return;
 
-        _journey.Commit(proposal.Leg, proposal.Controls, sealLeg: true);
+        _journey.Commit(proposal.Leg, proposal.Controls);
         RhinoApp.WriteLine(ReverseWording.ProposalCommitted(_vehicle, proposal));
         ReportCompletion();
+    }
+
+    /// <summary>
+    /// Runs the reverse planner off the UI thread and waits for it with Rhino still pumping messages,
+    /// so the viewport repaints and Esc is heard. Null when the search was cancelled or found nothing.
+    /// </summary>
+    /// <remarks>
+    /// An impossible bay spends the planner's whole candidate budget, which is a second or two for a
+    /// two-joint chain in mode A; run in the pick loop it froze Rhino for that long with no way out.
+    /// Cancelling only stops the search -- a search that runs to the end proposes exactly what it
+    /// always did, which a saved proposal's replay depends on.
+    /// </remarks>
+    private ReversePlanner.Proposal? PlanReverse(
+        IReadOnlyList<RouteSample> route,
+        VehicleState state,
+        Point3 target,
+        double? exitHeading)
+    {
+        var legStartIndex = _journey.LegStartIndex;
+        var speed = _journey.SpeedKilometresPerHour;
+        using var cancellation = new CancellationTokenSource();
+        void OnEscape(object? sender, EventArgs args) => cancellation.Cancel();
+        RhinoApp.EscapeKeyPressed += OnEscape;
+        try
+        {
+            RhinoApp.SetCommandPrompt("Planning reverse… Esc to cancel");
+            var search = Task.Run(() => ReversePlanner.Find(
+                _vehicle, _mode, route, legStartIndex, state, target, exitHeading, speed, cancellation.Token));
+            while (!search.Wait(20)) RhinoApp.Wait();
+            return search.Result;
+        }
+        catch (AggregateException error) when (error.InnerException is OperationCanceledException)
+        {
+            RhinoApp.WriteLine("Reverse planning cancelled; choose another destination.");
+            return null;
+        }
+        catch (AggregateException error) when (error.InnerException is InvalidOperationException inner)
+        {
+            RhinoApp.WriteLine(inner.Message);
+            return null;
+        }
+        finally
+        {
+            RhinoApp.EscapeKeyPressed -= OnEscape;
+        }
     }
 
     private void Commit(ManoeuvreControl pickedControl)

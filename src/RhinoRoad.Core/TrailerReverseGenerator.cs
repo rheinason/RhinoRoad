@@ -213,8 +213,10 @@ public static class TrailerReverseGenerator
         Point2 targetMetres,
         double exitMovementHeadingRadians,
         double maximumStepMetres = 0.10,
-        bool wheelSetAtStandstill = false)
+        bool wheelSetAtStandstill = false,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var best = DockTowedUnit(vehicle, mode, start, chain, targetMetres,
             exitMovementHeadingRadians, maximumStepMetres,
             wheelSetAtStandstill: wheelSetAtStandstill);
@@ -230,6 +232,7 @@ public static class TrailerReverseGenerator
                 (0.25, 0.405)
             })
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var candidate = DockTowedUnit(vehicle, mode, start, chain, targetMetres,
                 exitMovementHeadingRadians, maximumStepMetres,
                 foldGainPerMetre: foldGain, headingGain: headingGain,
@@ -256,10 +259,17 @@ public static class TrailerReverseGenerator
         // six manoeuvre scales back, it stopped 50.9 m out at a 64.6 degree fold. The simulation
         // plans the curvature asked of the trailer in advance, through the same rate-limited steps,
         // so the lag is in the plan rather than fought by it: the same bay docks 0.05 m out at an
-        // 11 degree fold. It is only reached for here, after the cascade has missed, so every leg the
-        // cascade already docked -- and so every saved journey that replays one -- is unchanged.
+        // 11 degree fold. A reverse now runs at the manoeuvring speed (5 km/h) in mode A too, and
+        // the fallback is still needed there: the wheel catches up at 5 km/h, but mode A's smaller
+        // lock does not -- measured over sixteen turn-away bays, the cascade alone docked none in mode
+        // A at either speed against six in mode B, and with the fallback 14 of 16 dock at 5 km/h
+        // against 12 at 15. It is only reached for here, after the cascade has missed, so a leg the
+        // cascade docks is planned by the cascade alone. That does not make saved journeys replay
+        // unchanged: a leg 0.5 replayed as a cascade miss -- every mode-A dock of SVT among them --
+        // now replays as this plan, which is why the manoeuvre schema was moved on to 2 and a road
+        // read from schema 1 says that its route may have changed.
         var planned = MultiJointReverseDocking.Dock(vehicle, mode, start, chain, targetMetres,
-            exitMovementHeadingRadians, maximumStepMetres, wheelSetAtStandstill);
+            exitMovementHeadingRadians, maximumStepMetres, wheelSetAtStandstill, cancellationToken);
         return planned.ReachedTarget || DockError(planned, targetMetres, exitMovementHeadingRadians) < bestError
             ? planned
             : best;

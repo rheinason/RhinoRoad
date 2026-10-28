@@ -4,7 +4,7 @@ namespace RhinoRoad.Core.Tests;
 
 public sealed class JourneyEditPreviewTests
 {
-    private static ManoeuvreDefinition Saved() => new(1, new(0, 0, 0), 0, TravelDirection.Forward,
+    private static ManoeuvreDefinition Saved() => new(ManoeuvreDefinition.CurrentSchemaVersion, new(0, 0, 0), 0, TravelDirection.Forward,
         [new(new(0, 24, 0), TravelDirection.Forward), new(new(-35, 24, 0), TravelDirection.Forward),
          new(new(-40, 8, 0), TravelDirection.Reverse), new(new(-40, -5, 0), TravelDirection.Reverse, ManoeuvreControlKind.Finish)]);
     private static Point3[] Points(ManoeuvreDefinition saved) =>

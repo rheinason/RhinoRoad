@@ -45,6 +45,24 @@ its new result, and review it before relying on it.
   route), and the mode's default clearance is applied when the field has not been edited.
 - A road saved by a **newer RhinoRoad** than the one installed is refused with an explicit message;
   older saved roads are upgraded by schema version when read.
+- **Roads are saved at schema 2** (definition and manoeuvre), which covers the per-leg speed, the
+  terrain, the wheel-edge paths, the mirror allowance and the sealed planned reverse, so RhinoRoad 0.5
+  refuses a new road instead of silently regenerating a different route. A schema-1 road still loads;
+  its first Update or Configure, its inspector status and `RRReportRoad` warn that its reversing legs
+  are now planned differently and its route may have changed.
+- **Reverses default to the manoeuvring speed.** A reverse leg with no speed of its own runs at the
+  vehicle's mode B speed (5 km/h for every preset), keeping the journey mode's lock, in mode A as in
+  mode B. A saved mode-A journey with a reverse follows a tighter-transitioned route after an Update,
+  and the analyzer prices its steering rate at 5 km/h. An explicit leg speed still overrides.
+- **A planned reverse is sealed in the saved controls.** The leg after an accepted `PlanReverse` could
+  rewind into the dock on replay (a reverse Finish ended 15–42 m from where it was driven); the seal
+  is now saved and replay honours it.
+- **A fold exactly at the limit is a violation** in the analyzer, as it already was for the planner and
+  the generators.
+- **Two-joint docking plans against the tightest unit's limit** (barrier 15° and 5° short of it), so a
+  user vehicle limited below 65° is kept clear of its stop. The default presets plan exactly as before.
+- **The clear-area search plans each turn from replay's own leg boundary**, so its candidates start
+  from the poses their replay reaches.
 - **A hole in the terrain is bridged, not held level.** A draped station that misses the terrain between
   two that hit now takes the height interpolated by station between them; only misses before the first
   hit or after the last hold the nearest hit's height. Holding the last height turned a 10 m hole in a
@@ -111,6 +129,13 @@ its new result, and review it before relying on it.
 - `-RRImportVehicle` reads the file path from the command line.
 
 ### Fixed or corrected
+
+- `PlanReverse` runs in the background with *Planning reverse… Esc to cancel*; the planner, the
+  docking solvers and the area search can be cancelled (results are unchanged when they are not), and
+  the interactive preview stops a stale docking plan.
+- A saved definition with a duplicated JSON key is reported as malformed instead of throwing out of
+  the reader.
+- Edit Road palette: a **Stop first** toggle on each control row (undoable, part of the draft).
 
 - Documentation contradictions: the stored certification run passes **6 of 18** and PV is
   `ReferenceValidated`; the plugin is no longer described as rigid-only; the steering rate

@@ -103,8 +103,10 @@ public static class RigidReverseGenerator
         Point2 targetMetres,
         double exitMovementHeadingRadians,
         double maximumStepMetres = 0.10,
-        bool wheelSetAtStandstill = false)
+        bool wheelSetAtStandstill = false,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var best = Dock(vehicle, mode, start, targetMetres, exitMovementHeadingRadians,
             maximumStepMetres, BandwidthPerMetre(vehicle, mode, DockBandwidthFactor), wheelSetAtStandstill);
         if (best.ReachedTarget) return best;
@@ -112,6 +114,7 @@ public static class RigidReverseGenerator
         var bestError = DockError(best, targetMetres, exitMovementHeadingRadians);
         foreach (var factor in AlternativeBandwidthFactors)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var candidate = Dock(vehicle, mode, start, targetMetres, exitMovementHeadingRadians,
                 maximumStepMetres, BandwidthPerMetre(vehicle, mode, factor), wheelSetAtStandstill);
             var error = DockError(candidate, targetMetres, exitMovementHeadingRadians);

@@ -21,6 +21,60 @@ public sealed class MultiJointReverseDockingTests
 
     private static VehicleDefinition Pvt => Catalog.Get("PVT");
 
+    private static VehicleDefinition WithLimit(VehicleDefinition vehicle, double degrees) => vehicle with
+    {
+        TowedUnits = vehicle.TowedUnits.Select(unit => unit with { MaximumArticulationDegrees = degrees }).ToArray()
+    };
+
+    /// <summary>
+    /// The search's fold barriers follow the tightest unit's limit. At the default they are exactly
+    /// the 50 and 60 degrees they were fixed at, so every saved two-joint dock plans as before; fixed,
+    /// they sat at or past a 45 degree unit's stop.
+    /// </summary>
+    [Fact]
+    public void FoldBarriersFollowTheTightestUnitsLimit()
+    {
+        var atDefault = MultiJointReverseDocking.FoldBarriersRadians(Pvt);
+        Assert.Equal(50.0 * Math.PI / 180.0, atDefault.SoftRadians);
+        Assert.Equal(60.0 * Math.PI / 180.0, atDefault.HardRadians);
+
+        var tight = MultiJointReverseDocking.FoldBarriersRadians(WithLimit(Pvt, 45.0));
+        Assert.Equal(30.0, tight.SoftRadians * 180.0 / Math.PI, 9);
+        Assert.Equal(40.0, tight.HardRadians * 180.0 / Math.PI, 9);
+
+        var mixed = Pvt with { TowedUnits = [Pvt.TowedUnits[0], Pvt.TowedUnits[1] with { MaximumArticulationDegrees = 50.0 }] };
+        Assert.Equal(45.0, MultiJointReverseDocking.FoldBarriersRadians(mixed).HardRadians * 180.0 / Math.PI, 9);
+    }
+
+    /// <summary>
+    /// Copies of PVT and MVT whose units are limited to 45 degrees dock, square, without reaching
+    /// the limit anywhere along the leg. With the barriers fixed at 50 and 60 degrees each of these
+    /// failed: the search saw no cost in folding to the stop, and the leg ended there.
+    /// </summary>
+    [Theory]
+    [InlineData("PVT", "B", 25.0, -10.0)]
+    [InlineData("PVT", "B", 25.0, 10.0)]
+    [InlineData("PVT", "A", 25.0, -6.0)]
+    [InlineData("MVT", "A", 30.0, -3.0)]
+    [InlineData("MVT", "A", 30.0, 3.0)]
+    public void AChainLimitedTo45DegreesDocksShortOfItsLimit(string vehicleId, string modeId, double back, double across)
+    {
+        var vehicle = WithLimit(Catalog.Get(vehicleId), 45.0);
+        var mode = vehicle.DrivingModes[modeId];
+        var target = new Point2(vehicle.StraightAxleOffsetsMetres[^1] - back, across);
+
+        var leg = MultiJointReverseDocking.Dock(
+            vehicle, mode, StraightReverse, ArticulationChain.StartAligned(vehicle, 0.0), target, Math.PI);
+        var analysis = Analyzer.Analyze(vehicle, mode, leg.Samples);
+        var trailer = analysis.Poses[^1].TowedUnits[^1];
+
+        Assert.True(leg.ReachedTarget, $"stopped {trailer.AxleCentreMetres.DistanceTo(target):0.00} m out");
+        Assert.True(trailer.AxleCentreMetres.DistanceTo(target) <= ReversePlanner.ArrivalToleranceMetres);
+        Assert.True(SquarenessDegrees(trailer, Math.PI) <= ReversePlanner.ArrivalToleranceDegrees);
+        Assert.False(FoldLimit.IsReached(vehicle, leg.Samples));
+        Assert.DoesNotContain(analysis.Violations, item => item.Kind == ViolationKind.ArticulationAngle);
+    }
+
     private static VehicleState StraightReverse => new(new(0, 0, 0), 0.0, 0.0, TravelDirection.Reverse, 0.0);
 
     private static Point2 BehindTheTrailer(double back, double across) =>
@@ -152,7 +206,7 @@ public sealed class MultiJointReverseDockingTests
 
         controls.Add(dockControl);
         var replay = ManoeuvreReplayService.Replay(vehicle, mode,
-            new ManoeuvreDefinition(1, new(0, 0, 0), 0, TravelDirection.Forward, controls));
+            new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, new(0, 0, 0), 0, TravelDirection.Forward, controls));
         Assert.Equal(complete, replay.Samples);
         Assert.Equal(docked.EndState, replay.EndState);
     }

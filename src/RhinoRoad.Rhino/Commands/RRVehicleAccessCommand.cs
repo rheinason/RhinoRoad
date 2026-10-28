@@ -111,6 +111,7 @@ public sealed class RRVehicleAccessCommand : Command
                 configuredRun.Route,
                 configuredRun.Definition.SourceKind, configuredRun.Obstacles.Count + configuredRun.AllowedBoundaries.Count > 0,
                 configuredRun.HasElevation, configuredRun.TerrainDraped);
+            if (configuredRun.UpgradeWarning is { } upgraded) RhinoApp.WriteLine(upgraded);
             if (settings.PreviewBeforeBaking &&
                 !PreviewAndConfirm(document, configuredRun.Geometry, configuredRun.Violations))
                 return Result.Cancel;

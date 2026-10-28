@@ -50,6 +50,7 @@ public sealed class RRUpdateVehicleAccessCommand : Command
             return Result.Failure;
         }
 
+        if (prepared.UpgradeWarning is { } upgraded) RhinoApp.WriteLine(upgraded);
         try
         {
             var ids = VehicleAccessRunService.Commit(document, prepared);

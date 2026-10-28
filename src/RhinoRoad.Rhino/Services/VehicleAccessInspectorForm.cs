@@ -422,6 +422,8 @@ internal sealed class VehicleAccessInspectorForm : Form
                 _snapshot.Review.IsFeasible,
                 (_definition.CheckObstacles && _definition.ObstacleObjectIds.Count > 0) ||
                 (_definition.CheckAllowedArea && _definition.AllowedBoundaryObjectIds.Count > 0));
+        // Until Update writes it again at the current schema, a road read from an older one says so.
+        if (_definition.UpgradeWarning is { } upgraded) _status.Text += System.Environment.NewLine + upgraded;
         _update.Enabled = true;
     }
 

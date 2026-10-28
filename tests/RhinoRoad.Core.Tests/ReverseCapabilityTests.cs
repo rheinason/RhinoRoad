@@ -83,7 +83,7 @@ public sealed class ReverseCapabilityTests
     {
         var vehicle = ThreeJoints;
         var start = new VehicleState(new(0, 0, 0), 0, 0, TravelDirection.Forward, 0);
-        var journey = new ManoeuvreDefinition(1, start.RearAxleCentreMetres, 0, TravelDirection.Forward,
+        var journey = new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, start.RearAxleCentreMetres, 0, TravelDirection.Forward,
         [
             new ManoeuvreControl(new(30, 5, 0), TravelDirection.Forward),
             new ManoeuvreControl(new(0, 0, 0), TravelDirection.Reverse, ManoeuvreControlKind.Aim, Math.PI)

@@ -4,7 +4,7 @@ namespace RhinoRoad.Core.Tests;
 
 public sealed class ManoeuvreControlEditsTests
 {
-    private static ManoeuvreDefinition Saved() => new(1, new(0, 0, 0), 0, TravelDirection.Forward,
+    private static ManoeuvreDefinition Saved() => new(ManoeuvreDefinition.CurrentSchemaVersion, new(0, 0, 0), 0, TravelDirection.Forward,
         [new(new(0, 24, 0), TravelDirection.Forward), new(new(-35, 24, 0), TravelDirection.Forward),
          new(new(-40, 8, 0), TravelDirection.Reverse, ExitHeadingRadians: -Math.PI / 2),
          new(new(-40, -5, 0), TravelDirection.Reverse, ManoeuvreControlKind.Finish)]);
@@ -68,7 +68,7 @@ public sealed class ManoeuvreControlEditsTests
     [Fact]
     public void A_turn_left_last_by_a_deleted_finish_stays_a_turn()
     {
-        var journey = new ManoeuvreDefinition(1, new(0, 0, 0), 0, TravelDirection.Forward,
+        var journey = new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, new(0, 0, 0), 0, TravelDirection.Forward,
             [new(new(0, 10, 0), TravelDirection.Forward, ManoeuvreControlKind.Turn),
              new(new(5, 15, 0), TravelDirection.Forward, ManoeuvreControlKind.Finish)]);
 
@@ -80,7 +80,7 @@ public sealed class ManoeuvreControlEditsTests
     [Fact]
     public void The_last_control_cannot_be_deleted()
     {
-        var journey = new ManoeuvreDefinition(1, new(0, 0, 0), 0, TravelDirection.Forward,
+        var journey = new ManoeuvreDefinition(ManoeuvreDefinition.CurrentSchemaVersion, new(0, 0, 0), 0, TravelDirection.Forward,
             [new(new(0, 10, 0), TravelDirection.Forward)]);
 
         Assert.Throws<InvalidOperationException>(() => ManoeuvreControlEdits.Delete(journey, 0));

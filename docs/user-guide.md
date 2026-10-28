@@ -179,7 +179,7 @@ is the check, and anything red here is red in the report.
 | `Finish` / `Aim` | Pick the direction to end up travelling in; the vehicle eases onto exactly that heading with the wheel centred. **Finish ends the journey** and nothing can follow it. |
 | `Stop` / `Rolling` | Arms a standstill on the next click: the vehicle is taken to a halt, the wheel turned where it stands, and the leg driven from there. Spent on that click. |
 | `Direction` | Arms an exact exit direction on the next click: place the point, then swing the direction about it with the whole leg replanned on every move. Ortho and snaps apply, or type an angle. |
-| `Speed` | Sets the speed of the legs that follow: `ModeSpeed`, `Walk` 5, `Crawl` 3, `Inch` 1, or type km/h. A speed above the mode's is driven at the mode's. |
+| `Speed` | Sets the speed of the legs that follow: `ModeSpeed`, `Walk` 5, `Crawl` 3, `Inch` 1, or type km/h. A speed above the mode's is driven at the mode's. With `ModeSpeed`, a **reverse** runs at the vehicle's manoeuvring speed (mode B's, 5 km/h) in either mode. |
 | `PlanReverse` / `Manual` | Offered when a bay can be planned: pick the bay and let RhinoRoad find the approach (see below). |
 
 **Modifiers.** `Ctrl` turns at full lock; `Shift` squares the leg to your ortho angle (measured from
@@ -214,17 +214,21 @@ rear of the trailer").
   reverse does not arrive within 0.25 m and 2° of the bay, it also tries one forward correction and a
   second reverse, and proposes the most accurate drivable approach it finds. Review the full forward
   and reverse sweep, then press Enter to accept or Esc to choose another destination. The accepted
-  proposal becomes ordinary forward and reverse controls, so it can be replayed and edited. If the
-  destination still cannot be reached, the review prompt reports the remaining position and heading
-  error.
+  proposal becomes ordinary forward and reverse controls, so it can be replayed and edited; its last
+  control is saved as sealing the planned reverse, so the next leg (a reverse Finish, say) cannot
+  rewind into the dock, now or when the road is updated. If the destination still cannot be reached,
+  the review prompt reports the remaining position and heading error. The search runs in the
+  background (*Planning reverse… Esc to cancel*), so Rhino stays responsive and Esc abandons it.
 - **A saved reverse docks.** A rigid journey saved with a reverse `Aim` and a direction replays as a
   **docking reverse** (see [CHANGELOG.md](../CHANGELOG.md): this changes the route of such journeys).
 - **Heading not honoured.** A chain of three or more joints cannot be docked; its reverse is aimed at
   the point and the viewport says the heading was not honoured. None of the shipped presets is that
   long.
 
-In mode A as well as mode B, articulated vehicles dock (the wheel takes 12.5 m to reach lock at 15 km/h
-and the planner allows for that).
+In mode A as well as mode B, articulated vehicles dock. **Reversing is a slow manoeuvre:** a reverse
+with no speed of its own is driven at 5 km/h (the vehicle's mode B speed) whatever the mode, keeping
+the mode's lock, so in mode A the wheel takes 4.2 m rather than 12.5 m to reach lock. Give the leg a
+speed to override it.
 
 ## Selecting a drawn curve
 
@@ -302,8 +306,12 @@ available only on the last control; Turn is available anywhere. Each row also ha
 - a **direction button** showing the direction that control leaves along (or `Dir…` when it has
   none): click it and point the new direction in the viewport, or press Enter to clear it. The final
   reverse into a bay turns about the body's rear, so the bay is re-angled without moving the rear;
-- a **speed dropdown**: *Mode*, or a crawl speed slower than the mode (see
+- a **speed dropdown**: *Mode* (shown as *Reversing 5* on a reverse in mode A, which runs at the
+  manoeuvring speed), or a crawl speed slower than the mode (see
   [Per-leg speed](modelling.md#per-leg-speed));
+- a **Stop first** toggle: stop before this leg and turn the wheel at a standstill (undoable, part of
+  the draft). It is set and greyed where the row changes direction, which is always a stop. Tick it
+  only where the driver really stops: a stop that does not happen understates the sweep;
 - a **`…` menu** with *Insert control before*, *Insert control after* and *Delete control*. An inserted
   control sits halfway to its neighbour and carries the direction and speed of the leg it splits.
 
@@ -445,9 +453,14 @@ for the globally smallest possible bend or junction and do not propose kerb geom
 
 A saved road's definition (vehicle, mode, controls, speeds, settings) persists in the Rhino document.
 Definitions are **upgraded by schema version** when opened, so roads saved by an older RhinoRoad still
-load and keep their original interpretation. A road saved by a **newer** RhinoRoad than the one
-installed is refused with *"…uses schema N, saved by a newer RhinoRoad; update the plugin."*
-Nothing is rewritten silently.
+load. A road saved by a **newer** RhinoRoad than the one installed is refused with *"…uses schema N,
+saved by a newer RhinoRoad; update the plugin."* Nothing is rewritten silently.
+
+Roads are now saved at **schema 2**. A road saved by 0.5 or earlier (schema 1) still loads, but its
+reversing legs are now planned differently, so the first Update or Configure says *"This road was
+saved by RhinoRoad 0.5 or earlier; reversing legs are now planned differently, so its route may have
+changed — review it before relying on the result."* The inspector status and `RRReportRoad` say the
+same until the road has been updated (which saves it at schema 2).
 
 ## Settings and saved roads
 

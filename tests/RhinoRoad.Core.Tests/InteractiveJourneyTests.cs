@@ -222,11 +222,56 @@ public sealed class InteractiveJourneyTests
     public void Sealed_commit_does_not_let_the_next_leg_rewind_into_it()
     {
         var (journey, mode) = Start();
-        var control = new ManoeuvreControl(new Point3(12, 4, 0), TravelDirection.Forward);
+        var control = new ManoeuvreControl(new Point3(12, 4, 0), TravelDirection.Forward, SealsLeg: true);
         var leg = ManoeuvreReplayService.PlanControl(journey.Vehicle, mode, journey.Route, 0, journey.State, control);
 
-        journey.Commit(leg, [control], sealLeg: true);
+        journey.Commit(leg, [control]);
 
         Assert.Equal(journey.Route.Count - 1, journey.LegStartIndex);
+    }
+
+    /// <summary>
+    /// A planned reverse followed by another reverse, driven click by click and then replayed from
+    /// the saved controls. Before the seal was saved on the control, the reverse Finish after the
+    /// planned dock eased back into it on replay and ended 15 to 42 m from where it was driven.
+    /// </summary>
+    [Theory]
+    [InlineData("SVT", "B")]
+    [InlineData("PV", "A")]
+    [InlineData("PV", "B")]
+    [InlineData("PVT", "B")]
+    [InlineData("BUS12", "A")]
+    [InlineData("BUS12", "B")]
+    public void A_journey_after_a_planned_reverse_replays_to_the_route_that_was_driven(string vehicleId, string modeId)
+    {
+        var vehicle = Catalog.Get(vehicleId);
+        var mode = vehicle.DrivingModes[modeId];
+        var scale = ReversePlanner.ManoeuvreScaleMetres(vehicle, mode);
+        var start = new VehicleState(new Point3(-4.0 * scale, 0, 0), 0.0, 0.0, TravelDirection.Forward, 0.0);
+        var journey = new InteractiveJourney(vehicle, start);
+        Drive(journey, mode, new ManoeuvreControl(new Point3(1.5 * scale, 0.4 * scale, 0), TravelDirection.Forward));
+        var bay = ReverseBay.AxleFromRear(vehicle, new Point3(-2.0 * scale, -0.6 * scale, 0), Math.PI);
+        var proposal = ReversePlanner.Find(vehicle, mode, journey.Route, journey.LegStartIndex, journey.State, bay, Math.PI);
+        Assert.True(proposal.Controls[^1].SealsLeg);
+        journey.Commit(proposal.Leg, proposal.Controls);
+
+        foreach (var kind in new[] { ManoeuvreControlKind.Finish, ManoeuvreControlKind.Aim })
+        {
+            var facing = journey.State.VehicleHeadingRadians + Math.PI;
+            var point = journey.State.RearAxleCentreMetres.XY
+                + (new Point2(Math.Cos(facing + 0.4), Math.Sin(facing + 0.4)) * (0.8 * scale));
+            var next = new ManoeuvreControl(new Point3(point.X, point.Y, 0), TravelDirection.Reverse, kind,
+                kind == ManoeuvreControlKind.Finish ? facing + 0.3 : null);
+            var leg = ManoeuvreReplayService.PlanControl(
+                vehicle, mode, journey.Route, journey.LegStartIndex, journey.State, next);
+            var driven = journey.Route.Take(leg.FromIndex + 1).Concat(leg.Samples.Skip(1)).ToArray();
+            var saved = journey.Definition() with { Controls = journey.Controls.Append(next).ToArray() };
+
+            var replayed = ManoeuvreReplayService.Replay(vehicle, mode, saved);
+
+            Assert.Equal(journey.Route.Count - 1, leg.FromIndex);
+            Assert.Equal(driven, replayed.Samples);
+            Assert.Equal(leg.EndState, replayed.EndState);
+        }
     }
 }
