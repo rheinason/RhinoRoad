@@ -271,10 +271,9 @@ when a release changes those, and keep its validation wording in step with
 
 ## Machine-specific files
 
-- `.codex/config.toml` is checked in and contains an **absolute path under one user's `%APPDATA%`** (the
-  Rhino-MCP router executable of that machine). It is a local tool configuration, machine-specific, and
-  will not work on another machine without editing. It is left in place in case it is someone's working
-  configuration; whether it should be untracked is an open question for the repository owner.
+- `.codex/config.toml` is a local tool configuration pointing at the Rhino-MCP router executable by an
+  absolute path under the user's `%APPDATA%`. It is machine-specific, so it is untracked and `.codex/` is
+  git-ignored; each developer keeps their own copy.
 - `src\RhinoRoad.Rhino\Properties\launchSettings.json` names the Rhino install path (see above).
 - The live-testing section refers to a TopoTest checkout only through the `<TopoTest checkout>`
   placeholder; substitute your own.

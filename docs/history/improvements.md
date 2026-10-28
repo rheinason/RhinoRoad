@@ -18,8 +18,7 @@
 > - **T6** re-running the certification with the mode-A 30° lock before applying it.
 > - **T1** running the manual Rhino checklist (`tests/vehicle-access-rhino-checks.md`) in a live
 >   session and recording the result per release; the checklist has been updated, the run has not.
-> - `.codex/config.toml` still contains a machine-specific path (D3); whether it should be untracked is
->   an open question.
+> - `.codex/config.toml` (D3) is now untracked and `.codex/` is git-ignored.
 >
 > File references below point at the code as it stood at `d911fb4`; several of those lines have since
 > moved.

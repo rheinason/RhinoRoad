@@ -12,3 +12,6 @@ artifacts/
 
 # Claude Code agent worktrees
 .claude/worktrees/
+
+# Machine-specific tool configuration
+.codex/
